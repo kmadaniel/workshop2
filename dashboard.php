@@ -32,7 +32,7 @@ session_start();
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="distributions.php">
+                            <a class="nav-link" href="distribution.php">
                                 <i class="fas fa-truck"></i>
                                 Distributions
                             </a>
