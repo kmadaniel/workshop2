@@ -27,4 +27,22 @@ try {
         </ul>
     ");
 }
+
+// Database class for backward compatibility
+class Database {
+    private $conn;
+    
+    public function __construct() {
+        global $conn;
+        $this->conn = $conn;
+    }
+    
+    public function getConnection() {
+        return $this->conn;
+    }
+    
+    public function prepare($query) {
+        return $this->conn->prepare($query);
+    }
+}
 ?>
