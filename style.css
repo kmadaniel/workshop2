@@ -792,3 +792,470 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* Assign Volunteer Specific Styles */
+.distribution-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-row label {
+    font-weight: 600;
+    color: #2c3e50;
+    min-width: 120px;
+}
+
+.info-row.full-width {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+}
+
+.info-row.full-width label {
+    margin-bottom: 5px;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+/* Assign Form */
+.assign-form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.btn-assign {
+    padding: 12px 24px;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+/* Status Forms */
+.status-form, .action-form {
+    display: inline;
+    margin: 0;
+}
+
+.status-select {
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.status-select:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 5px rgba(52, 152, 219, 0.3);
+}
+
+/* Role Badge */
+.role-badge {
+    background: #e8f4fd;
+    color: #2c3e50;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid #3498db;
+}
+
+/* Volunteer Cards Grid */
+.volunteers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 15px;
+}
+
+.volunteer-card.available {
+    border: 2px solid #27ae60;
+    background: linear-gradient(135deg, #f8fff8 0%, #e8f6ef 100%);
+}
+
+.volunteer-card {
+    display: flex;
+    align-items: center;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 10px;
+    border: 1px solid #e0e0e0;
+    transition: all 0.3s ease;
+}
+
+.volunteer-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.volunteer-avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #3498db;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: bold;
+    margin-right: 15px;
+    flex-shrink: 0;
+}
+
+.volunteer-card.available .volunteer-avatar {
+    background: #27ae60;
+}
+
+.volunteer-details {
+    flex: 1;
+}
+
+.volunteer-details h4 {
+    margin: 0 0 5px 0;
+    color: #2c3e50;
+}
+
+.volunteer-role {
+    font-weight: 600;
+    color: #e74c3c;
+    margin: 0 0 5px 0;
+    font-size: 0.9rem;
+}
+
+.volunteer-phone {
+    margin: 0 0 10px 0;
+    font-size: 0.9rem;
+    color: #7f8c8d;
+}
+
+.volunteer-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.quick-assign {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
+/* Table Styles */
+.volunteer-info-compact {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.assigned-row {
+    background: #f8f9fa;
+}
+
+.available-row {
+    background: white;
+}
+
+.assignment-info {
+    font-size: 0.9rem;
+    color: #7f8c8d;
+}
+
+.assignment-info.available {
+    color: #27ae60;
+    font-weight: 600;
+}
+
+/* Status Badges */
+.status-available {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-assigned {
+    background: #cce7ff;
+    color: #004085;
+}
+
+.status-active {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-completed {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+
+/* Empty States */
+.empty-state.mini {
+    padding: 20px;
+    text-align: center;
+}
+
+.empty-state.mini .empty-icon {
+    font-size: 2rem;
+    margin-bottom: 10px;
+}
+
+.empty-state.mini h4 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .distribution-info .info-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+    
+    .action-buttons {
+        flex-direction: column;
+    }
+    
+    .volunteers-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .volunteer-card {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .volunteer-avatar {
+        margin-right: 0;
+        margin-bottom: 10px;
+    }
+    
+    .info-row label {
+        min-width: auto;
+    }
+}
+
+@media (max-width: 480px) {
+    .grid-4 {
+        grid-template-columns: 1fr 1fr;
+    }
+    
+    .data-table {
+        font-size: 0.8rem;
+    }
+    
+    .btn-sm {
+        padding: 4px 8px;
+        font-size: 0.7rem;
+    }
+}
+
+/* Print Styles */
+@media print {
+    .action-buttons,
+    .assign-form,
+    .action-form,
+    .status-form,
+    .volunteer-actions {
+        display: none !important;
+    }
+    
+    .card-3d {
+        box-shadow: none !important;
+        border: 1px solid #ddd !important;
+    }
+}
+
+/* Update Status Specific Styles */
+.status-overview {
+    margin-bottom: 20px;
+}
+
+.current-status {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 10px;
+}
+
+.current-status label {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.status-badge.large {
+    padding: 10px 20px;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+/* Status Descriptions */
+.status-descriptions {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+.status-descriptions h4 {
+    margin: 0 0 15px 0;
+    color: #2c3e50;
+}
+
+.status-desc-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 5px 0;
+}
+
+.status-desc-item:last-child {
+    margin-bottom: 0;
+}
+
+/* Status History */
+.status-history {
+    position: relative;
+    padding-left: 30px;
+}
+
+.history-item {
+    position: relative;
+    margin-bottom: 25px;
+}
+
+.history-item.current .history-marker {
+    background: #27ae60;
+    border-color: #27ae60;
+}
+
+.history-item.completed .history-marker {
+    background: #3498db;
+    border-color: #3498db;
+}
+
+.history-item.pending .history-marker {
+    background: #bdc3c7;
+    border-color: #bdc3c7;
+}
+
+.history-marker {
+    position: absolute;
+    left: -30px;
+    top: 5px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 3px solid white;
+    box-shadow: 0 0 0 2px #bdc3c7;
+}
+
+.history-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #bdc3c7;
+}
+
+.history-item.current .history-content {
+    border-left-color: #27ae60;
+    background: #e8f6ef;
+}
+
+.history-item.completed .history-content {
+    border-left-color: #3498db;
+    background: #e8f4fd;
+}
+
+.history-status {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.history-date {
+    color: #7f8c8d;
+    font-size: 0.9rem;
+}
+
+/* Progress Section */
+.progress-section {
+    margin: 25px 0;
+}
+
+.progress-section h3 {
+    margin-bottom: 15px;
+    color: #2c3e50;
+}
+
+.progress-container.large {
+    height: 12px;
+    margin-bottom: 15px;
+}
+
+.progress-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: #7f8c8d;
+}
+
+.progress-label {
+    transition: all 0.3s ease;
+    text-align: center;
+    flex: 1;
+}
+
+.progress-label.active {
+    color: #2c3e50;
+    font-weight: bold;
+}
+
+/* Button Styles */
+.btn-update {
+    padding: 12px 30px;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .current-status {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    
+    .history-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+    
+    .progress-labels {
+        font-size: 0.7rem;
+    }
+}
