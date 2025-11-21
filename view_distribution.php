@@ -7,7 +7,7 @@ $db = $database->getConnection();
 $distribution_id = $_GET['id'] ?? null;
 
 if (!$distribution_id) {
-    header("Location: index.php");
+    header("Location: distribution_main.php");
     exit;
 }
 
@@ -125,7 +125,7 @@ $history_stmt->close();
                 <a href="update_status.php?id=<?php echo $distribution_id; ?>" class="btn btn-warning">
                     📝 Update Status
                 </a>
-                <a href="index.php" class="btn btn-primary">
+                <a href="distribution_main.php" class="btn btn-primary">
                     📊 Back to Dashboard
                 </a>
                 <button onclick="window.print()" class="btn btn-secondary">

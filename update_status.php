@@ -137,7 +137,7 @@ if ($_POST && isset($_POST['update_status'])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Update Status - Distribution #<?php echo $distribution_id; ?></title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
@@ -224,7 +224,7 @@ if ($_POST && isset($_POST['update_status'])) {
                     <a href="assign_volunteer.php?id=<?php echo $distribution_id; ?>" class="btn btn-success">
                         👥 Assign Volunteers
                     </a>
-                    <a href="index.php" class="btn btn-secondary">
+                    <a href="distribution_main.php" class="btn btn-secondary">
                         📊 Dashboard
                     </a>
                 </div>

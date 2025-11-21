@@ -278,7 +278,7 @@ if ($_POST) {
                         Create Distribution
                     </button>
                     <button type="reset" class="btn btn-secondary">Clear Form</button>
-                    <a href="index.php" class="btn btn-primary">Back to Dashboard</a>
+                    <a href="distribution_main.php" class="btn btn-primary">Back to Dashboard</a>
                 </div>
             </form>
         </div>

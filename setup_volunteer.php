@@ -68,5 +68,5 @@ echo "✅ Inserted $inserted sample volunteers<br>";
 
 echo "<h3>Setup Complete!</h3>";
 echo "<p><a href='assign_volunteer.php?id=1' class='btn btn-success'>Test Assign Volunteer Page</a></p>";
-echo "<p><a href='index.php' class='btn btn-primary'>Go to Dashboard</a></p>";
+echo "<p><a href='distribution_main.php' class='btn btn-primary'>Go to Dashboard</a></p>";
 ?>
