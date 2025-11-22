@@ -11,6 +11,35 @@ if (!$distribution_id) {
     exit;
 }
 
+// Handle comment update/delete
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['update_comment'])) {
+        $new_comment = $_POST['comments'] ?? '';
+        $update_query = "UPDATE distribution SET comments = ? WHERE distribution_id = ?";
+        $update_stmt = $db->prepare($update_query);
+        $update_stmt->bind_param("si", $new_comment, $distribution_id);
+        
+        if ($update_stmt->execute()) {
+            // Refresh the page to show updated comment
+            header("Location: view_distribution.php?id=" . $distribution_id);
+            exit;
+        }
+        $update_stmt->close();
+    }
+    
+    if (isset($_POST['delete_comment'])) {
+        $update_query = "UPDATE distribution SET comments = NULL WHERE distribution_id = ?";
+        $update_stmt = $db->prepare($update_query);
+        $update_stmt->bind_param("i", $distribution_id);
+        
+        if ($update_stmt->execute()) {
+            header("Location: view_distribution.php?id=" . $distribution_id);
+            exit;
+        }
+        $update_stmt->close();
+    }
+}
+
 // Get distribution details with all related information
 $query = "
     SELECT 
@@ -176,14 +205,64 @@ $history_stmt->close();
                     </div>
                 </div>
 
-                <?php if ($distribution['comments']): ?>
+                <!-- Comments Section with Edit/Delete -->
                 <div class="comments-section">
-                    <label>Additional Comments</label>
-                    <div class="comments-box">
-                        <?php echo nl2br(htmlspecialchars($distribution['comments'])); ?>
+                    <div class="comments-header">
+                        <label>Additional Comments</label>
+                        <div class="comment-actions">
+                            <?php if ($distribution['comments']): ?>
+                                <button type="button" class="btn-edit-comment" onclick="toggleEditComment()">
+                                    ✏️ Edit
+                                </button>
+                                <button type="button" class="btn-delete-comment" onclick="deleteComment()">
+                                    🗑️ Delete
+                                </button>
+                            <?php else: ?>
+                                <button type="button" class="btn-add-comment" onclick="toggleEditComment()">
+                                    ➕ Add Comment
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- Display current comment -->
+                    <?php if ($distribution['comments'] && !isset($_GET['edit_comment'])): ?>
+                        <div class="comments-box" id="commentDisplay">
+                            <?php echo nl2br(htmlspecialchars($distribution['comments'])); ?>
+                        </div>
+                    <?php endif; ?>
+
+                    <!-- Edit comment form -->
+                    <div class="comment-edit-form <?php echo isset($_GET['edit_comment']) || !$distribution['comments'] ? 'active' : ''; ?>" id="commentEditForm">
+                        <form method="POST" action="">
+                            <textarea 
+                                name="comments" 
+                                class="form-control comment-textarea" 
+                                placeholder="Enter additional comments here..." 
+                                rows="4"
+                            ><?php echo htmlspecialchars($distribution['comments'] ?? ''); ?></textarea>
+                            
+                            <div class="comment-form-actions">
+                                <button type="submit" name="update_comment" class="btn btn-success btn-sm">
+                                    💾 Save Comment
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="cancelEditComment()">
+                                    ❌ Cancel
+                                </button>
+                                <?php if ($distribution['comments']): ?>
+                                    <button type="submit" name="delete_comment" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete this comment?')">
+                                        🗑️ Delete Comment
+                                    </button>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                        
+                        <!-- Delete comment form (separate for confirmation) -->
+                        <form method="POST" action="" id="deleteForm" style="display: none;">
+                            <input type="hidden" name="delete_comment" value="1">
+                        </form>
                     </div>
                 </div>
-                <?php endif; ?>
             </div>
 
             <!-- Victim Information -->
@@ -368,6 +447,56 @@ $history_stmt->close();
         </div>
     </div>
 
-    <script src="js/script.js"></script>
+    <script>
+        // Toggle comment edit mode
+        function toggleEditComment() {
+            const display = document.getElementById('commentDisplay');
+            const editForm = document.getElementById('commentEditForm');
+            
+            if (display) display.style.display = 'none';
+            if (editForm) editForm.classList.add('active');
+        }
+
+        // Cancel comment editing
+        function cancelEditComment() {
+            const display = document.getElementById('commentDisplay');
+            const editForm = document.getElementById('commentEditForm');
+            
+            if (display) display.style.display = 'block';
+            if (editForm) editForm.classList.remove('active');
+            
+            // Redirect without edit parameter
+            const url = new URL(window.location.href);
+            url.searchParams.delete('edit_comment');
+            window.history.replaceState({}, '', url);
+        }
+
+        // Delete comment with confirmation
+        function deleteComment() {
+            if (confirm('Are you sure you want to delete this comment? This action cannot be undone.')) {
+                document.getElementById('deleteForm').submit();
+            }
+        }
+
+        // Auto-expand textarea as user types
+        document.addEventListener('DOMContentLoaded', function() {
+            const textarea = document.querySelector('.comment-textarea');
+            if (textarea) {
+                textarea.addEventListener('input', function() {
+                    this.style.height = 'auto';
+                    this.style.height = (this.scrollHeight) + 'px';
+                });
+                
+                // Trigger initial resize
+                textarea.dispatchEvent(new Event('input'));
+            }
+            
+            // Show edit form if URL has edit parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('edit_comment')) {
+                toggleEditComment();
+            }
+        });
+    </script>
 </body>
 </html>
