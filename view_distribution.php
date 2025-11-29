@@ -11,35 +11,6 @@ if (!$distribution_id) {
     exit;
 }
 
-// Handle comment update/delete
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['update_comment'])) {
-        $new_comment = $_POST['comments'] ?? '';
-        $update_query = "UPDATE distribution SET comments = ? WHERE distribution_id = ?";
-        $update_stmt = $db->prepare($update_query);
-        $update_stmt->bind_param("si", $new_comment, $distribution_id);
-        
-        if ($update_stmt->execute()) {
-            // Refresh the page to show updated comment
-            header("Location: view_distribution.php?id=" . $distribution_id);
-            exit;
-        }
-        $update_stmt->close();
-    }
-    
-    if (isset($_POST['delete_comment'])) {
-        $update_query = "UPDATE distribution SET comments = NULL WHERE distribution_id = ?";
-        $update_stmt = $db->prepare($update_query);
-        $update_stmt->bind_param("i", $distribution_id);
-        
-        if ($update_stmt->execute()) {
-            header("Location: view_distribution.php?id=" . $distribution_id);
-            exit;
-        }
-        $update_stmt->close();
-    }
-}
-
 // Get distribution details with all related information
 $query = "
     SELECT 
@@ -83,7 +54,8 @@ $volunteers_query = "
         dv.*,
         v.name as volunteer_name,
         v.phone as volunteer_phone,
-        v.role as volunteer_main_role
+        v.role as volunteer_main_role,
+        v.email as volunteer_email
     FROM distribution_volunteer dv
     LEFT JOIN volunteer v ON dv.volunteer_id = v.volunteer_id
     WHERE dv.distribution_id = ?
@@ -136,6 +108,262 @@ $history_stmt->close();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Distribution #<?php echo $distribution_id; ?></title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Enhanced Status Badges */
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge.large {
+            padding: 6px 12px;
+            font-size: 0.9em;
+        }
+
+        .status-pending { background: #fef3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .status-assigned { background: #cce7ff; color: #004085; border: 1px solid #b3d7ff; }
+        .status-active { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .status-in-transit { background: #d1ecf1; color: #0c5460; border: 1px solid #b3e5fc; }
+        .status-delivered { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status-completed { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
+        .status-cancelled { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        /* Progress Bar */
+        .progress-container {
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-container.large {
+            height: 12px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-pending { width: 20%; background: #ffc107; }
+        .progress-assigned { width: 40%; background: #17a2b8; }
+        .progress-in-transit { width: 60%; background: #6f42c1; }
+        .progress-delivered { width: 80%; background: #fd7e14; }
+        .progress-completed { width: 100%; background: #28a745; }
+
+        .progress-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        .progress-label.active {
+            color: #495057;
+            font-weight: 600;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            color: #495057;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: #000;
+        }
+
+        .modal-body {
+            padding: 20px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            padding: 20px;
+            border-top: 1px solid #dee2e6;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        /* Volunteer Actions */
+        .volunteer-actions {
+            display: flex;
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .btn-action {
+            padding: 6px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-update { background: #e3f2fd; color: #1976d2; }
+        .btn-update:hover { background: #bbdefb; }
+
+        .btn-remove { background: #ffebee; color: #d32f2f; }
+        .btn-remove:hover { background: #ffcdd2; }
+
+        /* Status Options */
+        .status-options {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .status-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .status-option:hover {
+            border-color: #007bff;
+        }
+
+        .status-option input[type="radio"]:checked + .status-label {
+            border-color: #007bff;
+            background: #f8f9fa;
+        }
+
+        .status-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .status-label strong {
+            color: #495057;
+        }
+
+        .status-label small {
+            color: #6c757d;
+            font-size: 0.85em;
+        }
+
+        /* Warning Message */
+        .warning-message {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .warning-icon {
+            font-size: 24px;
+        }
+
+        .readonly-field {
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            color: #495057;
+        }
+
+        /* Enhanced Volunteer Cards */
+        .volunteer-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .volunteer-info {
+            flex: 1;
+        }
+
+        .volunteer-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Grid Layout Improvements */
+        .grid-5 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        /* Header Actions */
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .btn-sm {
+            padding: 8px 12px;
+            font-size: 0.9em;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -147,19 +375,22 @@ $history_stmt->close();
 
         <!-- Quick Actions -->
         <div class="card-3d quick-actions">
-            <div class="grid-4">
+            <div class="grid-5">
                 <a href="assign_volunteer.php?id=<?php echo $distribution_id; ?>" class="btn btn-success">
                     👥 Assign Volunteers
                 </a>
-                <a href="update_status.php?id=<?php echo $distribution_id; ?>" class="btn btn-warning">
+                <button onclick="openQuickUpdateStatusModal()" class="btn btn-warning">
                     📝 Update Status
-                </a>
+                </button>
                 <a href="distribution_main.php" class="btn btn-primary">
                     📊 Back to Dashboard
                 </a>
                 <button onclick="window.print()" class="btn btn-secondary">
                     🖨️ Print Details
                 </button>
+                <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-info">
+                    ✏️ Edit Distribution
+                </a>
             </div>
         </div>
 
@@ -205,64 +436,14 @@ $history_stmt->close();
                     </div>
                 </div>
 
-                <!-- Comments Section with Edit/Delete -->
+                <?php if ($distribution['comments']): ?>
                 <div class="comments-section">
-                    <div class="comments-header">
-                        <label>Additional Comments</label>
-                        <div class="comment-actions">
-                            <?php if ($distribution['comments']): ?>
-                                <button type="button" class="btn-edit-comment" onclick="toggleEditComment()">
-                                    ✏️ Edit
-                                </button>
-                                <button type="button" class="btn-delete-comment" onclick="deleteComment()">
-                                    🗑️ Delete
-                                </button>
-                            <?php else: ?>
-                                <button type="button" class="btn-add-comment" onclick="toggleEditComment()">
-                                    ➕ Add Comment
-                                </button>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-
-                    <!-- Display current comment -->
-                    <?php if ($distribution['comments'] && !isset($_GET['edit_comment'])): ?>
-                        <div class="comments-box" id="commentDisplay">
-                            <?php echo nl2br(htmlspecialchars($distribution['comments'])); ?>
-                        </div>
-                    <?php endif; ?>
-
-                    <!-- Edit comment form -->
-                    <div class="comment-edit-form <?php echo isset($_GET['edit_comment']) || !$distribution['comments'] ? 'active' : ''; ?>" id="commentEditForm">
-                        <form method="POST" action="">
-                            <textarea 
-                                name="comments" 
-                                class="form-control comment-textarea" 
-                                placeholder="Enter additional comments here..." 
-                                rows="4"
-                            ><?php echo htmlspecialchars($distribution['comments'] ?? ''); ?></textarea>
-                            
-                            <div class="comment-form-actions">
-                                <button type="submit" name="update_comment" class="btn btn-success btn-sm">
-                                    💾 Save Comment
-                                </button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="cancelEditComment()">
-                                    ❌ Cancel
-                                </button>
-                                <?php if ($distribution['comments']): ?>
-                                    <button type="submit" name="delete_comment" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete this comment?')">
-                                        🗑️ Delete Comment
-                                    </button>
-                                <?php endif; ?>
-                            </div>
-                        </form>
-                        
-                        <!-- Delete comment form (separate for confirmation) -->
-                        <form method="POST" action="" id="deleteForm" style="display: none;">
-                            <input type="hidden" name="delete_comment" value="1">
-                        </form>
+                    <label>Additional Comments</label>
+                    <div class="comments-box">
+                        <?php echo nl2br(htmlspecialchars($distribution['comments'])); ?>
                     </div>
                 </div>
+                <?php endif; ?>
             </div>
 
             <!-- Victim Information -->
@@ -351,29 +532,51 @@ $history_stmt->close();
         <div class="card-3d">
             <div class="section-header">
                 <h2>👥 Assigned Volunteers</h2>
-                <span class="badge-count"><?php echo count($assigned_volunteers); ?> assigned</span>
+                <div class="header-actions">
+                    <span class="badge-count"><?php echo count($assigned_volunteers); ?> assigned</span>
+                    <a href="assign_volunteer.php?id=<?php echo $distribution_id; ?>" class="btn btn-success btn-sm">
+                        👥 Assign More
+                    </a>
+                </div>
             </div>
             
             <?php if (count($assigned_volunteers) > 0): ?>
-                <div class="volunteers-grid">
+                <div class="volunteers-list">
                     <?php foreach ($assigned_volunteers as $volunteer): ?>
                     <div class="volunteer-card">
-                        <div class="volunteer-avatar">
-                            <?php echo strtoupper(substr($volunteer['volunteer_name'], 0, 1)); ?>
-                        </div>
                         <div class="volunteer-info">
-                            <h4><?php echo htmlspecialchars($volunteer['volunteer_name']); ?></h4>
-                            <p class="volunteer-role"><?php echo htmlspecialchars($volunteer['role']); ?></p>
-                            <p class="volunteer-phone">📱 <?php echo htmlspecialchars($volunteer['volunteer_phone']); ?></p>
-                            <p class="volunteer-main-role">Main Role: <?php echo htmlspecialchars($volunteer['volunteer_main_role']); ?></p>
-                            <p class="volunteer-status">
-                                <span class="status-badge status-<?php echo strtolower($volunteer['status']); ?>">
-                                    <?php echo $volunteer['status']; ?>
-                                </span>
-                            </p>
-                            <p class="volunteer-assigned">
-                                Assigned: <?php echo date('M j, Y g:i A', strtotime($volunteer['assigned_timestamp'])); ?>
-                            </p>
+                            <div class="volunteer-main">
+                                <div class="volunteer-avatar">
+                                    <?php echo strtoupper(substr($volunteer['volunteer_name'], 0, 1)); ?>
+                                </div>
+                                <div class="volunteer-details">
+                                    <h4><?php echo htmlspecialchars($volunteer['volunteer_name']); ?></h4>
+                                    <p class="volunteer-role"><?php echo htmlspecialchars($volunteer['role']); ?></p>
+                                    <p class="volunteer-phone">📱 <?php echo htmlspecialchars($volunteer['volunteer_phone']); ?></p>
+                                    <p class="volunteer-email">📧 <?php echo htmlspecialchars($volunteer['volunteer_email']); ?></p>
+                                    <p class="volunteer-main-role">Main Role: <?php echo htmlspecialchars($volunteer['volunteer_main_role']); ?></p>
+                                    <p class="volunteer-status">
+                                        <span class="status-badge status-<?php echo strtolower($volunteer['status']); ?>">
+                                            <?php echo $volunteer['status']; ?>
+                                        </span>
+                                    </p>
+                                    <p class="volunteer-assigned">
+                                        Assigned: <?php echo date('M j, Y g:i A', strtotime($volunteer['assigned_timestamp'])); ?>
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="volunteer-actions">
+                            <button class="btn-action btn-update" 
+                                    onclick="openUpdateStatusModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo $volunteer['volunteer_name']; ?>')"
+                                    title="Update Status">
+                                ✏️
+                            </button>
+                            <button class="btn-action btn-remove" 
+                                    onclick="openRemoveAssignmentModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo $volunteer['volunteer_name']; ?>')"
+                                    title="Remove Assignment">
+                                🗑️
+                            </button>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -447,56 +650,256 @@ $history_stmt->close();
         </div>
     </div>
 
+    <!-- Update Status Modal -->
+    <div id="updateStatusModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Update Volunteer Status</h3>
+                <span class="close" onclick="closeModal('updateStatusModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="updateStatusForm" method="POST" action="ajax_update_status.php">
+                    <input type="hidden" name="distribution_volunteer_id" id="modal_distribution_volunteer_id">
+                    <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
+                    
+                    <div class="form-group">
+                        <label>Volunteer</label>
+                        <div id="modal_volunteer_name" class="readonly-field"></div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>New Status</label>
+                        <select name="status" id="modal_status" required>
+                            <option value="assigned">Assigned</option>
+                            <option value="active">Active</option>
+                            <option value="completed">Completed</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Notes (Optional)</label>
+                        <textarea name="notes" placeholder="Add any notes about this status change..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('updateStatusModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitUpdateStatus()">Update Status</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Remove Assignment Modal -->
+    <div id="removeAssignmentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Remove Volunteer Assignment</h3>
+                <span class="close" onclick="closeModal('removeAssignmentModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="removeAssignmentForm" method="POST" action="ajax_remove_assignment.php">
+                    <input type="hidden" name="distribution_volunteer_id" id="remove_modal_distribution_volunteer_id">
+                    <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
+                    
+                    <div class="warning-message">
+                        <div class="warning-icon">⚠️</div>
+                        <p>Are you sure you want to remove <strong id="remove_modal_volunteer_name"></strong> from this distribution?</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Reason for Removal</label>
+                        <select name="removal_reason" required>
+                            <option value="">Select a reason...</option>
+                            <option value="volunteer_unavailable">Volunteer Unavailable</option>
+                            <option value="reassigned">Reassigned to Other Task</option>
+                            <option value="distribution_completed">Distribution Completed</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Additional Notes</label>
+                        <textarea name="removal_notes" placeholder="Explain why this volunteer is being removed..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('removeAssignmentModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="submitRemoveAssignment()">Remove Assignment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Update Distribution Status Modal -->
+    <div id="quickUpdateStatusModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Update Distribution Status</h3>
+                <span class="close" onclick="closeModal('quickUpdateStatusModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="quickUpdateStatusForm" method="POST" action="ajax_update_distribution_status.php">
+                    <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
+                    
+                    <div class="status-options">
+                        <div class="status-option">
+                            <input type="radio" name="status" value="pending" id="status_pending" <?php echo $distribution['status'] == 'pending' ? 'checked' : ''; ?>>
+                            <label for="status_pending" class="status-label status-pending">
+                                <span class="status-badge status-pending"></span>
+                                <strong>Pending</strong>
+                                <small>Distribution is planned but not yet assigned</small>
+                            </label>
+                        </div>
+                        
+                        <div class="status-option">
+                            <input type="radio" name="status" value="assigned" id="status_assigned" <?php echo $distribution['status'] == 'assigned' ? 'checked' : ''; ?>>
+                            <label for="status_assigned" class="status-label status-assigned">
+                                <span class="status-badge status-assigned"></span>
+                                <strong>Assigned</strong>
+                                <small>Volunteers assigned, preparing for distribution</small>
+                            </label>
+                        </div>
+                        
+                        <div class="status-option">
+                            <input type="radio" name="status" value="in-transit" id="status_in_transit" <?php echo $distribution['status'] == 'in-transit' ? 'checked' : ''; ?>>
+                            <label for="status_in_transit" class="status-label status-in-transit">
+                                <span class="status-badge status-in-transit"></span>
+                                <strong>In Transit</strong>
+                                <small>Resources are being transported to location</small>
+                            </label>
+                        </div>
+                        
+                        <div class="status-option">
+                            <input type="radio" name="status" value="delivered" id="status_delivered" <?php echo $distribution['status'] == 'delivered' ? 'checked' : ''; ?>>
+                            <label for="status_delivered" class="status-label status-delivered">
+                                <span class="status-badge status-delivered"></span>
+                                <strong>Delivered</strong>
+                                <small>Resources delivered to victim location</small>
+                            </label>
+                        </div>
+                        
+                        <div class="status-option">
+                            <input type="radio" name="status" value="completed" id="status_completed" <?php echo $distribution['status'] == 'completed' ? 'checked' : ''; ?>>
+                            <label for="status_completed" class="status-label status-completed">
+                                <span class="status-badge status-completed"></span>
+                                <strong>Completed</strong>
+                                <small>Distribution successfully completed</small>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Update Notes</label>
+                        <textarea name="status_notes" placeholder="Add any notes about this status update..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('quickUpdateStatusModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitQuickStatusUpdate()">Update Status</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        // Toggle comment edit mode
-        function toggleEditComment() {
-            const display = document.getElementById('commentDisplay');
-            const editForm = document.getElementById('commentEditForm');
-            
-            if (display) display.style.display = 'none';
-            if (editForm) editForm.classList.add('active');
+        // Modal Functions
+        function openUpdateStatusModal(distributionVolunteerId, volunteerName) {
+            document.getElementById('modal_distribution_volunteer_id').value = distributionVolunteerId;
+            document.getElementById('modal_volunteer_name').textContent = volunteerName;
+            document.getElementById('updateStatusModal').style.display = 'block';
         }
 
-        // Cancel comment editing
-        function cancelEditComment() {
-            const display = document.getElementById('commentDisplay');
-            const editForm = document.getElementById('commentEditForm');
-            
-            if (display) display.style.display = 'block';
-            if (editForm) editForm.classList.remove('active');
-            
-            // Redirect without edit parameter
-            const url = new URL(window.location.href);
-            url.searchParams.delete('edit_comment');
-            window.history.replaceState({}, '', url);
+        function openRemoveAssignmentModal(distributionVolunteerId, volunteerName) {
+            document.getElementById('remove_modal_distribution_volunteer_id').value = distributionVolunteerId;
+            document.getElementById('remove_modal_volunteer_name').textContent = volunteerName;
+            document.getElementById('removeAssignmentModal').style.display = 'block';
         }
 
-        // Delete comment with confirmation
-        function deleteComment() {
-            if (confirm('Are you sure you want to delete this comment? This action cannot be undone.')) {
-                document.getElementById('deleteForm').submit();
+        function openQuickUpdateStatusModal() {
+            document.getElementById('quickUpdateStatusModal').style.display = 'block';
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modals = document.getElementsByClassName('modal');
+            for (let modal of modals) {
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
             }
         }
 
-        // Auto-expand textarea as user types
-        document.addEventListener('DOMContentLoaded', function() {
-            const textarea = document.querySelector('.comment-textarea');
-            if (textarea) {
-                textarea.addEventListener('input', function() {
-                    this.style.height = 'auto';
-                    this.style.height = (this.scrollHeight) + 'px';
-                });
-                
-                // Trigger initial resize
-                textarea.dispatchEvent(new Event('input'));
-            }
+        // AJAX Form Submissions
+        function submitUpdateStatus() {
+            const form = document.getElementById('updateStatusForm');
+            const formData = new FormData(form);
             
-            // Show edit form if URL has edit parameter
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.has('edit_comment')) {
-                toggleEditComment();
-            }
-        });
+            fetch(form.action, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload(); // Reload to show updated status
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while updating status.');
+            });
+        }
+
+        function submitRemoveAssignment() {
+            const form = document.getElementById('removeAssignmentForm');
+            const formData = new FormData(form);
+            
+            fetch(form.action, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload(); // Reload to show updated volunteer list
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while removing assignment.');
+            });
+        }
+
+        function submitQuickStatusUpdate() {
+            const form = document.getElementById('quickUpdateStatusForm');
+            const formData = new FormData(form);
+            
+            fetch(form.action, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload(); // Reload to show updated status
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while updating distribution status.');
+            });
+        }
     </script>
 </body>
 </html>
