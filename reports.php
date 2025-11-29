@@ -1,0 +1,227 @@
+<?php
+// reports.php
+require_once 'report_config.php';
+
+$database = new Database();
+$db = $database->getConnection();
+
+$message = "";
+
+// --- Handle Form Submission (Generate New Report) ---
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
+    $reportType = $_POST['report_type'];
+    $generatedBy = $_POST['generated_by']; // In a real app, this comes from Session
+    $volunteerId = !empty($_POST['volunteer_id']) ? $_POST['volunteer_id'] : null;
+    $orgId = !empty($_POST['org_id']) ? $_POST['org_id'] : null;
+    
+    // Generate the description/content based on type
+    $description = "";
+    $currentDate = date('Y-m-d H:i:s');
+    
+    try {
+        if ($reportType == 'Inventory Summary') {
+            // Calculate total resources
+            $stmt = $db->query("SELECT COUNT(*) as total, SUM(quantity_available) as qty FROM resource");
+            $res = $stmt->fetch();
+            $description = "Inventory Check [$currentDate]: Total of {$res['total']} unique resource types tracked. Total quantity on hand: {$res['qty']} units.";
+        } 
+        elseif ($reportType == 'Distribution Log') {
+            // Count distributions
+            $stmt = $db->query("SELECT status, COUNT(*) as c FROM distribution GROUP BY status");
+            $stats = $stmt->fetchAll();
+            $descParts = [];
+            foreach($stats as $s) { $descParts[] = $s['status'] . ": " . $s['c']; }
+            $description = "Distribution Summary [$currentDate]: " . implode(", ", $descParts);
+        }
+        else {
+            $description = "General Report generated on $currentDate.";
+        }
+
+        // Insert into PostgreSQL Report Table
+        $sql = "INSERT INTO report (report_type, generated_by, date_generated, description, volunteer_id, org_id) 
+                VALUES (:rtype, :genby, NOW(), :desc, :vid, :oid)";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->bindParam(':rtype', $reportType);
+        $stmt->bindParam(':genby', $generatedBy);
+        $stmt->bindParam(':desc', $description);
+        $stmt->bindParam(':vid', $volunteerId);
+        $stmt->bindParam(':oid', $orgId);
+        
+        if($stmt->execute()) {
+            $message = "<div class='alert alert-success'>Report generated successfully!</div>";
+        } else {
+            $message = "<div class='alert alert-danger'>Failed to save report.</div>";
+        }
+
+    } catch (Exception $e) {
+        $message = "<div class='alert alert-danger'>Error: " . $e->getMessage() . "</div>";
+    }
+}
+
+// --- Fetch All Reports ---
+$reports = [];
+try {
+    // Note: Postgres columns are usually lowercase. Adjust if you created them with quotes "Report_ID"
+    $stmt = $db->query("SELECT * FROM report ORDER BY date_generated DESC");
+    $reports = $stmt->fetchAll();
+} catch (Exception $e) {
+    // Table might not exist yet
+    $message .= "<div class='alert alert-warning'>Could not fetch reports. Ensure the 'report' table exists in Postgres.</div>";
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Report Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f6f9; }
+        .sidebar { min-height: 100vh; background-color: #343a40; color: white; padding-top: 20px; }
+        .sidebar a { color: #cfd2d6; text-decoration: none; display: block; padding: 10px 20px; }
+        .sidebar a:hover { background-color: #495057; color: white; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <!-- Sidebar -->
+        <div class="col-md-2 sidebar">
+            <h4 class="text-center">Relief System</h4>
+            <hr>
+            <a href="reports.php" style="background-color: #495057; color: white;">📑 Reports</a>
+            <a href="analytics.php">📊 Analytics</a>
+            <a href="#">🏠 Main Dashboard</a>
+        </div>
+
+        <!-- Main Content -->
+        <div class="col-md-10 p-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Report Management</h2>
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#generateModal">
+                    <i class="fas fa-plus"></i> Generate New Report
+                </button>
+            </div>
+
+            <?php echo $message; ?>
+
+            <!-- Reports Table -->
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Type</th>
+                                <th>Generated By</th>
+                                <th>Date Generated</th>
+                                <th>Description</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (count($reports) > 0): ?>
+                                <?php foreach ($reports as $report): ?>
+                                <tr>
+                                    <td>#<?php echo $report['report_id']; ?></td>
+                                    <td><span class="badge bg-info text-dark"><?php echo htmlspecialchars($report['report_type']); ?></span></td>
+                                    <td><?php echo htmlspecialchars($report['generated_by']); ?></td>
+                                    <td><?php echo date('M j, Y H:i', strtotime($report['date_generated'])); ?></td>
+                                    <td><?php echo htmlspecialchars(substr($report['description'], 0, 50)) . '...'; ?></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-outline-primary" onclick="viewReport('<?php echo htmlspecialchars($report['description']); ?>')">View</button>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <tr><td colspan="6" class="text-center">No reports generated yet.</td></tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Generate Report Modal -->
+<div class="modal fade" id="generateModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">Generate System Report</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="generate_report" value="1">
+                    
+                    <div class="mb-3">
+                        <label>Report Type</label>
+                        <select name="report_type" class="form-control" required>
+                            <option value="Distribution Log">Distribution Log</option>
+                            <option value="Inventory Summary">Inventory Summary</option>
+                            <option value="Volunteer Activity">Volunteer Activity</option>
+                            <option value="Victim Needs Analysis">Victim Needs Analysis</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label>Generated By (Name)</label>
+                        <input type="text" name="generated_by" class="form-control" placeholder="Enter your name" required>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label>Volunteer ID (Optional)</label>
+                            <input type="number" name="volunteer_id" class="form-control" placeholder="ID">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label>Org ID (Optional)</label>
+                            <input type="number" name="org_id" class="form-control" placeholder="ID">
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <small>Note: This will analyze current database records and snapshot the results into the Reports archive.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-success">Generate & Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- View Detail Modal -->
+<div class="modal fade" id="viewModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Report Content</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p id="reportContent"></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    function viewReport(content) {
+        document.getElementById('reportContent').textContent = content;
+        var myModal = new bootstrap.Modal(document.getElementById('viewModal'));
+        myModal.show();
+    }
+</script>
+
+</body>
+</html>
