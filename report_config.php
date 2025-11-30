@@ -5,7 +5,7 @@
 class Database {
     // CHANGE THESE VARIABLES TO MATCH YOUR POSTGRES SETUP
     private $host = "localhost";
-    private $db_name = "reports"; // Your PostgreSQL Database Name
+    private $db_name = "report"; // Your PostgreSQL Database Name
     private $username = "postgres";   // Your PostgreSQL Username
     private $password = "123123"; // Your PostgreSQL Password
     public $conn;
