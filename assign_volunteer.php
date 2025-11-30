@@ -208,7 +208,7 @@ if ($_POST && isset($_POST['remove_assignment'])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Assign Volunteers - Distribution #<?php echo $distribution_id; ?></title>
-    <link rel="stylesheet" href="main.css">
+    <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
     <div class="container">

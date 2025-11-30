@@ -54,8 +54,7 @@ $volunteers_query = "
         dv.*,
         v.name as volunteer_name,
         v.phone as volunteer_phone,
-        v.role as volunteer_main_role,
-        v.email as volunteer_email
+        v.role as volunteer_main_role
     FROM distribution_volunteer dv
     LEFT JOIN volunteer v ON dv.volunteer_id = v.volunteer_id
     WHERE dv.distribution_id = ?
@@ -107,265 +106,7 @@ $history_stmt->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Distribution #<?php echo $distribution_id; ?></title>
-    <link rel="stylesheet" href="style.css">
-    <style>
-        /* Enhanced Status Badges */
-        .status-badge {
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 0.8em;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .status-badge.large {
-            padding: 6px 12px;
-            font-size: 0.9em;
-        }
-
-        .status-pending { background: #fef3cd; color: #856404; border: 1px solid #ffeaa7; }
-        .status-assigned { background: #cce7ff; color: #004085; border: 1px solid #b3d7ff; }
-        .status-active { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
-        .status-in-transit { background: #d1ecf1; color: #0c5460; border: 1px solid #b3e5fc; }
-        .status-delivered { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .status-completed { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
-        .status-cancelled { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-
-        /* Progress Bar */
-        .progress-container {
-            height: 8px;
-            background: #e9ecef;
-            border-radius: 4px;
-            overflow: hidden;
-            margin: 10px 0;
-        }
-
-        .progress-container.large {
-            height: 12px;
-        }
-
-        .progress-bar {
-            height: 100%;
-            transition: width 0.3s ease;
-        }
-
-        .progress-pending { width: 20%; background: #ffc107; }
-        .progress-assigned { width: 40%; background: #17a2b8; }
-        .progress-in-transit { width: 60%; background: #6f42c1; }
-        .progress-delivered { width: 80%; background: #fd7e14; }
-        .progress-completed { width: 100%; background: #28a745; }
-
-        .progress-labels {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.8em;
-            color: #6c757d;
-            margin-top: 5px;
-        }
-
-        .progress-label.active {
-            color: #495057;
-            font-weight: 600;
-        }
-
-        /* Modal Styles */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-        }
-
-        .modal-content {
-            background-color: #fff;
-            margin: 5% auto;
-            padding: 0;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 500px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-            animation: modalSlideIn 0.3s ease;
-        }
-
-        @keyframes modalSlideIn {
-            from { transform: translateY(-50px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-
-        .modal-header {
-            padding: 20px;
-            border-bottom: 1px solid #dee2e6;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .modal-header h3 {
-            margin: 0;
-            color: #495057;
-        }
-
-        .close {
-            color: #aaa;
-            font-size: 24px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        .close:hover {
-            color: #000;
-        }
-
-        .modal-body {
-            padding: 20px;
-            max-height: 60vh;
-            overflow-y: auto;
-        }
-
-        .modal-footer {
-            padding: 20px;
-            border-top: 1px solid #dee2e6;
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-        }
-
-        /* Volunteer Actions */
-        .volunteer-actions {
-            display: flex;
-            gap: 5px;
-            margin-top: 10px;
-        }
-
-        .btn-action {
-            padding: 6px 10px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s ease;
-        }
-
-        .btn-update { background: #e3f2fd; color: #1976d2; }
-        .btn-update:hover { background: #bbdefb; }
-
-        .btn-remove { background: #ffebee; color: #d32f2f; }
-        .btn-remove:hover { background: #ffcdd2; }
-
-        /* Status Options */
-        .status-options {
-            display: grid;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        .status-option {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px;
-            border: 2px solid #e9ecef;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .status-option:hover {
-            border-color: #007bff;
-        }
-
-        .status-option input[type="radio"]:checked + .status-label {
-            border-color: #007bff;
-            background: #f8f9fa;
-        }
-
-        .status-label {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex: 1;
-            cursor: pointer;
-        }
-
-        .status-label strong {
-            color: #495057;
-        }
-
-        .status-label small {
-            color: #6c757d;
-            font-size: 0.85em;
-        }
-
-        /* Warning Message */
-        .warning-message {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 15px;
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 6px;
-            margin-bottom: 20px;
-        }
-
-        .warning-icon {
-            font-size: 24px;
-        }
-
-        .readonly-field {
-            padding: 8px 12px;
-            background: #f8f9fa;
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            color: #495057;
-        }
-
-        /* Enhanced Volunteer Cards */
-        .volunteer-card {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            padding: 15px;
-            border: 1px solid #e9ecef;
-            border-radius: 8px;
-            margin-bottom: 10px;
-        }
-
-        .volunteer-info {
-            flex: 1;
-        }
-
-        .volunteer-actions {
-            display: flex;
-            gap: 8px;
-        }
-
-        /* Grid Layout Improvements */
-        .grid-5 {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-
-        /* Header Actions */
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .btn-sm {
-            padding: 8px 12px;
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-<body>
+    <link rel="stylesheet" href="css/style.css">
     <div class="container">
         <!-- Header Section -->
         <div class="header">
@@ -553,7 +294,6 @@ $history_stmt->close();
                                     <h4><?php echo htmlspecialchars($volunteer['volunteer_name']); ?></h4>
                                     <p class="volunteer-role"><?php echo htmlspecialchars($volunteer['role']); ?></p>
                                     <p class="volunteer-phone">📱 <?php echo htmlspecialchars($volunteer['volunteer_phone']); ?></p>
-                                    <p class="volunteer-email">📧 <?php echo htmlspecialchars($volunteer['volunteer_email']); ?></p>
                                     <p class="volunteer-main-role">Main Role: <?php echo htmlspecialchars($volunteer['volunteer_main_role']); ?></p>
                                     <p class="volunteer-status">
                                         <span class="status-badge status-<?php echo strtolower($volunteer['status']); ?>">
@@ -567,17 +307,17 @@ $history_stmt->close();
                             </div>
                         </div>
                         <div class="volunteer-actions">
-                            <button class="btn-action btn-update" 
-                                    onclick="openUpdateStatusModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo $volunteer['volunteer_name']; ?>')"
-                                    title="Update Status">
-                                ✏️
-                            </button>
-                            <button class="btn-action btn-remove" 
-                                    onclick="openRemoveAssignmentModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo $volunteer['volunteer_name']; ?>')"
-                                    title="Remove Assignment">
-                                🗑️
-                            </button>
-                        </div>
+    <button class="btn-action btn-update" 
+            onclick="openUpdateStatusModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo addslashes($volunteer['volunteer_name']); ?>')"
+            title="Update Status">
+        ✏️
+    </button>
+    <button class="btn-action btn-remove" 
+           onclick="openRemoveAssignmentModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo addslashes($volunteer['volunteer_name']); ?>')"
+            title="Remove Assignment">
+        🗑️
+    </button>
+</div>
                     </div>
                     <?php endforeach; ?>
                 </div>
@@ -731,76 +471,89 @@ $history_stmt->close();
         </div>
     </div>
 
-    <!-- Quick Update Distribution Status Modal -->
-    <div id="quickUpdateStatusModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Update Distribution Status</h3>
-                <span class="close" onclick="closeModal('quickUpdateStatusModal')">&times;</span>
-            </div>
-            <div class="modal-body">
-                <form id="quickUpdateStatusForm" method="POST" action="ajax_update_distribution_status.php">
-                    <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
-                    
-                    <div class="status-options">
-                        <div class="status-option">
-                            <input type="radio" name="status" value="pending" id="status_pending" <?php echo $distribution['status'] == 'pending' ? 'checked' : ''; ?>>
-                            <label for="status_pending" class="status-label status-pending">
-                                <span class="status-badge status-pending"></span>
-                                <strong>Pending</strong>
-                                <small>Distribution is planned but not yet assigned</small>
-                            </label>
-                        </div>
-                        
-                        <div class="status-option">
-                            <input type="radio" name="status" value="assigned" id="status_assigned" <?php echo $distribution['status'] == 'assigned' ? 'checked' : ''; ?>>
-                            <label for="status_assigned" class="status-label status-assigned">
-                                <span class="status-badge status-assigned"></span>
-                                <strong>Assigned</strong>
-                                <small>Volunteers assigned, preparing for distribution</small>
-                            </label>
-                        </div>
-                        
-                        <div class="status-option">
-                            <input type="radio" name="status" value="in-transit" id="status_in_transit" <?php echo $distribution['status'] == 'in-transit' ? 'checked' : ''; ?>>
-                            <label for="status_in_transit" class="status-label status-in-transit">
-                                <span class="status-badge status-in-transit"></span>
-                                <strong>In Transit</strong>
-                                <small>Resources are being transported to location</small>
-                            </label>
-                        </div>
-                        
-                        <div class="status-option">
-                            <input type="radio" name="status" value="delivered" id="status_delivered" <?php echo $distribution['status'] == 'delivered' ? 'checked' : ''; ?>>
-                            <label for="status_delivered" class="status-label status-delivered">
-                                <span class="status-badge status-delivered"></span>
-                                <strong>Delivered</strong>
-                                <small>Resources delivered to victim location</small>
-                            </label>
-                        </div>
-                        
-                        <div class="status-option">
-                            <input type="radio" name="status" value="completed" id="status_completed" <?php echo $distribution['status'] == 'completed' ? 'checked' : ''; ?>>
-                            <label for="status_completed" class="status-label status-completed">
-                                <span class="status-badge status-completed"></span>
-                                <strong>Completed</strong>
-                                <small>Distribution successfully completed</small>
-                            </label>
-                        </div>
+<!-- Quick Update Distribution Status Modal -->
+<div id="quickUpdateStatusModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Update Distribution Status</h3>
+            <span class="close" onclick="closeModal('quickUpdateStatusModal')">&times;</span>
+        </div>
+
+        <div class="modal-body">
+            <form id="quickUpdateStatusForm" method="POST" action="ajax_update_distribution_status.php">
+                <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
+
+                <div class="status-options">
+
+                    <!-- Pending -->
+                    <div class="status-option">
+                        <input type="radio" name="status" value="pending" id="status_pending" 
+                            <?php echo $distribution['status'] == 'pending' ? 'checked' : ''; ?>>
+                        <label for="status_pending" class="status-label status-pending">
+                            <span class="status-badge status-pending"></span>
+                            <strong>Pending</strong>
+                            <small>Distribution planned but not yet started</small>
+                        </label>
                     </div>
-                    
-                    <div class="form-group">
-                        <label>Update Notes</label>
-                        <textarea name="status_notes" placeholder="Add any notes about this status update..."></textarea>
+
+                    <!-- Assigned -->
+                    <div class="status-option">
+                        <input type="radio" name="status" value="assigned" id="status_assigned"
+                            <?php echo $distribution['status'] == 'assigned' ? 'checked' : ''; ?>>
+                        <label for="status_assigned" class="status-label status-assigned">
+                            <span class="status-badge status-assigned"></span>
+                            <strong>Assigned</strong>
+                            <small>Volunteers assigned and preparing</small>
+                        </label>
                     </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeModal('quickUpdateStatusModal')">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitQuickStatusUpdate()">Update Status</button>
-            </div>
+
+                    <!-- In Transit -->
+                    <div class="status-option">
+                        <input type="radio" name="status" value="in-transit" id="status_in_transit"
+                            <?php echo $distribution['status'] == 'in-transit' ? 'checked' : ''; ?>>
+                        <label for="status_in_transit" class="status-label status-in-transit">
+                            <span class="status-badge status-in-transit"></span>
+                            <strong>In Transit</strong>
+                            <small>Distribution is currently on the way</small>
+                        </label>
+                    </div>
+
+                    <!-- Delivered -->
+                    <div class="status-option">
+                        <input type="radio" name="status" value="delivered" id="status_delivered"
+                            <?php echo $distribution['status'] == 'delivered' ? 'checked' : ''; ?>>
+                        <label for="status_delivered" class="status-label status-delivered">
+                            <span class="status-badge status-delivered"></span>
+                            <strong>Delivered</strong>
+                            <small>Resources have reached the site</small>
+                        </label>
+                    </div>
+
+                    <!-- Completed -->
+                    <div class="status-option">
+                        <input type="radio" name="status" value="completed" id="status_completed"
+                            <?php echo $distribution['status'] == 'completed' ? 'checked' : ''; ?>>
+                        <label for="status_completed" class="status-label status-completed">
+                            <span class="status-badge status-completed"></span>
+                            <strong>Completed</strong>
+                            <small>Distribution process fully completed</small>
+                        </label>
+                    </div>
+
+                </div>
+            </form>
+        </div>
+
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('quickUpdateStatusModal')">
+                Cancel
+            </button>
+            <button type="button" class="btn btn-primary" onclick="submitQuickUpdateStatus()">
+                Update Status
+            </button>
         </div>
     </div>
+</div>
 
     <script>
         // Modal Functions
@@ -879,7 +632,7 @@ $history_stmt->close();
             });
         }
 
-        function submitQuickStatusUpdate() {
+        function submitQuickUpdateStatus() {
             const form = document.getElementById('quickUpdateStatusForm');
             const formData = new FormData(form);
             

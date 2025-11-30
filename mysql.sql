@@ -40,3 +40,23 @@ CREATE TABLE distribution (
     comments TEXT
 );
 
+CREATE TABLE volunteer (
+    volunteer_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20),
+    role VARCHAR(50)
+);
+
+CREATE TABLE distribution_volunteer (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    volunteer_id BIGINT UNSIGNED NOT NULL,
+    distribution_id BIGINT UNSIGNED NOT NULL,
+    role VARCHAR(50),
+    status ENUM('Assigned', 'Active', 'Completed') DEFAULT 'Assigned',
+    date_assigned TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (volunteer_id) REFERENCES volunteer(volunteer_id),
+    FOREIGN KEY (distribution_id) REFERENCES distribution(distribution_id),
+    UNIQUE KEY unique_assignment (volunteer_id, distribution_id)
+);
+
