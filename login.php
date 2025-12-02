@@ -10,20 +10,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if($user && password_verify($_POST['password'],$user['password'])) {
+        // Store session info
         $_SESSION['account_id'] = $user['account_id'];
         $_SESSION['username'] = $user['username'];
-        $_SESSION['role'] = strtolower($user['role']); // normalize role
 
-        // Redirect based on role
-        if ($_SESSION['role'] === 'admin') {
-            header("Location: admin_dashboard.php");
-            exit();
-        } elseif ($_SESSION['role'] === 'victim') {
-            header("Location: dashboard.php");
-            exit();
-        } else {
-            $error = "Unknown role: " . htmlspecialchars($user['role']);
-        }
+        // All users are victims now
+        header("Location: dashboard.php");
+        exit();
     } else {
         $error = "Invalid username or password!";
     }
