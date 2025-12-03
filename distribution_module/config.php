@@ -4,8 +4,6 @@ $user = "root";
 $pass = "Frero@2950";
 $db   = "distribution";
 
-$conn = new mysqli($host, $user, $pass, $db);
-
 // Turn on error reporting for mysqli
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
@@ -13,6 +11,7 @@ try {
     // Attempt database connection
     $conn = new mysqli($host, $user, $pass, $db);
     $conn->set_charset("utf8mb4"); // Good practice
+    echo "✅ MySQL Connected<br>";
 } catch (Exception $e) {
     // If connection fails, show readable error message
     die("
@@ -45,4 +44,3 @@ class Database {
         return $this->conn->prepare($query);
     }
 }
-?>

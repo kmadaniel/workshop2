@@ -107,6 +107,8 @@ $history_stmt->close();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Distribution #<?php echo $distribution_id; ?></title>
     <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
     <div class="container">
         <!-- Header Section -->
         <div class="header">
@@ -307,17 +309,17 @@ $history_stmt->close();
                             </div>
                         </div>
                         <div class="volunteer-actions">
-    <button class="btn-action btn-update" 
-            onclick="openUpdateStatusModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo addslashes($volunteer['volunteer_name']); ?>')"
-            title="Update Status">
-        ✏️
-    </button>
-    <button class="btn-action btn-remove" 
-           onclick="openRemoveAssignmentModal(<?php echo $volunteer['distribution_volunteer_id']; ?>, '<?php echo addslashes($volunteer['volunteer_name']); ?>')"
-            title="Remove Assignment">
-        🗑️
-    </button>
-</div>
+                            <button class="btn-action btn-update" 
+                                    onclick='openUpdateStatusModal(<?php echo $volunteer["distribution_volunteer_id"]; ?>, <?php echo json_encode($volunteer["volunteer_name"]); ?>)'
+                                    title="Update Status">
+                                ✏️
+                            </button>
+                            <button class="btn-action btn-remove" 
+                                    onclick='openRemoveAssignmentModal(<?php echo $volunteer["distribution_volunteer_id"]; ?>, <?php echo json_encode($volunteer["volunteer_name"]); ?>)'
+                                    title="Remove Assignment">
+                                🗑️
+                            </button>
+                        </div>
                     </div>
                     <?php endforeach; ?>
                 </div>
@@ -471,89 +473,87 @@ $history_stmt->close();
         </div>
     </div>
 
-<!-- Quick Update Distribution Status Modal -->
-<div id="quickUpdateStatusModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3>Update Distribution Status</h3>
-            <span class="close" onclick="closeModal('quickUpdateStatusModal')">&times;</span>
-        </div>
+    <!-- Quick Update Distribution Status Modal -->
+    <div id="quickUpdateStatusModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Update Distribution Status</h3>
+                <span class="close" onclick="closeModal('quickUpdateStatusModal')">&times;</span>
+            </div>
 
-        <div class="modal-body">
-            <form id="quickUpdateStatusForm" method="POST" action="ajax_update_distribution_status.php">
-                <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
+            <div class="modal-body">
+                <form id="quickUpdateStatusForm" method="POST" action="ajax_update_distribution_status.php">
+                    <input type="hidden" name="distribution_id" value="<?php echo $distribution_id; ?>">
 
-                <div class="status-options">
+                    <div class="status-options">
+                        <!-- Pending -->
+                        <div class="status-option">
+                            <input type="radio" name="status" value="pending" id="status_pending" 
+                                <?php echo $distribution['status'] == 'pending' ? 'checked' : ''; ?>>
+                            <label for="status_pending" class="status-label status-pending">
+                                <span class="status-badge status-pending"></span>
+                                <strong>Pending</strong>
+                                <small>Distribution planned but not yet started</small>
+                            </label>
+                        </div>
 
-                    <!-- Pending -->
-                    <div class="status-option">
-                        <input type="radio" name="status" value="pending" id="status_pending" 
-                            <?php echo $distribution['status'] == 'pending' ? 'checked' : ''; ?>>
-                        <label for="status_pending" class="status-label status-pending">
-                            <span class="status-badge status-pending"></span>
-                            <strong>Pending</strong>
-                            <small>Distribution planned but not yet started</small>
-                        </label>
+                        <!-- Assigned -->
+                        <div class="status-option">
+                            <input type="radio" name="status" value="assigned" id="status_assigned"
+                                <?php echo $distribution['status'] == 'assigned' ? 'checked' : ''; ?>>
+                            <label for="status_assigned" class="status-label status-assigned">
+                                <span class="status-badge status-assigned"></span>
+                                <strong>Assigned</strong>
+                                <small>Volunteers assigned and preparing</small>
+                            </label>
+                        </div>
+
+                        <!-- In Transit -->
+                        <div class="status-option">
+                            <input type="radio" name="status" value="in-transit" id="status_in_transit"
+                                <?php echo $distribution['status'] == 'in-transit' ? 'checked' : ''; ?>>
+                            <label for="status_in_transit" class="status-label status-in-transit">
+                                <span class="status-badge status-in-transit"></span>
+                                <strong>In Transit</strong>
+                                <small>Distribution is currently on the way</small>
+                            </label>
+                        </div>
+
+                        <!-- Delivered -->
+                        <div class="status-option">
+                            <input type="radio" name="status" value="delivered" id="status_delivered"
+                                <?php echo $distribution['status'] == 'delivered' ? 'checked' : ''; ?>>
+                            <label for="status_delivered" class="status-label status-delivered">
+                                <span class="status-badge status-delivered"></span>
+                                <strong>Delivered</strong>
+                                <small>Resources have reached the site</small>
+                            </label>
+                        </div>
+
+                        <!-- Completed -->
+                        <div class="status-option">
+                            <input type="radio" name="status" value="completed" id="status_completed"
+                                <?php echo $distribution['status'] == 'completed' ? 'checked' : ''; ?>>
+                            <label for="status_completed" class="status-label status-completed">
+                                <span class="status-badge status-completed"></span>
+                                <strong>Completed</strong>
+                                <small>Distribution process fully completed</small>
+                            </label>
+                        </div>
                     </div>
+                </form>
+            </div>
 
-                    <!-- Assigned -->
-                    <div class="status-option">
-                        <input type="radio" name="status" value="assigned" id="status_assigned"
-                            <?php echo $distribution['status'] == 'assigned' ? 'checked' : ''; ?>>
-                        <label for="status_assigned" class="status-label status-assigned">
-                            <span class="status-badge status-assigned"></span>
-                            <strong>Assigned</strong>
-                            <small>Volunteers assigned and preparing</small>
-                        </label>
-                    </div>
-
-                    <!-- In Transit -->
-                    <div class="status-option">
-                        <input type="radio" name="status" value="in-transit" id="status_in_transit"
-                            <?php echo $distribution['status'] == 'in-transit' ? 'checked' : ''; ?>>
-                        <label for="status_in_transit" class="status-label status-in-transit">
-                            <span class="status-badge status-in-transit"></span>
-                            <strong>In Transit</strong>
-                            <small>Distribution is currently on the way</small>
-                        </label>
-                    </div>
-
-                    <!-- Delivered -->
-                    <div class="status-option">
-                        <input type="radio" name="status" value="delivered" id="status_delivered"
-                            <?php echo $distribution['status'] == 'delivered' ? 'checked' : ''; ?>>
-                        <label for="status_delivered" class="status-label status-delivered">
-                            <span class="status-badge status-delivered"></span>
-                            <strong>Delivered</strong>
-                            <small>Resources have reached the site</small>
-                        </label>
-                    </div>
-
-                    <!-- Completed -->
-                    <div class="status-option">
-                        <input type="radio" name="status" value="completed" id="status_completed"
-                            <?php echo $distribution['status'] == 'completed' ? 'checked' : ''; ?>>
-                        <label for="status_completed" class="status-label status-completed">
-                            <span class="status-badge status-completed"></span>
-                            <strong>Completed</strong>
-                            <small>Distribution process fully completed</small>
-                        </label>
-                    </div>
-
-                </div>
-            </form>
-        </div>
-
-        <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeModal('quickUpdateStatusModal')">
-                Cancel
-            </button>
-            <button type="button" class="btn btn-primary" onclick="submitQuickUpdateStatus()">
-                Update Status
-            </button>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('quickUpdateStatusModal')">
+                    Cancel
+                </button>
+                <button type="button" class="btn btn-primary" onclick="submitQuickUpdateStatus()">
+                    Update Status
+                </button>
+            </div>
         </div>
     </div>
-</div>
 
     <script>
         // Modal Functions
@@ -599,7 +599,7 @@ $history_stmt->close();
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    location.reload(); // Reload to show updated status
+                    location.reload();
                 } else {
                     alert('Error: ' + data.message);
                 }
@@ -621,7 +621,7 @@ $history_stmt->close();
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    location.reload(); // Reload to show updated volunteer list
+                    location.reload();
                 } else {
                     alert('Error: ' + data.message);
                 }
@@ -643,7 +643,7 @@ $history_stmt->close();
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    location.reload(); // Reload to show updated status
+                    location.reload();
                 } else {
                     alert('Error: ' + data.message);
                 }

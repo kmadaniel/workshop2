@@ -1,28 +1,41 @@
 <?php
-require_once 'config.php';
+require_once 'config.php';            // your MySQL
+require_once 'dina_posgress.php'; 
+
 
 $database = new Database();
-$db = $database->getConnection();
+$db = $database->getConnection();     // MySQL DB
+
+// PostgreSQL connection: $pg_conn (from dina_postgress.php)
 
 // Get data for dropdowns
 $victims = [];
 $disasters = [];
 $resources = [];
 
+/* ----------------------------------------
+   FETCH VICTIMS FROM POSTGRESQL
+---------------------------------------- */
 try {
-    // Get all victims
-    $victims_query = "SELECT victim_id, name, age, address FROM victim";
-    $result = $db->query($victims_query);
-    $victims = $result->fetch_all(MYSQLI_ASSOC);
-    $result->free();
+    $pg_query = $pg_conn->prepare("SELECT victim_id, name, age, address FROM victim ORDER BY victim_id ASC");
+    $pg_query->execute();
+    $victims = $pg_query->fetchAll(PDO::FETCH_ASSOC);
 
-    // Get all disasters
+} catch (Exception $e) {
+    $error = "Error loading victims from PostgreSQL: " . $e->getMessage();
+}
+
+/* ----------------------------------------
+   FETCH DISASTERS + RESOURCES FROM MYSQL
+---------------------------------------- */
+try {
+    // Disasters
     $disasters_query = "SELECT disaster_id, Disaster_Name, Disaster_Type, Location FROM disaster";
     $result = $db->query($disasters_query);
     $disasters = $result->fetch_all(MYSQLI_ASSOC);
     $result->free();
 
-    // Get all resources
+    // Resources
     $resources_query = "SELECT resource_id, name, type, quantity_available, unit FROM resource";
     $result = $db->query($resources_query);
     $resources = $result->fetch_all(MYSQLI_ASSOC);
@@ -32,18 +45,21 @@ try {
     $error = "Error loading data: " . $e->getMessage();
 }
 
-// Handle form submission
+
+/* ----------------------------------------
+   FORM SUBMISSION
+---------------------------------------- */
 if ($_POST) {
-    $victim_id = $_POST['victim_id'];
-    $disaster_id = $_POST['disaster_id'];
-    $resource_id = $_POST['resource_id'];
+    $victim_id = $_POST['victim_id'];     // FROM POSTGRES
+    $disaster_id = $_POST['disaster_id']; // MYSQL
+    $resource_id = $_POST['resource_id']; // MYSQL
     $quantity_sent = $_POST['quantity_sent'];
     $delivery_date = $_POST['delivery_date'];
     $priority = $_POST['priority'];
     $comments = $_POST['comments'] ?? '';
-    
+
     try {
-        // Start transaction
+        // Start MySQL transaction
         $db->begin_transaction();
 
         // Check resource availability
@@ -69,7 +85,7 @@ if ($_POST) {
             VALUES (?, ?, ?, ?, ?, 'pending', ?)
         ";
         $distribution_stmt = $db->prepare($distribution_query);
-        $distribution_stmt->bind_param("iiiiss", 
+        $distribution_stmt->bind_param("iiiiss",
             $victim_id,
             $disaster_id,
             $resource_id,
@@ -77,11 +93,11 @@ if ($_POST) {
             $delivery_date,
             $comments
         );
-        
+
         if (!$distribution_stmt->execute()) {
             throw new Exception("Error creating distribution: " . $distribution_stmt->error);
         }
-        
+
         $distribution_id = $db->insert_id;
         $distribution_stmt->close();
 
@@ -89,13 +105,12 @@ if ($_POST) {
         $update_resource_query = "UPDATE resource SET quantity_available = quantity_available - ? WHERE resource_id = ?";
         $update_stmt = $db->prepare($update_resource_query);
         $update_stmt->bind_param("ii", $quantity_sent, $resource_id);
-        
         if (!$update_stmt->execute()) {
             throw new Exception("Error updating resource quantity: " . $update_stmt->error);
         }
         $update_stmt->close();
 
-        // Create need record if it doesn't exist
+        // Check or create need
         $check_need_query = "SELECT need_id FROM needs WHERE victim_id = ? AND resource_id = ? AND disaster_id = ?";
         $check_need_stmt = $db->prepare($check_need_query);
         $check_need_stmt->bind_param("iii", $victim_id, $resource_id, $disaster_id);
@@ -105,20 +120,18 @@ if ($_POST) {
         $check_need_stmt->close();
 
         if ($existing_need) {
-            // Update existing need
             $update_need_query = "UPDATE needs SET distribution_id = ?, status = 'fulfilled' WHERE need_id = ?";
             $update_need_stmt = $db->prepare($update_need_query);
             $update_need_stmt->bind_param("ii", $distribution_id, $existing_need['need_id']);
             $update_need_stmt->execute();
             $update_need_stmt->close();
         } else {
-            // Create new need record
             $need_query = "
                 INSERT INTO needs (victim_id, resource_id, disaster_id, distribution_id, quantity_needed, priority, status) 
                 VALUES (?, ?, ?, ?, ?, ?, 'fulfilled')
             ";
             $need_stmt = $db->prepare($need_query);
-            $need_stmt->bind_param("iiiiis", 
+            $need_stmt->bind_param("iiiiis",
                 $victim_id,
                 $resource_id,
                 $disaster_id,
@@ -130,21 +143,19 @@ if ($_POST) {
             $need_stmt->close();
         }
 
-        // Commit transaction
+        // Commit MySQL
         $db->commit();
-        
+
         $success = "Distribution created successfully! Distribution ID: #" . $distribution_id;
-        
-        // Reset form or redirect
         $_POST = array();
 
     } catch (Exception $e) {
-        // Rollback transaction on error
         $db->rollback();
         $error = $e->getMessage();
     }
 }
 ?>
+
 
 <!DOCTYPE html>
 <html lang="en">
@@ -152,7 +163,7 @@ if ($_POST) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create New Distribution</title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
     <div class="container">
