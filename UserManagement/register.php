@@ -1,7 +1,4 @@
 <?php
-// ============================
-// ENABLE ERROR REPORTING
-// ============================
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -9,65 +6,89 @@ require_once "connection.php";
 
 $message = "";
 
+// ============================
+// FETCH NGO LIST FOR DROPDOWN
+// ============================
+$ngoList = [];
+$ngoQuery = "SELECT NGOID, NGOName FROM NGO ORDER BY NGOName ASC";
+$ngoResult = sqlsrv_query($conn, $ngoQuery);
+
+if ($ngoResult) {
+    while ($row = sqlsrv_fetch_array($ngoResult, SQLSRV_FETCH_ASSOC)) {
+        $ngoList[] = $row;
+    }
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     $role = $_POST['role'];
     $fullname = $_POST['fullname'];
     $email = $_POST['email'];
     $phone = $_POST['phone'];
-    $address = $_POST['address'] ?? null;  // volunteer & NGO only
-    $registrationNo = $_POST['registrationNo'] ?? null; // NGO only
+    $address = $_POST['address'] ?? null;
     $password = $_POST['password'];
 
     // ============================
     // ADMIN REGISTRATION
     // ============================
     if ($role == "admin") {
+
         $sql = "INSERT INTO Admin (FullName, Email, PasswordHash, Phone, Role, CreatedAt)
                 VALUES (?, ?, ?, ?, 'admin', GETDATE())";
 
         $params = array($fullname, $email, $password, $phone);
+
         $stmt = sqlsrv_query($conn, $sql, $params);
 
-        if ($stmt) {
-            $message = "Admin registered successfully!";
-        } else {
-            $message = "Error registering admin: " . print_r(sqlsrv_errors(), true);
-        }
+        $message = $stmt ? "Admin registered successfully!" :
+            "Error: " . print_r(sqlsrv_errors(), true);
     }
 
     // ============================
     // NGO REGISTRATION
     // ============================
     if ($role == "ngo") {
+
+        $query = "SELECT TOP 1 RegistrationNo FROM NGO ORDER BY NGOID DESC";
+        $result = sqlsrv_query($conn, $query);
+
+        $newRegNo = "REG001";
+
+        if ($result && $row = sqlsrv_fetch_array($result, SQLSRV_FETCH_ASSOC)) {
+            $lastReg = $row['RegistrationNo'];
+            $num = (int)substr($lastReg, 3);
+            $num++;
+            $newRegNo = "REG" . str_pad($num, 3, "0", STR_PAD_LEFT);
+        }
+
         $sql = "INSERT INTO NGO (NGOName, RegistrationNo, Email, Phone, Address, PasswordHash, CreatedAt)
                 VALUES (?, ?, ?, ?, ?, ?, GETDATE())";
 
-        $params = array($fullname, $registrationNo, $email, $phone, $address, $password);
+        $params = array($fullname, $newRegNo, $email, $phone, $address, $password);
+
         $stmt = sqlsrv_query($conn, $sql, $params);
 
-        if ($stmt) {
-            $message = "NGO registered successfully!";
-        } else {
-            $message = "Error registering NGO: " . print_r(sqlsrv_errors(), true);
-        }
+        $message = $stmt ? "NGO registered successfully! Generated ID: $newRegNo" :
+            "Error: " . print_r(sqlsrv_errors(), true);
     }
 
     // ============================
     // VOLUNTEER REGISTRATION
     // ============================
     if ($role == "volunteer") {
-        $sql = "INSERT INTO Volunteer (FullName, Email, Phone, Address, PasswordHash)
-                VALUES (?, ?, ?, ?, ?)";
 
-        $params = array($fullname, $email, $phone, $address, $password);
+        $skill = $_POST['skill'];
+        $assignedNGO = $_POST['assignedNGO'];  // NGO selected by volunteer
+
+        $sql = "INSERT INTO Volunteer (FullName, Email, Phone, Address, PasswordHash, SkillCategory, AssignedNGO)
+                VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+        $params = array($fullname, $email, $phone, $address, $password, $skill, $assignedNGO);
+
         $stmt = sqlsrv_query($conn, $sql, $params);
 
-        if ($stmt) {
-            $message = "Volunteer registered successfully!";
-        } else {
-            $message = "Error registering volunteer: " . print_r(sqlsrv_errors(), true);
-        }
+        $message = $stmt ? "Volunteer registered successfully!" :
+            "Error: " . print_r(sqlsrv_errors(), true);
     }
 }
 ?>
@@ -88,24 +109,29 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             border: 1px solid #ccc; border-radius: 5px;
         }
         button {
-            width: 100%; padding: 10px;
-            background: #28a745; color: white;
-            border: none; border-radius: 5px; cursor: pointer;
+            width: 100%; padding: 10px; background: #28a745;
+            color: white; border: none; border-radius: 5px;
+            cursor: pointer;
         }
         button:hover { background: #218838; }
-        .message { color: blue; text-align: center; }
+        .message { color: blue; text-align: center; font-weight: bold; }
     </style>
 
     <script>
-        // Show/Hide fields based on role
         function updateForm() {
             let role = document.getElementById("role").value;
 
-            document.getElementById("registrationNo_group").style.display =
-                role === "ngo" ? "block" : "none";
-
+            // Address for NGO + Volunteer
             document.getElementById("address_group").style.display =
                 (role === "ngo" || role === "volunteer") ? "block" : "none";
+
+            // Skill for Volunteer ONLY
+            document.getElementById("skill_group").style.display =
+                (role === "volunteer") ? "block" : "none";
+
+            // NGO selection (Volunteer only)
+            document.getElementById("ngo_group").style.display =
+                (role === "volunteer") ? "block" : "none";
         }
     </script>
 </head>
@@ -132,14 +158,37 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <input type="email" name="email" placeholder="Email" required>
         <input type="text" name="phone" placeholder="Phone" required>
 
-        <!-- NGO ONLY -->
-        <div id="registrationNo_group" style="display:none;">
-            <input type="text" name="registrationNo" placeholder="NGO Registration Number">
-        </div>
-
-        <!-- NGO & VOLUNTEER -->
+        <!-- ADDRESS -->
         <div id="address_group" style="display:none;">
             <input type="text" name="address" placeholder="Address">
+        </div>
+
+        <!-- SKILL -->
+        <div id="skill_group" style="display:none;">
+            <label>Skill Category:</label>
+            <select name="skill">
+                <option value="">-- Select Skill --</option>
+                <option value="Medical">Medical</option>
+                <option value="Helper">Helper</option>
+                <option value="Rescue">Rescue</option>
+                <option value="Logistics">Logistics</option>
+                <option value="Technical">Technical</option>
+                <option value="Driver">Driver</option>
+                <option value="Food Supply">Food Supply</option>
+            </select>
+        </div>
+
+        <!-- NGO CHOICE -->
+        <div id="ngo_group" style="display:none;">
+            <label>Select NGO:</label>
+            <select name="assignedNGO">
+                <option value="">-- Choose NGO --</option>
+                <?php foreach ($ngoList as $ngo) { ?>
+                    <option value="<?= $ngo['NGOID'] ?>">
+                        <?= $ngo['NGOName'] ?>
+                    </option>
+                <?php } ?>
+            </select>
         </div>
 
         <input type="password" name="password" placeholder="Password" required>
