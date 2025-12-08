@@ -5,5 +5,5 @@ if (!isset($_SESSION["role"]) || $_SESSION["role"] !== "volunteer") {
     exit;
 }
 ?>
-<h1>Welcome Admin: <?php echo $_SESSION["name"]; ?></h1>
+<h1>Welcome Helper: <?php echo $_SESSION["name"]; ?></h1>
 <a href="logout.php">Logout</a>
