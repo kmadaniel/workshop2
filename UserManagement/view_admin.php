@@ -44,6 +44,8 @@ sqlsrv_close($conn);
     <title>View Admins - Admin Panel</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SweetAlert CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
     <style>
         body {
             display: flex;
@@ -128,11 +130,26 @@ sqlsrv_close($conn);
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        .avatar {
+            width: 35px;
+            height: 35px;
+            background: #0d6efd;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .swal2-popup {
+            border-radius: 15px !important;
+        }
     </style>
 </head>
 <body>
 
-    <!-- Sidebar SAMA seperti dashboard.php -->
+    <!-- Sidebar -->
     <div class="sidebar">
         <h4><i class="fas fa-user-shield me-2"></i>Admin Panel</h4>
         <hr style="border-color: #495057; margin: 15px 0;">
@@ -203,7 +220,7 @@ sqlsrv_close($conn);
                                     <td><strong>#<?php echo $admin['AdminID']; ?></strong></td>
                                     <td>
                                         <div class="d-flex align-items-center">
-                                            <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 35px; height: 35px;">
+                                            <div class="avatar">
                                                 <?php echo strtoupper(substr($admin['FullName'], 0, 1)); ?>
                                             </div>
                                             <?php echo htmlspecialchars($admin['FullName']); ?>
@@ -237,15 +254,17 @@ sqlsrv_close($conn);
                                         ?>
                                     </td>
                                     <td class="action-buttons">
-                                        <a href="edit_admin.php?id=<?php echo $admin['AdminID']; ?>" class="btn btn-warning btn-sm" title="Edit">
+                                        <a href="edit_admin.php?id=<?php echo $admin['AdminID']; ?>" 
+                                           class="btn btn-warning btn-sm" 
+                                           title="Edit">
                                             <i class="fas fa-edit"></i>
                                         </a>
-                                        <a href="delete_admin.php?id=<?php echo $admin['AdminID']; ?>" 
-                                           class="btn btn-danger btn-sm" 
-                                           title="Delete"
-                                           onclick="return confirm('Are you sure you want to delete admin <?php echo htmlspecialchars($admin['FullName']); ?>?')">
+                                        <button class="btn btn-danger btn-sm delete-btn" 
+                                                data-id="<?php echo $admin['AdminID']; ?>"
+                                                data-name="<?php echo htmlspecialchars($admin['FullName']); ?>"
+                                                title="Delete">
                                             <i class="fas fa-trash"></i>
-                                        </a>
+                                        </button>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
@@ -259,6 +278,8 @@ sqlsrv_close($conn);
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- SweetAlert JS -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     
     <script>
         // Auto-dismiss alert after 5 seconds
@@ -269,6 +290,92 @@ sqlsrv_close($conn);
                 bsAlert.close();
             }
         }, 5000);
+
+        // Delete confirmation with SweetAlert
+        document.querySelectorAll('.delete-btn').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                const adminId = this.getAttribute('data-id');
+                const adminName = this.getAttribute('data-name');
+                
+                Swal.fire({
+                    title: 'Delete Admin?',
+                    html: `<div style="text-align: center;">
+                              <i class="fas fa-exclamation-triangle fa-3x text-danger mb-3"></i>
+                              <p>Are you sure you want to delete admin <strong>"${adminName}"</strong>?</p>
+                              <div class="alert alert-warning mt-2 mb-0">
+                                  <i class="fas fa-exclamation-circle me-2"></i>
+                                  This action cannot be undone.
+                              </div>
+                           </div>`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    cancelButtonColor: '#3085d6',
+                    confirmButtonText: '<i class="fas fa-trash me-2"></i>Delete',
+                    cancelButtonText: '<i class="fas fa-times me-2"></i>Cancel',
+                    width: '450px',
+                    reverseButtons: true,
+                    customClass: {
+                        popup: 'rounded-4',
+                        confirmButton: 'btn-lg',
+                        cancelButton: 'btn-lg'
+                    },
+                    buttonsStyling: false,
+                    showClass: {
+                        popup: 'animate__animated animate__fadeInDown'
+                    },
+                    hideClass: {
+                        popup: 'animate__animated animate__fadeOutUp'
+                    }
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        // Show loading
+                        Swal.fire({
+                            title: 'Deleting...',
+                            text: 'Please wait while we delete the admin',
+                            allowOutsideClick: false,
+                            didOpen: () => {
+                                Swal.showLoading();
+                            }
+                        });
+                        
+                        // Redirect to delete script
+                        window.location.href = `delete_admin.php?id=${adminId}`;
+                    }
+                });
+            });
+        });
+
+        // Check for delete success/failure message in URL
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const deleteStatus = urlParams.get('delete');
+            
+            if(deleteStatus === 'success') {
+                Swal.fire({
+                    title: 'Success!',
+                    text: 'Admin has been deleted successfully.',
+                    icon: 'success',
+                    confirmButtonColor: '#3085d6',
+                    timer: 3000
+                });
+                
+                // Remove parameter from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else if(deleteStatus === 'error') {
+                Swal.fire({
+                    title: 'Error!',
+                    text: 'Failed to delete admin. Please try again.',
+                    icon: 'error',
+                    confirmButtonColor: '#d33'
+                });
+                
+                // Remove parameter from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        });
     </script>
 </body>
 </html>
