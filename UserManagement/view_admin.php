@@ -158,6 +158,8 @@ sqlsrv_close($conn);
         <a href="add_admin.php"><i class="fas fa-plus-circle me-2"></i>Add Admin</a>
         <a href="view_admin.php" class="active"><i class="fas fa-users me-2"></i>View Admins</a>
         <a href="view_ngo.php"><i class="fas fa-building me-2"></i>View NGO Register</a>
+        <a href="create_news.php"><i class="fas fa-newspaper me-2"></i>Create News</a>
+        <a href="view_news.php"><i class="fas fa-list me-2"></i>View News</a>
         <a href="report.php"><i class="fas fa-chart-bar me-2"></i>Reports</a>
         <hr style="border-color: #495057; margin: 20px 0;">
         <a href="logout.php" class="text-danger"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
