@@ -252,8 +252,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             to { opacity: 1; transform: translateY(0); }
         }
         
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
         button[type="submit"] {
-            width: 100%;
+            flex: 1;
             padding: 15px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -263,12 +269,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s;
-            margin-top: 10px;
         }
         
         button[type="submit"]:hover {
             transform: translateY(-2px);
             box-shadow: 0 7px 14px rgba(102, 126, 234, 0.25);
+        }
+        
+        .btn-back {
+            flex: 1;
+            padding: 15px;
+            background: #f8f9fa;
+            color: #495057;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            text-align: center;
+        }
+        
+        .btn-back:hover {
+            background: #e9ecef;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.1);
         }
         
         .login-link {
@@ -359,6 +385,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
             
             .role-buttons {
+                flex-direction: column;
+            }
+            
+            .button-group {
                 flex-direction: column;
             }
         }
@@ -474,7 +504,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </small>
         </div>
 
-        <button type="submit" id="submitBtn">Create Account</button>
+        <!-- Buttons Group -->
+        <div class="button-group">
+            <button type="submit" id="submitBtn">Create Account</button>
+            <a href="main_page.php" class="btn-back">← Back to Main Page</a>
+        </div>
         
         <div class="login-link">
             Already have an account? 

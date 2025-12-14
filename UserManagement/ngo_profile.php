@@ -387,12 +387,12 @@ if (isset($_POST['update'])) {
     <div class="sidebar">
         <h4>NGO Panel</h4>
         <a href="ngo_dashboard.php">🏠 Dashboard</a>
-        <a href="ngo_profile.php" class="active">👤 Profile</a>
-        <a href="view_volunteers.php">👥 My Volunteers</a>
+        <a href="ngo_profile.php">👤 Profile</a>
+         <a href="view_volunteers.php">👥 My Volunteers</a>
+         <a href="create_news.php">📝 Apply Story Activity</a> 
         <a href="post_opportunity.php">📢 Post Opportunity</a>
         <a href="view_opportunities.php">📋 View Opportunities</a>
-        <a href="reports.php">📊 Reports</a>
-        <a href="logout.php" style="color: #e74c3c;">🚪 Logout</a>
+        <a href="logout.php" class="text-danger">🚪 Logout</a>
     </div>
 
     <!-- Main Content -->

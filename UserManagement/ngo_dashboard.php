@@ -55,8 +55,11 @@ if(!isset($_SESSION['name']) || $_SESSION['role'] != "ngo"){
 
         <a href="ngo_dashboard.php">🏠 Dashboard</a>
         <a href="ngo_profile.php">👤 Profile</a>
-        <a href="ngo_history.php">📜 History</a>
-        <a href="ngo_apply_activity.php">📝 Apply Activity</a> <!-- optional -->
+         <a href="view_volunteers.php">👥 My Volunteers</a>
+         <a href="create_news.php">📝 Apply Story Activity</a> 
+        <a href="post_opportunity.php">📢 Post Opportunity</a>
+        <a href="view_opportunities.php">📋 View Opportunities</a>
+        
         <a href="logout.php" class="text-danger">🚪 Logout</a>
     </div>
 
