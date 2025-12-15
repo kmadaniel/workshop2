@@ -317,7 +317,7 @@ error_log("Assignments count: " . count($assignments));
         <h4>Volunteer Panel</h4>
         <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
         <a href="volunteer_profile.php">👤 Profile</a>
-        <a href="view_opportunities.php">🔍 View Opportunities</a>
+        <a href="volunteer_assigned.php">🔍 View Opportunities</a>
         <a href="my_assignments.php">📋 My Assignments</a>
         <a href="volunteer_calendar.php">📅 Calendar</a>
         <a href="volunteer_reports.php">📊 My Reports</a>

@@ -145,6 +145,7 @@ sqlsrv_close($conn);
         <a href="view_ngo.php">🏢 View NGO</a>
         <a href="create_news.php">📰 Create News</a>
         <a href="view_news.php">📜 View News</a>
+        <a href="admin_opportunity.php">📜 Opportunity</a>
         <a href="report.php">📊 Reports</a>
         <a href="logout.php" style="color: #e74c3c;">🚪 Logout</a>
     </div>
