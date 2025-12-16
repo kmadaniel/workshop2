@@ -31,7 +31,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $passwordHash = password_hash($password, PASSWORD_BCRYPT);
 
     // ============================
-    // NGO REGISTRATION
+    // NGO REGISTRATION (DENGAN STATUS PENDING)
     // ============================
     if ($role == "ngo") {
         // Generate Registration No
@@ -53,18 +53,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $checkStmt = sqlsrv_query($conn, $checkSql, $checkParams);
         
         if (sqlsrv_has_rows($checkStmt)) {
-            $message = "Error: Email already registered as NGO";
+            $message = "❌ Error: Email already registered as NGO";
         } else {
-            // NGO INSERT QUERY
-            $sql = "INSERT INTO NGO (NGOName, RegistrationNo, Email, Phone, Address, PasswordHash, CreatedAt) 
-                    VALUES (?, ?, ?, ?, ?, ?, GETDATE())";
+            // NGO INSERT QUERY DENGAN STATUS = 'Pending'
+            $sql = "INSERT INTO NGO (NGOName, RegistrationNo, Email, Phone, Address, PasswordHash, status, CreatedAt) 
+                    VALUES (?, ?, ?, ?, ?, ?, 'Pending', GETDATE())";
             
             $params = array($fullname, $newRegNo, $email, $phone, $address, $passwordHash);
             
             $stmt = sqlsrv_query($conn, $sql, $params);
             
             if ($stmt) {
-                $message = "✅ NGO registered successfully! Registration No: <strong>$newRegNo</strong>";
+                $message = "✅ NGO registered successfully! Registration No: <strong>$newRegNo</strong><br><br>
+                           ⏳ <strong>Your account is pending admin approval.</strong><br>
+                           You will be able to login only after your account is approved by an administrator.";
                 // Clear form after successful registration
                 $_POST = array();
             } else {
@@ -75,7 +77,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // ============================
-    // VOLUNTEER REGISTRATION
+    // VOLUNTEER REGISTRATION (TIDAK BERUBAH)
     // ============================
     if ($role == "volunteer") {
         $skill = $_POST['skill'];
@@ -180,6 +182,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             margin-bottom: 20px;
             text-align: center;
             border: 1px solid #c3e6cb;
+            font-size: 14px;
+        }
+        
+        .pending-message {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            border: 1px solid #ffeaa7;
             font-size: 14px;
         }
         
@@ -375,6 +388,35 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         .fair { background: #ffa502; width: 60%; }
         .good { background: #2ed573; width: 100%; }
         
+        /* Additional info box for pending approval */
+        .info-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        .info-box h5 {
+            color: #856404;
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .info-box p {
+            color: #856404;
+            margin-bottom: 10px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .info-box small {
+            color: #856404;
+            font-size: 12px;
+        }
+        
         @media (max-width: 480px) {
             .container {
                 padding: 30px 20px;
@@ -408,8 +450,30 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             strpos($message, '✅') !== false ? 'success-message' : 
             (strpos($message, '❌') !== false ? 'error-message' : 'message') 
         ?>">
-            <?= htmlspecialchars($message) ?>
+            <?php 
+            // Jika ada HTML tags dalam message, echo terus
+            if (strpos($message, '<br>') !== false) {
+                echo $message;
+            } else {
+                echo htmlspecialchars($message);
+            }
+            ?>
         </div>
+        
+        <?php if (strpos($message, 'pending admin approval') !== false): ?>
+            <!-- Additional info box for pending approval -->
+            <div class="info-box">
+                <h5>📋 What happens next?</h5>
+                <p>
+                    <strong>1. Admin Review:</strong> An administrator will review your NGO registration<br>
+                    <strong>2. Approval:</strong> You will receive an email when your account is approved<br>
+                    <strong>3. Login:</strong> You can then login to access the NGO dashboard
+                </p>
+                <p>
+                    <small><em>This process usually takes 1-2 business days.</em></small>
+                </p>
+            </div>
+        <?php endif; ?>
     <?php } ?>
 
     <form method="POST" action="" id="registerForm">

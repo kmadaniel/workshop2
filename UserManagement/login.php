@@ -64,37 +64,47 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         // --- CHECK NGO TABLE ---
-        $sql = "SELECT NGOID AS ID, NGOName AS FullName, Email, PasswordHash, 'ngo' AS Role
+        // TAMBAH CHECK STATUS NGO
+        $sql = "SELECT NGOID AS ID, NGOName AS FullName, Email, PasswordHash, status, 'ngo' AS Role
                 FROM NGO WHERE Email = ?";
         $stmt = sqlsrv_query($conn, $sql, array($email));
 
         if ($stmt && sqlsrv_has_rows($stmt)) {
             $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
             $storedHash = $row["PasswordHash"];
+            $ngoStatus = $row["status"] ?? 'Approved'; // Default Approved jika tiada column
             
-            if (substr($storedHash, 0, 4) === '$2y$') {
-                if (password_verify($password, $storedHash)) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "ngo";
-                    header("Location: ngo_dashboard.php");
-                    exit;
-                }
-            } else {
-                if ($password === $storedHash) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "ngo";
-                    
-                    // Auto-upgrade to bcrypt
-                    $newHash = password_hash($password, PASSWORD_BCRYPT);
-                    $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                    sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                    
-                    header("Location: ngo_dashboard.php");
-                    exit;
+            // CHECK NGO STATUS
+            if ($ngoStatus == 'Pending') {
+                $message = "⚠️ Your NGO account is pending admin approval. Please wait for approval.";
+            } elseif ($ngoStatus == 'Rejected') {
+                $message = "❌ Your NGO registration has been rejected. Please contact administrator.";
+            } elseif ($ngoStatus == 'Approved' || $ngoStatus == '') {
+                // Check password jika status Approved
+                if (substr($storedHash, 0, 4) === '$2y$') {
+                    if (password_verify($password, $storedHash)) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "ngo";
+                        header("Location: ngo_dashboard.php");
+                        exit;
+                    }
+                } else {
+                    if ($password === $storedHash) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "ngo";
+                        
+                        // Auto-upgrade to bcrypt
+                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                        sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                        
+                        header("Location: ngo_dashboard.php");
+                        exit;
+                    }
                 }
             }
         }
@@ -136,7 +146,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         // kalau semua fail
-        $message = "Invalid email or password.";
+        if (empty($message)) {
+            $message = "Invalid email or password.";
+        }
     }
 }
 ?>
@@ -190,6 +202,28 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             margin-bottom: 20px;
             text-align: center;
             border: 1px solid #fcc;
+            font-size: 14px;
+        }
+        
+        .warning {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            border: 1px solid #ffeaa7;
+            font-size: 14px;
+        }
+        
+        .info {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            border: 1px solid #c3e6cb;
             font-size: 14px;
         }
         
@@ -297,6 +331,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             font-weight: 700;
         }
         
+        .nag-info {
+            background-color: #e8f4fd;
+            color: #0366d6;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 13px;
+            border-left: 4px solid #667eea;
+        }
+        
         @media (max-width: 480px) {
             .container {
                 padding: 30px 20px;
@@ -318,7 +362,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <h2>Login to Your Account</h2>
 
     <?php if ($message) { ?>
-        <div class="error"><?= htmlspecialchars($message) ?></div>
+        <div class="<?= 
+            strpos($message, '⚠️') !== false ? 'warning' : 
+            (strpos($message, '❌') !== false ? 'error' : 
+            (strpos($message, '✅') !== false ? 'info' : 'error')) 
+        ?>">
+            <?= htmlspecialchars($message) ?>
+        </div>
+        
+        <?php if (strpos($message, 'pending admin approval') !== false): ?>
+            <div class="nag-info">
+                <strong>ℹ️ Note:</strong> NGO registrations require admin approval. 
+                You will be able to login once your account is approved.
+            </div>
+        <?php endif; ?>
     <?php } ?>
 
     <form action="" method="POST" id="loginForm">
@@ -366,10 +423,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     document.getElementById('loginForm').addEventListener('submit', function(e) {
         const email = document.getElementById('email').value.trim();
         const password = document.getElementById('password').value.trim();
+        const submitBtn = document.querySelector('button[type="submit"]');
+        
+        // Disable button untuk prevent double click
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = 'Logging in...';
         
         if (!email || !password) {
             e.preventDefault();
             alert('Please fill in all fields');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Login';
             return false;
         }
         
@@ -378,7 +442,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if (!emailRegex.test(email)) {
             e.preventDefault();
             alert('Please enter a valid email address');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Login';
             return false;
+        }
+        
+        return true;
+    });
+    
+    // Reset button text jika user tekan back
+    window.addEventListener('pageshow', function(event) {
+        if (event.persisted) {
+            const submitBtn = document.querySelector('button[type="submit"]');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Login';
         }
     });
 </script>

@@ -140,9 +140,9 @@ sqlsrv_close($conn);
         <h4>Admin Panel</h4>
         <a href="admin_dashboard.php" class="active">🏠 Dashboard</a>
         <a href="admin_profile.php">👤 Profile</a>
-        <a href="add_admin.php">➕ Add Admin</a>
         <a href="view_admin.php">📋 View Admins</a>
-        <a href="view_ngo.php">🏢 View NGO</a>
+        <a href="admin_manage_ngo.php">🏢 View NGO</a>
+        <a href="view_ngo.php">🏢 View NGOs</a>
         <a href="create_news.php">📰 Create News</a>
         <a href="view_news.php">📜 View News</a>
         <a href="admin_opportunity.php">📜 Opportunity</a>
