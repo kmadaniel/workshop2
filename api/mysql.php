@@ -6,7 +6,7 @@ $apiKey = "kunci_ikmal";
 
 // Check if the request includes the key
 if (!isset($_GET['key']) || $_GET['key'] !== $apiKey) {
-    http_response_code(401); // Unauthorized
+    http_response_code(401);
     echo json_encode([
         "status" => "error",
         "message" => "Invalid API Key"
@@ -14,18 +14,18 @@ if (!isset($_GET['key']) || $_GET['key'] !== $apiKey) {
     exit;
 }
 
-include(__DIR__ . '/../distribution_module/config.php');  // Fix _DIR_ to __DIR__
+include(__DIR__ . '/../distribution_module/config.php');
 
 // Read parameters
 $action = $_GET['action'] ?? 'list';
-$table  = $_GET['table']  ?? 'users';  // default to users as in your example
+$table  = $_GET['table']  ?? 'distribution';
 $id     = $_GET['id']     ?? null;
 $search = $_GET['q']      ?? "";
 $limit  = min((int)($_GET['limit'] ?? 100), 1000);
 $offset = (int)($_GET['offset'] ?? 0);
 
 // Allowed tables for security
-$allowed_tables = ['users', 'victims_cache', 'distribution', 'inventory'];
+$allowed_tables = ['users', 'victim', 'distribution', 'resource', 'disaster', 'needs'];
 
 if (!in_array($table, $allowed_tables)) {
     http_response_code(400);
@@ -44,7 +44,7 @@ switch ($action) {
             http_response_code(500);
             echo json_encode([
                 "status" => "error",
-                "message" => "Query failed"
+                "message" => "Query failed: " . $conn->error
             ]);
             exit;
         }
@@ -91,29 +91,37 @@ switch ($action) {
         break;
 
     case 'search':
-        if ($table !== 'victims_cache') {
-            http_response_code(400);
-            echo json_encode([
-                "status" => "error",
-                "message" => "Search only allowed on victims_cache"
-            ]);
-            exit;
-        }
         $search = $conn->real_escape_string($search);
-        $sql = "SELECT * FROM victims_cache WHERE name LIKE '%$search%' OR location LIKE '%$search%' OR disaster_type LIKE '%$search%' LIMIT $limit";
+        $sql = "SELECT * FROM `$table` WHERE 1=1";
+        
+        // Add search conditions based on table
+        if (!empty($search)) {
+            if ($table == 'victim') {
+                $sql .= " AND (name LIKE '%$search%' OR address LIKE '%$search%')";
+            } elseif ($table == 'disaster') {
+                $sql .= " AND (Disaster_Name LIKE '%$search%' OR Location LIKE '%$search%')";
+            } elseif ($table == 'resource') {
+                $sql .= " AND (name LIKE '%$search%' OR type LIKE '%$search%')";
+            }
+        }
+        
+        $sql .= " LIMIT $limit";
         $result = $conn->query($sql);
+        
         if (!$result) {
             http_response_code(500);
             echo json_encode([
                 "status" => "error",
-                "message" => "Query failed"
+                "message" => "Query failed: " . $conn->error
             ]);
             exit;
         }
+        
         $data = [];
         while ($row = $result->fetch_assoc()) {
             $data[] = $row;
         }
+        
         echo json_encode([
             "status" => "success",
             "count" => count($data),
@@ -131,3 +139,4 @@ switch ($action) {
         ]);
         break;
 }
+?>

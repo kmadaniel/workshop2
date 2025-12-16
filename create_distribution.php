@@ -1,12 +1,8 @@
 <?php
 require_once 'config.php';            // your MySQL
-require_once 'dina_posgress.php'; 
-
 
 $database = new Database();
 $db = $database->getConnection();     // MySQL DB
-
-// PostgreSQL connection: $pg_conn (from dina_postgress.php)
 
 // Get data for dropdowns
 $victims = [];
@@ -14,15 +10,15 @@ $disasters = [];
 $resources = [];
 
 /* ----------------------------------------
-   FETCH VICTIMS FROM POSTGRESQL
+   FETCH VICTIMS FROM MYSQL
 ---------------------------------------- */
 try {
-    $pg_query = $pg_conn->prepare("SELECT victim_id, name, age, address FROM victim ORDER BY victim_id ASC");
-    $pg_query->execute();
-    $victims = $pg_query->fetchAll(PDO::FETCH_ASSOC);
-
+    $victims_query = "SELECT victim_id, name, age, address FROM victim ORDER BY victim_id ASC";
+    $result = $db->query($victims_query);
+    $victims = $result->fetch_all(MYSQLI_ASSOC);
+    $result->free();
 } catch (Exception $e) {
-    $error = "Error loading victims from PostgreSQL: " . $e->getMessage();
+    $error = "Error loading victims from MySQL: " . $e->getMessage();
 }
 
 /* ----------------------------------------
@@ -50,9 +46,9 @@ try {
    FORM SUBMISSION
 ---------------------------------------- */
 if ($_POST) {
-    $victim_id = $_POST['victim_id'];     // FROM POSTGRES
-    $disaster_id = $_POST['disaster_id']; // MYSQL
-    $resource_id = $_POST['resource_id']; // MYSQL
+    $victim_id = $_POST['victim_id'];
+    $disaster_id = $_POST['disaster_id'];
+    $resource_id = $_POST['resource_id'];
     $quantity_sent = $_POST['quantity_sent'];
     $delivery_date = $_POST['delivery_date'];
     $priority = $_POST['priority'];

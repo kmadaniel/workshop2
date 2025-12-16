@@ -1,4 +1,317 @@
-/* ========================================
+       /* Success Modal Styles */
+        .success-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .success-modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 500px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: slideUp 0.5s ease;
+            position: relative;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .success-icon {
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 25px;
+            animation: checkmarkAnimation 0.8s ease;
+        }
+        
+        @keyframes checkmarkAnimation {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .success-icon i {
+            font-size: 50px;
+            color: white;
+        }
+        
+        .success-modal-content h2 {
+            color: #27ae60;
+            margin-bottom: 15px;
+            font-size: 28px;
+        }
+        
+        .success-modal-content p {
+            color: #7f8c8d;
+            margin-bottom: 25px;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        
+        .success-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        /* Execute Button Styles */
+        .btn-warning {
+            background: linear-gradient(135deg, #f39c12 0%, #f1c40f 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: bold;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(243, 156, 18, 0.3);
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #e67e22 0%, #f39c12 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(230, 126, 34, 0.4);
+            color: white;
+        }
+        
+        .btn-warning.btn-lg {
+            padding: 15px 30px;
+            font-size: 16px;
+        }
+        
+        .btn-warning i {
+            font-size: 18px;
+        }
+        
+        /* Process Flow Navigation */
+        .process-flow {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .flow-steps {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            margin: 20px 0;
+        }
+        
+        .flow-line {
+            position: absolute;
+            top: 30px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: #e0e0e0;
+            z-index: 0;
+        }
+        
+        .flow-progress {
+            position: absolute;
+            top: 30px;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+            z-index: 1;
+        }
+        
+        .flow-step {
+            position: relative;
+            z-index: 2;
+            text-align: center;
+            flex: 1;
+        }
+        
+        .flow-step-circle {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: white;
+            border: 3px solid #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px;
+            font-size: 24px;
+            color: #bdc3c7;
+            transition: all 0.3s ease;
+        }
+        
+        .flow-step.completed .flow-step-circle {
+            background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+            border-color: #56ab2f;
+            color: white;
+        }
+        
+        .flow-step.active .flow-step-circle {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-color: #667eea;
+            color: white;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7); }
+            50% { box-shadow: 0 0 0 15px rgba(102, 126, 234, 0); }
+        }
+        
+        .flow-step-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        
+        .flow-step.completed .flow-step-label,
+        .flow-step.active .flow-step-label {
+            color: #2c3e50;
+        }
+        
+        .volunteer-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 18px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: white;
+        }
+        
+        .volunteer-card:hover {
+            border-color: #3498db;
+            background: #f8f9fa;
+            transform: translateY(-3px);
+            box-shadow: 0 6px 15px rgba(52, 152, 219, 0.2);
+        }
+        
+        .volunteer-card.selected {
+            border-color: #27ae60;
+            background: #eafaf1;
+            box-shadow: 0 6px 20px rgba(39, 174, 96, 0.3);
+        }
+        
+        .volunteer-avatar {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 20px;
+            margin-right: 15px;
+        }
+        
+        .role-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin: 3px;
+            transition: all 0.3s ease;
+        }
+        
+        .role-badge:hover {
+            transform: scale(1.05);
+        }
+        
+        .badge-coordinator { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .badge-packer { background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; }
+        .badge-distributor { background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%); color: white; }
+        .badge-driver { background: linear-gradient(135deg, #f39c12 0%, #f1c40f 100%); color: white; }
+        
+        .filter-section {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        }
+        
+        .whatsapp-preview {
+            background: #25d366;
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin: 25px 0;
+            font-family: 'Segoe UI', sans-serif;
+            white-space: pre-wrap;
+            display: none;
+            box-shadow: 0 6px 20px rgba(37, 211, 102, 0.3);
+        }
+        
+        .distribution-header {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 6px 20px rgba(44, 62, 80, 0.3);
+        }
+        
+        .role-selection {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px dashed #ddd;
+            display: none;
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                max-height: 0;
+            }
+            to {
+                opacity: 1;
+                max-height: 200px;
+            }
+        }
+        
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        /* ========================================
    DISASTER RELIEF DISTRIBUTION MODULE
    Modern, User-Friendly CSS
    ======================================== */
