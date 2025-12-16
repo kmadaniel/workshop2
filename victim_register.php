@@ -6,7 +6,7 @@ $message = "";
 $disasters = $conn->query("
     SELECT disaster_id, disaster_name, district
     FROM disaster
-    WHERE status = 'Active'
+    WHERE status IN ('Active', 'Under Control')
     ORDER BY created_at DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
