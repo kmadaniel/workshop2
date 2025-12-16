@@ -146,7 +146,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
     <a href="ngo_profile.php">
         <i class="bi bi-person-circle"></i> Profile
     </a>
-    <a href="view_volunteers.php">
+    <a href="ngo_view_volunteer.php">
         <i class="bi bi-people"></i> My Volunteers
     </a>
     <a href="create_news.php">

@@ -1,27 +1,31 @@
 <?php
 // ============================
-// ERROR REPORTING (WAJIB UNTUK DEBUG)
+// ERROR REPORTING
 // ============================
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 session_start();
-require_once "connection.php"; // file connection kamu
+require_once "connection.php";
 
 // ============================
 // LOGIN PROCESS
 // ============================
 $message = "";
+$debug_info = "";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-
     $email = trim($_POST['email']);
     $password = $_POST['password'];
 
-    // Validate input
     if (empty($email) || empty($password)) {
         $message = "Please enter both email and password.";
     } else {
+        
+        // --- DEBUG INFO ---
+        $debug_info .= "=== LOGIN ATTEMPT ===\n";
+        $debug_info .= "Email: " . $email . "\n";
+        $debug_info .= "Password length: " . strlen($password) . "\n";
         
         // --- CHECK ADMIN TABLE ---
         $sql = "SELECT AdminID AS ID, FullName, Email, PasswordHash, 'admin' AS Role
@@ -30,83 +34,202 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         if ($stmt && sqlsrv_has_rows($stmt)) {
             $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+            $debug_info .= "Found in Admin table: " . $row["FullName"] . "\n";
             
-            // Check if password hash is bcrypt format (starts with $2y$)
             $storedHash = $row["PasswordHash"];
+            $debug_info .= "Stored hash type: " . (substr($storedHash, 0, 4) === '$2y$' ? 'BCRYPT' : 'PLAIN') . "\n";
             
             if (substr($storedHash, 0, 4) === '$2y$') {
-                // Password is bcrypt hashed - use password_verify()
                 if (password_verify($password, $storedHash)) {
                     $_SESSION["user_id"] = $row["ID"];
                     $_SESSION["name"] = $row["FullName"];
                     $_SESSION["email"] = $row["Email"];
                     $_SESSION["role"] = "admin";
+                    $debug_info .= "Admin login SUCCESS\n";
                     header("Location: admin_dashboard.php");
                     exit;
+                } else {
+                    $debug_info .= "Admin password verification FAILED\n";
                 }
             } else {
-                // Password is plain text or other format - backward compatibility
                 if ($password === $storedHash) {
                     $_SESSION["user_id"] = $row["ID"];
                     $_SESSION["name"] = $row["FullName"];
                     $_SESSION["email"] = $row["Email"];
                     $_SESSION["role"] = "admin";
                     
-                    // Auto-upgrade to bcrypt (optional)
+                    // Auto-upgrade to bcrypt
                     $newHash = password_hash($password, PASSWORD_BCRYPT);
                     $update_sql = "UPDATE Admin SET PasswordHash = ? WHERE AdminID = ?";
                     sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
                     
+                    $debug_info .= "Admin login SUCCESS (plain text, upgraded to bcrypt)\n";
                     header("Location: admin_dashboard.php");
                     exit;
+                } else {
+                    $debug_info .= "Admin plain text password FAILED\n";
                 }
             }
+        } else {
+            $debug_info .= "Not found in Admin table\n";
         }
 
         // --- CHECK NGO TABLE ---
-        // TAMBAH CHECK STATUS NGO
         $sql = "SELECT NGOID AS ID, NGOName AS FullName, Email, PasswordHash, status, 'ngo' AS Role
                 FROM NGO WHERE Email = ?";
         $stmt = sqlsrv_query($conn, $sql, array($email));
 
-        if ($stmt && sqlsrv_has_rows($stmt)) {
-            $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
-            $storedHash = $row["PasswordHash"];
-            $ngoStatus = $row["status"] ?? 'Approved'; // Default Approved jika tiada column
-            
-            // CHECK NGO STATUS
-            if ($ngoStatus == 'Pending') {
-                $message = "⚠️ Your NGO account is pending admin approval. Please wait for approval.";
-            } elseif ($ngoStatus == 'Rejected') {
-                $message = "❌ Your NGO registration has been rejected. Please contact administrator.";
-            } elseif ($ngoStatus == 'Approved' || $ngoStatus == '') {
-                // Check password jika status Approved
-                if (substr($storedHash, 0, 4) === '$2y$') {
-                    if (password_verify($password, $storedHash)) {
-                        $_SESSION["user_id"] = $row["ID"];
-                        $_SESSION["name"] = $row["FullName"];
-                        $_SESSION["email"] = $row["Email"];
-                        $_SESSION["role"] = "ngo";
-                        header("Location: ngo_dashboard.php");
-                        exit;
-                    }
+        if ($stmt) {
+            if (sqlsrv_has_rows($stmt)) {
+                $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+                $debug_info .= "\n=== NGO LOGIN ATTEMPT ===\n";
+                $debug_info .= "NGO Name: " . $row["FullName"] . "\n";
+                $debug_info .= "NGO Status: " . $row["status"] . "\n";
+                $debug_info .= "Stored Hash: " . $row["PasswordHash"] . "\n";
+                $debug_info .= "Hash Length: " . strlen($row["PasswordHash"]) . "\n";
+                
+                $storedHash = $row["PasswordHash"];
+                $ngoStatus = $row["status"] ?? 'Approved';
+                
+                // CHECK IF PASSWORD IS NULL OR EMPTY
+                if (empty($storedHash)) {
+                    $debug_info .= "ERROR: PasswordHash is NULL or EMPTY in database!\n";
+                    $message = "Account error: Password not set. Please contact administrator.";
                 } else {
-                    if ($password === $storedHash) {
-                        $_SESSION["user_id"] = $row["ID"];
-                        $_SESSION["name"] = $row["FullName"];
-                        $_SESSION["email"] = $row["Email"];
-                        $_SESSION["role"] = "ngo";
+                    // CHECK NGO STATUS
+                    if ($ngoStatus == 'Pending') {
+                        $message = "⚠️ Your NGO account is pending admin approval. Please wait for approval.";
+                        $debug_info .= "Login blocked: Account PENDING\n";
+                    } elseif ($ngoStatus == 'Rejected') {
+                        $message = "❌ Your NGO registration has been rejected. Please contact administrator.";
+                        $debug_info .= "Login blocked: Account REJECTED\n";
+                    } elseif ($ngoStatus == 'Approved' || $ngoStatus == '' || $ngoStatus == 'active') {
                         
-                        // Auto-upgrade to bcrypt
-                        $newHash = password_hash($password, PASSWORD_BCRYPT);
-                        $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                        sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                        $loginSuccess = false;
+                        $hashType = "UNKNOWN";
                         
-                        header("Location: ngo_dashboard.php");
-                        exit;
+                        // CHECK HASH TYPE - FIXED FOR CORRUPTED HASHES
+                        if (substr($storedHash, 0, 4) === '$2y$') {
+                            $hashType = "BCRYPT";
+                            $debug_info .= "Hash type: BCRYPT\n";
+                            
+                            // VERIFY BCRYPT PASSWORD
+                            if (password_verify($password, $storedHash)) {
+                                $loginSuccess = true;
+                                $debug_info .= "✓ BCRYPT password verification SUCCESS\n";
+                            } else {
+                                $debug_info .= "✗ BCRYPT password verification FAILED\n";
+                            }
+                        } 
+                        // CHECK IF HASH IS CORRUPTED (contains comma or wrong format)
+                        elseif (strpos($storedHash, ',') !== false || substr($storedHash, 0, 4) === '$2x3') {
+                            $hashType = "CORRUPTED";
+                            $debug_info .= "Hash type: CORRUPTED/DAMAGED\n";
+                            $debug_info .= "WARNING: Hash appears to be corrupted!\n";
+                            
+                            // Try plain text comparison as fallback
+                            if ($password === $storedHash) {
+                                $loginSuccess = true;
+                                $debug_info .= "✓ Corrupted hash - plain text comparison SUCCESS\n";
+                            } else {
+                                // Try extracting actual password if hash is concatenated
+                                $parts = explode(',', $storedHash);
+                                if (count($parts) > 1) {
+                                    foreach ($parts as $part) {
+                                        if (trim($part) === $password) {
+                                            $loginSuccess = true;
+                                            $debug_info .= "✓ Found password in corrupted hash parts\n";
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Always fix corrupted hash if login succeeds
+                            if ($loginSuccess) {
+                                $newHash = password_hash($password, PASSWORD_BCRYPT);
+                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                                $update_stmt = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                                $debug_info .= "Fixed corrupted hash: " . ($update_stmt ? "SUCCESS" : "FAILED") . "\n";
+                            }
+                        }
+                        // CHECK IF IT'S MD5 HASH
+                        elseif (strlen($storedHash) == 32 && ctype_xdigit($storedHash)) {
+                            $hashType = "MD5";
+                            $debug_info .= "Hash type: MD5 (32 chars hex)\n";
+                            
+                            if (md5($password) === $storedHash) {
+                                $loginSuccess = true;
+                                $debug_info .= "✓ MD5 password verification SUCCESS\n";
+                                
+                                // Upgrade to bcrypt
+                                $newHash = password_hash($password, PASSWORD_BCRYPT);
+                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                                $update_result = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                                $debug_info .= "Upgraded MD5 to BCRYPT: " . ($update_result ? "SUCCESS" : "FAILED") . "\n";
+                            }
+                        }
+                        // CHECK IF IT'S SHA1 HASH
+                        elseif (strlen($storedHash) == 40 && ctype_xdigit($storedHash)) {
+                            $hashType = "SHA1";
+                            $debug_info .= "Hash type: SHA1 (40 chars hex)\n";
+                            
+                            if (sha1($password) === $storedHash) {
+                                $loginSuccess = true;
+                                $debug_info .= "✓ SHA1 password verification SUCCESS\n";
+                                
+                                // Upgrade to bcrypt
+                                $newHash = password_hash($password, PASSWORD_BCRYPT);
+                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                                sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                            }
+                        }
+                        // ASSUME PLAIN TEXT
+                        else {
+                            $hashType = "PLAIN_TEXT";
+                            $debug_info .= "Hash type: PLAIN TEXT (assuming)\n";
+                            
+                            // DIRECT COMPARISON
+                            if ($password === $storedHash) {
+                                $loginSuccess = true;
+                                $debug_info .= "✓ Plain text password match SUCCESS\n";
+                                
+                                // UPGRADE TO BCRYPT
+                                $newHash = password_hash($password, PASSWORD_BCRYPT);
+                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                                $update_stmt = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                                
+                                if ($update_stmt) {
+                                    $debug_info .= "✓ Password upgraded to BCRYPT in database\n";
+                                } else {
+                                    $debug_info .= "✗ FAILED to upgrade password. Error: " . print_r(sqlsrv_errors(), true) . "\n";
+                                }
+                            } else {
+                                $debug_info .= "✗ Plain text password match FAILED\n";
+                            }
+                        }
+                        
+                        if ($loginSuccess) {
+                            $_SESSION["user_id"] = $row["ID"];
+                            $_SESSION["name"] = $row["FullName"];
+                            $_SESSION["email"] = $row["Email"];
+                            $_SESSION["role"] = "ngo";
+                            
+                            $debug_info .= "✓ NGO LOGIN SUCCESSFUL - Redirecting to dashboard\n";
+                            error_log("NGO LOGIN SUCCESS: " . $email . " | Hash type: " . $hashType);
+                            
+                            header("Location: ngo_dashboard.php");
+                            exit;
+                        } else {
+                            $debug_info .= "✗ All password verification methods FAILED\n";
+                        }
                     }
                 }
+            } else {
+                $debug_info .= "Not found in NGO table\n";
             }
+        } else {
+            $debug_info .= "NGO query failed: " . print_r(sqlsrv_errors(), true) . "\n";
         }
 
         // --- CHECK VOLUNTEER TABLE ---
@@ -116,6 +239,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         if ($stmt && sqlsrv_has_rows($stmt)) {
             $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+            $debug_info .= "Found in Volunteer table: " . $row["FullName"] . "\n";
+            
             $storedHash = $row["PasswordHash"];
             
             if (substr($storedHash, 0, 4) === '$2y$') {
@@ -124,6 +249,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     $_SESSION["name"] = $row["FullName"];
                     $_SESSION["email"] = $row["Email"];
                     $_SESSION["role"] = "volunteer";
+                    $debug_info .= "Volunteer login SUCCESS\n";
                     header("Location: volunteer_dashboard.php");
                     exit;
                 }
@@ -139,16 +265,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     $update_sql = "UPDATE Volunteer SET PasswordHash = ? WHERE VolunteerID = ?";
                     sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
                     
+                    $debug_info .= "Volunteer login SUCCESS (plain text, upgraded to bcrypt)\n";
                     header("Location: volunteer_dashboard.php");
                     exit;
                 }
             }
+        } else {
+            $debug_info .= "Not found in Volunteer table\n";
         }
 
-        // kalau semua fail
+        // Jika semua gagal
         if (empty($message)) {
             $message = "Invalid email or password.";
         }
+        
+        // Log debug info
+        error_log("LOGIN FAILED - " . $email . "\n" . $debug_info);
     }
 }
 ?>
@@ -341,6 +473,35 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             border-left: 4px solid #667eea;
         }
         
+        .debug-toggle {
+            margin-top: 15px;
+            text-align: center;
+        }
+        
+        .debug-toggle button {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .debug-info {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+        
         @media (max-width: 480px) {
             .container {
                 padding: 30px 20px;
@@ -403,6 +564,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <a href="register.php">Register here</a>
         </div>
     </form>
+    
+    <!-- Debug Section -->
+    <div class="debug-toggle">
+        <button type="button" onclick="toggleDebug()">Show Debug Info</button>
+    </div>
+    <div class="debug-info" id="debugInfo">
+        <?php echo htmlspecialchars($debug_info ?? 'No debug information available.'); ?>
+    </div>
 </div>
 
 <script>
@@ -416,6 +585,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         } else {
             passwordField.type = 'password';
             toggleButton.textContent = '👁️';
+        }
+    }
+    
+    function toggleDebug() {
+        const debugInfo = document.getElementById('debugInfo');
+        const debugBtn = document.querySelector('.debug-toggle button');
+        
+        if (debugInfo.style.display === 'none' || debugInfo.style.display === '') {
+            debugInfo.style.display = 'block';
+            debugBtn.textContent = 'Hide Debug Info';
+        } else {
+            debugInfo.style.display = 'none';
+            debugBtn.textContent = 'Show Debug Info';
         }
     }
     
@@ -458,6 +640,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             submitBtn.innerHTML = 'Login';
         }
     });
+    
+    // Auto-show debug jika ada error message
+    <?php if ($message && strpos($message, 'Invalid') !== false): ?>
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(() => {
+            toggleDebug();
+        }, 500);
+    });
+    <?php endif; ?>
 </script>
 
 </body>

@@ -79,7 +79,7 @@ while($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)){
 
     <a href="ngo_dashboard.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">🏠 Dashboard</a>
     <a href="ngo_profile.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">👤 Profile</a>
-    <a href="view_volunteers.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">👥 My Volunteers</a>
+    <a href="ngo_view_volunteer.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">👥 My Volunteers</a>
     <a href="create_news.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">📝 Apply Story Activity</a>
     <a href="post_opportunity.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px;">📢 Post Opportunity</a>
     <a href="view_opportunities.php" style="display: block; padding: 10px; margin: 5px 0; color: #f1faee; text-decoration: none; border-radius: 5px; background: #457b9d;">📋 View Opportunities</a>
