@@ -84,17 +84,20 @@ $total_volunteers = $count_row['total'];
 </head>
 <body>
 
-<!-- SIDEBAR -->
 <div class="sidebar">
-    <h4>NGO Panel</h4>
-    <hr>
-    <a href="ngo_dashboard.php">🏠 Dashboard</a>
-    <a href="ngo_profile.php">👤 Profile</a>
-    <a href="view_volunteers.php" style="background:#457b9d;">👥 My Volunteers</a>
-    <a href="post_opportunity.php">📢 Post Opportunity</a>
-    <a href="view_opportunities.php">📋 View Opportunities</a>
-    <a href="logout.php" class="text-danger">🚪 Logout</a>
-</div>
+        <h4>NGO Panel</h4>
+        <hr style="color:white;">
+
+        <a href="ngo_dashboard.php">🏠 Dashboard</a>
+        <a href="ngo_profile.php">👤 Profile</a>
+         <a href="ngo_view_volunteer.php">👥 My Volunteers</a>
+         <a href="create_news.php">📝 Apply Story Activity</a> 
+        <a href="post_opportunity.php">📢 Post Opportunity</a>
+        <a href="view_opportunities.php">📋 View Opportunities</a>
+         <a href="distribution.php">📦 Distribution</a>
+        <a href="logout.php" class="text-danger">🚪 Logout</a>
+    </div>
+
 
 <!-- CONTENT -->
 <div class="content">

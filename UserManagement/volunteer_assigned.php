@@ -342,8 +342,7 @@ if($stmt === false){
         <a href="volunteer_dashboard.php">🏠 Dashboard</a>
         <a href="volunteer_profile.php">👤 Profile</a>
         <a href="volunteer_assigned.php" class="active">🔍 View Opportunities</a>
-        <a href="my_assignments.php">📋 My Assignments</a>
-        <a href="volunteer_calendar.php">📅 Calendar</a>
+        <a href="my_tasks.php">📋 My Tasks</a>
         <a href="volunteer_reports.php">📊 My Reports</a>
         <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
