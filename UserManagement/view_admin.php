@@ -33,7 +33,14 @@ while($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
     $admins[] = $row;
 }
 
+// Get total count
+$sqlCount = "SELECT COUNT(*) as total FROM dbo.Admin";
+$stmtCount = sqlsrv_query($conn, $sqlCount);
+$rowCount = sqlsrv_fetch_array($stmtCount, SQLSRV_FETCH_ASSOC);
+$totalAdmins = $rowCount['total'] ?? 0;
+
 sqlsrv_free_stmt($stmt);
+sqlsrv_free_stmt($stmtCount);
 sqlsrv_close($conn);
 ?>
 
@@ -41,242 +48,1133 @@ sqlsrv_close($conn);
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Admins - Admin Panel</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- SweetAlert CSS -->
     <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
     <style>
-        body {
+        /* System Header */
+        .system-header {
+            background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+            color: white;
+            padding: 0 20px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .header-container {
             display: flex;
-            background-color: #f8f9fa;
+            align-items: center;
+            justify-content: space-between;
+            height: 70px;
         }
-        .sidebar {
-            width: 250px;
-            height: 100vh;
-            background: #343a40;
-            padding: 20px;
-            position: fixed;
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
-        .sidebar a {
-            display: block;
-            padding: 12px 15px;
-            margin: 8px 0;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            font-size: 15px;
-            transition: all 0.3s;
+
+        .logo-icon {
+            font-size: 28px;
+            color: #4fc3f7;
         }
-        .sidebar a:hover {
-            background: #495057;
-            color: white;
-        }
-        .sidebar a.active {
-            background: #0d6efd;
-            color: white;
-        }
-        .sidebar h4 {
-            color: white;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #495057;
-            margin-bottom: 20px;
-        }
-        .content {
-            flex-grow: 1;
-            padding: 30px;
-            margin-left: 250px;
-            width: calc(100% - 250px);
-        }
-        .card {
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            border: none;
-            margin-bottom: 20px;
-        }
-        .card-header {
-            background: #343a40;
-            color: white;
-            border-radius: 10px 10px 0 0 !important;
-            padding: 15px 20px;
-        }
-        .table-responsive {
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .table th {
-            background-color: #f8f9fa;
-            border-top: none;
+
+        .logo-text h1 {
+            font-size: 22px;
+            margin: 0;
             font-weight: 600;
-        }
-        .badge-superadmin {
-            background-color: #dc3545;
-        }
-        .badge-admin {
-            background-color: #0d6efd;
-        }
-        .action-buttons .btn {
-            padding: 5px 10px;
-            margin: 0 3px;
-        }
-        .alert-warning {
-            background: #fff3cd;
-            border-color: #ffeaa7;
-            color: #856404;
-        }
-        .password-cell {
-            max-width: 200px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .avatar {
-            width: 35px;
-            height: 35px;
-            background: #0d6efd;
             color: white;
+        }
+
+        .logo-text small {
+            font-size: 12px;
+            opacity: 0.8;
+            color: #bbdefb;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .search-box {
+            position: relative;
+            width: 300px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px 15px 10px 40px;
+            border: none;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.3);
+        }
+
+        .search-box i {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #bbdefb;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 5px 15px;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.08);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .user-profile:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #4fc3f7 0%, #0288d1 100%);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
-            margin-right: 10px;
+            color: white;
+            font-size: 16px;
         }
-        .swal2-popup {
-            border-radius: 15px !important;
+
+        .user-info {
+            line-height: 1.3;
+        }
+
+        .user-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .user-role {
+            font-size: 12px;
+            opacity: 0.8;
+            color: #bbdefb;
+        }
+
+        .notifications {
+            position: relative;
+            cursor: pointer;
+            padding: 10px;
+            border-radius: 50%;
+            transition: background 0.3s ease;
+        }
+
+        .notifications:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .notification-badge {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: #f44336;
+            color: white;
+            font-size: 10px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Collapsible Navigation Bar */
+        .nav-toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .nav-toggle-container:hover {
+            background: #e9ecef;
+        }
+
+        .nav-toggle-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: none;
+            border: none;
+            color: #2c3e50;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 8px 15px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+
+        .nav-toggle-btn:hover {
+            background: rgba(79, 195, 247, 0.1);
+            color: #1a237e;
+        }
+
+        .nav-toggle-btn i {
+            transition: transform 0.3s ease;
+        }
+
+        .nav-toggle-btn.collapsed i {
+            transform: rotate(180deg);
+        }
+
+        .collapsible-nav {
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            max-height: 500px;
+        }
+
+        .collapsible-nav.collapsed {
+            max-height: 0;
+            border-bottom: none;
+        }
+
+        .nav-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            overflow-x: auto;
+            padding: 15px 20px;
+            scrollbar-width: thin;
+            scrollbar-color: #c1c1c1 #f1f1f1;
+        }
+
+        .nav-container::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .nav-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .nav-container::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+
+        .nav-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            color: #2c3e50;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .nav-btn:hover {
+            background: #f8f9fa;
+            border-color: #4fc3f7;
+            transform: translateY(-2px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .nav-btn.active {
+            background: #4fc3f7;
+            border-color: #4fc3f7;
+            color: white;
+        }
+
+        .nav-btn i {
+            font-size: 16px;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 70px;
+            width: 250px;
+            height: calc(100vh - 70px);
+            background: linear-gradient(180deg, #1a237e 0%, #283593 100%);
+            color: white;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            z-index: 999;
+            transition: transform 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 0;
+        }
+
+        .sidebar-collapsed {
+            transform: translateX(-250px);
+        }
+
+        /* Custom scrollbar for sidebar */
+        .sidebar-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb {
+            background: rgba(79, 195, 247, 0.5);
+            border-radius: 3px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(79, 195, 247, 0.8);
+        }
+
+        .nav-menu {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .nav-item {
+            margin: 5px 15px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            color: #bbdefb;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .nav-link.active {
+            background: rgba(79, 195, 247, 0.2);
+            color: white;
+            border-left: 4px solid #4fc3f7;
+        }
+
+        .nav-link i {
+            width: 20px;
+            text-align: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .nav-text {
+            font-size: 14px;
+            font-weight: 500;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .nav-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 20px 15px;
+        }
+
+        .nav-label {
+            padding: 10px 20px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #90caf9;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        /* Sidebar Footer */
+        .sidebar-footer {
+            padding: 15px 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            flex-shrink: 0;
+        }
+
+        .sidebar-footer a {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #bbdefb;
+            text-decoration: none;
+            padding: 10px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar-footer a:hover {
+            background: rgba(231, 76, 60, 0.2);
+            color: #ff6b6b;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            margin-left: 250px;
+            padding: 30px;
+            transition: margin-left 0.3s ease;
+            min-height: calc(100vh - 70px);
+            background: #f8f9fa;
+        }
+
+        .main-content-expanded {
+            margin-left: 0;
+        }
+
+        /* Page Header */
+        .page-header {
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .page-header h2 {
+            color: #2c3e50;
+            margin: 0;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .page-header p {
+            color: #7f8c8d;
+            margin: 5px 0 0 0;
+            font-size: 14px;
+        }
+
+        /* Stats Cards */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecef;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            margin: 0 auto 15px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            margin: 10px 0;
+            color: #2c3e50;
+        }
+
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Category Colors */
+        .stat-total { border-top: 4px solid #3498db; }
+        .stat-total .stat-icon { background: rgba(52, 152, 219, 0.1); color: #3498db; }
+
+        .stat-superadmin { border-top: 4px solid #9b59b6; }
+        .stat-superadmin .stat-icon { background: rgba(155, 89, 182, 0.1); color: #9b59b6; }
+
+        .stat-admin { border-top: 4px solid #2ecc71; }
+        .stat-admin .stat-icon { background: rgba(46, 204, 113, 0.1); color: #2ecc71; }
+
+        /* Admin Table Card */
+        .table-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecef;
+            overflow: hidden;
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-header h5 {
+            color: #2c3e50;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .table-responsive {
+            border-radius: 0 0 12px 12px;
+            overflow: hidden;
+        }
+
+        .table {
+            margin: 0;
+        }
+
+        .table thead th {
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+            color: #2c3e50;
+            font-weight: 600;
+            padding: 15px;
+            text-transform: uppercase;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+        }
+
+        .table tbody td {
+            padding: 15px;
+            vertical-align: middle;
+            border-color: #f1f1f1;
+        }
+
+        .table tbody tr {
+            transition: all 0.3s ease;
+        }
+
+        .table tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        /* Avatar */
+        .user-avatar-sm {
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #4fc3f7 0%, #0288d1 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            font-size: 14px;
+        }
+
+        /* Badges */
+        .badge {
+            padding: 6px 12px;
+            font-weight: 600;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+
+        .badge-superadmin {
+            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+            color: white;
+        }
+
+        .badge-admin {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+        }
+
+        .badge-warning {
+            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+            color: white;
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-action {
+            width: 35px;
+            height: 35px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            transition: all 0.3s ease;
+        }
+
+        .btn-action:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn-edit {
+            background: rgba(52, 152, 219, 0.1);
+            color: #3498db;
+        }
+
+        .btn-edit:hover {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-delete {
+            background: rgba(231, 76, 60, 0.1);
+            color: #e74c3c;
+        }
+
+        .btn-delete:hover {
+            background: #e74c3c;
+            color: white;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+        }
+
+        .empty-state i {
+            font-size: 60px;
+            color: #ddd;
+            margin-bottom: 20px;
+        }
+
+        .empty-state h5 {
+            color: #7f8c8d;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            color: #95a5a6;
+            font-size: 14px;
+        }
+
+        /* Mobile Toggle */
+        .mobile-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 10px;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+
+        .mobile-toggle:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .sidebar {
+                transform: translateX(-250px);
+            }
+            
+            .sidebar.active {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+            
+            .mobile-toggle {
+                display: block;
+            }
+            
+            .search-box {
+                width: 200px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header-container {
+                flex-wrap: wrap;
+                height: auto;
+                padding: 15px 0;
+            }
+            
+            .logo-text h1 {
+                font-size: 18px;
+            }
+            
+            .search-box {
+                width: 100%;
+                order: 3;
+                margin-top: 15px;
+            }
+            
+            .stats-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-container {
+                padding: 10px 15px;
+            }
+            
+            .nav-btn {
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                text-align: center;
+                gap: 15px;
+            }
         }
     </style>
 </head>
 <body>
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <h4><i class="fas fa-user-shield me-2"></i>Admin Panel</h4>
-        <hr style="border-color: #495057; margin: 15px 0;">
-        <a href="admin_dashboard.php"><i class="fas fa-home me-2"></i>Dashboard</a>
-        <a href="admin_profile.php"><i class="fas fa-user me-2"></i>Profile</a>
-        <a href="view_admin.php" class="active"><i class="fas fa-users me-2"></i>View Admins</a>
-        <a href="admin_manage_ngo.php"><i class="fas fa-building me-2"></i>Manage NGO </a>
-        <a href="create_news.php"><i class="fas fa-newspaper me-2"></i>Create News</a>
-        <a href="view_news.php"><i class="fas fa-list me-2"></i>View News</a>
-          <a href="admin_opportunity.php">📜 Opportunity</a>
-        <a href="report.php"><i class="fas fa-chart-bar me-2"></i>Report</a>
-        <hr style="border-color: #495057; margin: 20px 0;">
-        <a href="logout.php" class="text-danger"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
-    </div>
-
-    <!-- Main Content -->
-    <div class="content">
-        <!-- Header -->
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div>
-                <h2 class="mb-1">Admin Management</h2>
-                <p class="text-muted">View and manage all system administrators</p>
+    <!-- System Header -->
+    <header class="system-header">
+        <div class="header-container">
+            <div class="logo-section">
+                <button class="mobile-toggle" id="mobileToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="logo-icon">
+                    <i class="fas fa-shield-alt"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>Admin Panel</h1>
+                    <small>User Management System</small>
+                </div>
             </div>
-            <div>
-                <span class="badge bg-info fs-6 p-2">Logged in as: <?php echo $_SESSION['name']; ?></span>
-            </div>
-        </div>
-
-        <!-- Warning Alert -->
-        <div class="alert alert-warning alert-dismissible fade show" role="alert">
-            <i class="fas fa-exclamation-triangle me-2"></i>
-            <strong>Security Note:</strong> Some passwords appear in plaintext. Please ensure all passwords are properly hashed.
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-
-        <!-- Admin List Card -->
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Admin List</h5>
-                <a href="add_admin.php" class="btn btn-light btn-sm">
-                    <i class="fas fa-plus me-1"></i> Add New Admin
-                </a>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>#ID</th>
-                                <th>Full Name</th>
-                                <th>Email</th>
-                                <th>Password Hash</th>
-                                <th>Phone</th>
-                                <th>Role</th>
-                                <th>Created At</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if(empty($admins)): ?>
-                                <tr>
-                                    <td colspan="8" class="text-center text-muted py-4">
-                                        <i class="fas fa-user-slash fa-2x mb-3"></i><br>
-                                        No admin users found
-                                    </td>
-                                </tr>
-                            <?php else: ?>
-                                <?php foreach($admins as $admin): ?>
-                                <tr>
-                                    <td><strong>#<?php echo $admin['AdminID']; ?></strong></td>
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <div class="avatar">
-                                                <?php echo strtoupper(substr($admin['FullName'], 0, 1)); ?>
-                                            </div>
-                                            <?php echo htmlspecialchars($admin['FullName']); ?>
-                                        </div>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($admin['Email']); ?></td>
-                                    <td class="password-cell" title="<?php echo htmlspecialchars($admin['PasswordHash']); ?>">
-                                        <code class="bg-light p-1 rounded">
-                                            <?php 
-                                            $password = $admin['PasswordHash'];
-                                            echo strlen($password) > 20 ? substr($password, 0, 20).'...' : $password;
-                                            ?>
-                                        </code>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($admin['Phone']); ?></td>
-                                    <td>
-                                        <?php 
-                                        $roleClass = ($admin['Role'] == 'SuperAdmin') ? 'badge-superadmin' : 'badge-admin';
-                                        ?>
-                                        <span class="badge <?php echo $roleClass; ?> p-2">
-                                            <?php echo htmlspecialchars($admin['Role']); ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <?php 
-                                        if($admin['CreatedAt'] instanceof DateTime) {
-                                            echo $admin['CreatedAt']->format('Y-m-d H:i:s');
-                                        } else {
-                                            echo date('Y-m-d H:i:s', strtotime($admin['CreatedAt']));
-                                        }
-                                        ?>
-                                    </td>
-                                    <td class="action-buttons">
-                                        <a href="edit_admin.php?id=<?php echo $admin['AdminID']; ?>" 
-                                           class="btn btn-warning btn-sm" 
-                                           title="Edit">
-                                            <i class="fas fa-edit"></i>
-                                        </a>
-                                        <button class="btn btn-danger btn-sm delete-btn" 
-                                                data-id="<?php echo $admin['AdminID']; ?>"
-                                                data-name="<?php echo htmlspecialchars($admin['FullName']); ?>"
-                                                title="Delete">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
+            
+            <div class="header-controls">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search...">
+                </div>
+                
+                <div class="notifications" id="notificationsBtn">
+                    <i class="fas fa-bell"></i>
+                    <span class="notification-badge">3</span>
+                </div>
+                
+                <div class="user-profile" id="userProfileBtn">
+                    <div class="user-avatar">
+                        <?php echo strtoupper(substr($_SESSION['name'], 0, 1)); ?>
+                    </div>
+                    <div class="user-info">
+                        <div class="user-name"><?php echo $_SESSION['name']; ?></div>
+                        <div class="user-role">Administrator</div>
+                    </div>
+                    <i class="fas fa-chevron-down"></i>
                 </div>
             </div>
         </div>
+    </header>
+
+    <!-- Collapsible Navigation Bar -->
+    <div class="nav-toggle-container" id="navToggleContainer">
+        <button class="nav-toggle-btn" id="navToggleBtn">
+            <i class="fas fa-chevron-up"></i>
+            <span>Quick Navigation Menu</span>
+        </button>
     </div>
+
+    <div class="collapsible-nav" id="collapsibleNav">
+        <div class="nav-container">
+            <a href="admin_dashboard.php" class="nav-btn">
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="admin_profile.php" class="nav-btn">
+                <i class="fas fa-user"></i>
+                <span>Profile</span>
+            </a>
+            <a href="view_admin.php" class="nav-btn active">
+                <i class="fas fa-users"></i>
+                <span>View Admins</span>
+            </a>
+            <a href="admin_manage_ngo.php" class="nav-btn">
+                <i class="fas fa-building"></i>
+                <span>View NGO</span>
+            </a>
+            <a href="create_news.php" class="nav-btn">
+                <i class="fas fa-newspaper"></i>
+                <span>Create News</span>
+            </a>
+            <a href="view_news.php" class="nav-btn">
+                <i class="fas fa-list"></i>
+                <span>View News</span>
+            </a>
+            <a href="admin_opportunity.php" class="nav-btn">
+                <i class="fas fa-briefcase"></i>
+                <span>Opportunity</span>
+            </a>
+            <a href="distribution.php" class="nav-btn">
+                <i class="fas fa-truck"></i>
+                <span>Distribution</span>
+            </a>
+            <a href="victim.php" class="nav-btn">
+                <i class="fas fa-hands-helping"></i>
+                <span>Victim</span>
+            </a>
+            <a href="report.php" class="nav-btn">
+                <i class="fas fa-chart-bar"></i>
+                <span>Reports</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-content">
+            <ul class="nav-menu">
+                <li class="nav-label">MAIN NAVIGATION</li>
+                
+                <li class="nav-item">
+                    <a href="admin_dashboard.php" class="nav-link">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span class="nav-text">Dashboard</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">USER MANAGEMENT</li>
+                
+                <li class="nav-item">
+                    <a href="admin_profile.php" class="nav-link">
+                        <i class="fas fa-user"></i>
+                        <span class="nav-text">Profile</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="view_admin.php" class="nav-link active">
+                        <i class="fas fa-users"></i>
+                        <span class="nav-text">View Admins</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="admin_manage_ngo.php" class="nav-link">
+                        <i class="fas fa-building"></i>
+                        <span class="nav-text">View NGO</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">CONTENT MANAGEMENT</li>
+                
+                <li class="nav-item">
+                    <a href="create_news.php" class="nav-link">
+                        <i class="fas fa-newspaper"></i>
+                        <span class="nav-text">Create News</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="view_news.php" class="nav-link">
+                        <i class="fas fa-list"></i>
+                        <span class="nav-text">View News</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">OPERATIONS</li>
+                
+                <li class="nav-item">
+                    <a href="admin_opportunity.php" class="nav-link">
+                        <i class="fas fa-briefcase"></i>
+                        <span class="nav-text">Opportunity</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="distribution.php" class="nav-link">
+                        <i class="fas fa-truck"></i>
+                        <span class="nav-text">Distribution</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="victim.php" class="nav-link">
+                        <i class="fas fa-hands-helping"></i>
+                        <span class="nav-text">Victim</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">ANALYTICS</li>
+                
+                <li class="nav-item">
+                    <a href="report.php" class="nav-link">
+                        <i class="fas fa-chart-bar"></i>
+                        <span class="nav-text">Reports</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+        
+        <!-- Sidebar Footer -->
+        <div class="sidebar-footer">
+            <a href="logout.php">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>Logout</span>
+            </a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+        <!-- Page Header -->
+        <div class="page-header">
+            <div>
+                <h2><i class="fas fa-users-cog"></i> Admin Management</h2>
+                <p>View and manage all system administrators</p>
+            </div>
+            <div>
+                <a href="add_admin.php" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i> Add New Admin
+                </a>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-container">
+            <div class="stat-card stat-total">
+                <div class="stat-icon">
+                    <i class="fas fa-users"></i>
+                </div>
+                <div class="stat-number"><?php echo $totalAdmins; ?></div>
+                <div class="stat-label">Total Admins</div>
+            </div>
+            
+            <?php 
+            $superAdminCount = 0;
+            $adminCount = 0;
+            foreach($admins as $admin) {
+                if($admin['Role'] == 'SuperAdmin') {
+                    $superAdminCount++;
+                } else {
+                    $adminCount++;
+                }
+            }
+            ?>
+            
+            <div class="stat-card stat-superadmin">
+                <div class="stat-icon">
+                    <i class="fas fa-crown"></i>
+                </div>
+                <div class="stat-number"><?php echo $superAdminCount; ?></div>
+                <div class="stat-label">Super Admins</div>
+            </div>
+            
+            <div class="stat-card stat-admin">
+                <div class="stat-icon">
+                    <i class="fas fa-user-shield"></i>
+                </div>
+                <div class="stat-number"><?php echo $adminCount; ?></div>
+                <div class="stat-label">Regular Admins</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon" style="background: rgba(243, 156, 18, 0.1); color: #f39c12;">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="stat-number">Today</div>
+                <div class="stat-label"><?php echo date('M d, Y'); ?></div>
+            </div>
+        </div>
+
+        <!-- Admin Table Card -->
+        <div class="table-card">
+            <div class="card-header">
+                <h5><i class="fas fa-list"></i> Admin List</h5>
+                <div class="d-flex align-items-center gap-3">
+                    <span class="badge badge-warning">
+                        <i class="fas fa-exclamation-triangle me-1"></i>
+                        Total: <?php echo count($admins); ?> records
+                    </span>
+                </div>
+            </div>
+            
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Role</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if(empty($admins)): ?>
+                            <tr>
+                                <td colspan="7" class="text-center py-4">
+                                    <div class="empty-state">
+                                        <i class="fas fa-user-slash"></i>
+                                        <h5>No Admins Found</h5>
+                                        <p>Start by adding a new admin</p>
+                                        <a href="add_admin.php" class="btn btn-primary mt-2">
+                                            <i class="fas fa-plus me-2"></i> Add First Admin
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach($admins as $admin): ?>
+                            <tr>
+                                <td>
+                                    <strong class="text-primary">#<?php echo $admin['AdminID']; ?></strong>
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="user-avatar-sm">
+                                            <?php echo strtoupper(substr($admin['FullName'], 0, 1)); ?>
+                                        </div>
+                                        <div>
+                                            <div class="fw-semibold"><?php echo htmlspecialchars($admin['FullName']); ?></div>
+                                            <small class="text-muted" title="Password Hash">
+                                                <?php 
+                                                $password = $admin['PasswordHash'];
+                                                echo strlen($password) > 15 ? substr($password, 0, 15).'...' : $password;
+                                                ?>
+                                            </small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-envelope text-muted me-2"></i>
+                                        <?php echo htmlspecialchars($admin['Email']); ?>
+                                    </div>
+                                </td>
+                                <td>
+                                    <?php if($admin['Phone']): ?>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-phone text-muted me-2"></i>
+                                            <?php echo htmlspecialchars($admin['Phone']); ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php 
+                                    $badgeClass = ($admin['Role'] == 'SuperAdmin') ? 'badge-superadmin' : 'badge-admin';
+                                    ?>
+                                    <span class="badge <?php echo $badgeClass; ?>">
+                                        <i class="fas fa-<?php echo $admin['Role'] == 'SuperAdmin' ? 'crown' : 'user-shield'; ?> me-1"></i>
+                                        <?php echo htmlspecialchars($admin['Role']); ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="text-muted">
+                                        <?php 
+                                        if($admin['CreatedAt'] instanceof DateTime) {
+                                            $date = $admin['CreatedAt']->format('Y-m-d');
+                                            $time = $admin['CreatedAt']->format('H:i');
+                                        } else {
+                                            $date = date('Y-m-d', strtotime($admin['CreatedAt']));
+                                            $time = date('H:i', strtotime($admin['CreatedAt']));
+                                        }
+                                        ?>
+                                        <div class="small"><?php echo $date; ?></div>
+                                        <div class="small"><?php echo $time; ?></div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <a href="edit_admin.php?id=<?php echo $admin['AdminID']; ?>" 
+                                           class="btn-action btn-edit" 
+                                           title="Edit Admin">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                        <button class="btn-action btn-delete delete-btn" 
+                                                data-id="<?php echo $admin['AdminID']; ?>"
+                                                data-name="<?php echo htmlspecialchars($admin['FullName']); ?>"
+                                                title="Delete Admin">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -284,14 +1182,52 @@ sqlsrv_close($conn);
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     
     <script>
-        // Auto-dismiss alert after 5 seconds
-        setTimeout(function() {
-            var alert = document.querySelector('.alert');
-            if(alert) {
-                var bsAlert = new bootstrap.Alert(alert);
-                bsAlert.close();
+        // Mobile Toggle
+        document.getElementById('mobileToggle').addEventListener('click', function() {
+            document.getElementById('sidebar').classList.toggle('active');
+        });
+
+        // Collapsible Nav Toggle
+        let navCollapsed = false;
+        document.getElementById('navToggleBtn').addEventListener('click', function() {
+            const nav = document.getElementById('collapsibleNav');
+            const btn = this;
+            
+            navCollapsed = !navCollapsed;
+            nav.classList.toggle('collapsed');
+            btn.classList.toggle('collapsed');
+        });
+
+        // Auto-collapse nav on small screens
+        function checkScreenSize() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.getElementById('mainContent');
+            const mobileToggle = document.getElementById('mobileToggle');
+            
+            if (window.innerWidth <= 1024) {
+                sidebar.classList.add('sidebar-collapsed');
+                mainContent.classList.add('main-content-expanded');
+                mobileToggle.style.display = 'block';
+            } else {
+                sidebar.classList.remove('sidebar-collapsed', 'active');
+                mainContent.classList.remove('main-content-expanded');
+                mobileToggle.style.display = 'none';
             }
-        }, 5000);
+        }
+
+        // Check on load and resize
+        window.addEventListener('load', checkScreenSize);
+        window.addEventListener('resize', checkScreenSize);
+
+        // User profile dropdown (simplified)
+        document.getElementById('userProfileBtn').addEventListener('click', function() {
+            window.location.href = 'admin_profile.php';
+        });
+
+        // Notifications dropdown (simplified)
+        document.getElementById('notificationsBtn').addEventListener('click', function() {
+            alert('Notifications feature would open here');
+        });
 
         // Delete confirmation with SweetAlert
         document.querySelectorAll('.delete-btn').forEach(button => {
@@ -304,7 +1240,7 @@ sqlsrv_close($conn);
                 Swal.fire({
                     title: 'Delete Admin?',
                     html: `<div style="text-align: center;">
-                              <i class="fas fa-exclamation-triangle fa-3x text-danger mb-3"></i>
+                              <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
                               <p>Are you sure you want to delete admin <strong>"${adminName}"</strong>?</p>
                               <div class="alert alert-warning mt-2 mb-0">
                                   <i class="fas fa-exclamation-circle me-2"></i>
@@ -361,22 +1297,36 @@ sqlsrv_close($conn);
                     text: 'Admin has been deleted successfully.',
                     icon: 'success',
                     confirmButtonColor: '#3085d6',
-                    timer: 3000
+                    timer: 3000,
+                    showClass: {
+                        popup: 'animate__animated animate__fadeInDown'
+                    }
+                }).then(() => {
+                    // Remove parameter from URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
                 });
-                
-                // Remove parameter from URL
-                window.history.replaceState({}, document.title, window.location.pathname);
             } else if(deleteStatus === 'error') {
                 Swal.fire({
                     title: 'Error!',
                     text: 'Failed to delete admin. Please try again.',
                     icon: 'error',
                     confirmButtonColor: '#d33'
+                }).then(() => {
+                    // Remove parameter from URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
                 });
-                
-                // Remove parameter from URL
-                window.history.replaceState({}, document.title, window.location.pathname);
             }
+        });
+
+        // Search functionality
+        document.querySelector('.search-box input').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const rows = document.querySelectorAll('.table tbody tr');
+            
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(searchTerm) ? '' : 'none';
+            });
         });
     </script>
 </body>
