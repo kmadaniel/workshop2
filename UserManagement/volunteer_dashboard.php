@@ -89,9 +89,42 @@ if ($assignStmt) {
     error_log("Assignments query error: " . print_r(sqlsrv_errors(), true));
 }
 
+// ============================
+// FETCH NEWS/STORIES FROM ASSIGNED NGO
+// ============================
+$news = [];
+if ($volunteer && isset($volunteer['AssignedNGO']) && $volunteer['AssignedNGO']) {
+    // Get NGO Name
+    $ngoName = $volunteer['NGOName'] ?? '';
+    
+    // Fetch recent news/stories created by this NGO
+    $newsSql = "SELECT TOP 4 
+                    NewsID,
+                    Title,
+                    Description,
+                    ImageURL,
+                    CreatedBy,
+                    FORMAT(CreatedAt, 'dd MMM yyyy HH:mm') as FormattedDate
+                FROM [UserManagement].[dbo].[News] 
+                WHERE CreatedBy = ? 
+                ORDER BY CreatedAt DESC";
+    
+    $newsParams = array($ngoName);
+    $newsStmt = sqlsrv_query($conn, $newsSql, $newsParams);
+    
+    if ($newsStmt) {
+        while ($story = sqlsrv_fetch_array($newsStmt, SQLSRV_FETCH_ASSOC)) {
+            $news[] = $story;
+        }
+    } else {
+        error_log("News query error: " . print_r(sqlsrv_errors(), true));
+    }
+}
+
 // Debug log
 error_log("Opportunities count: " . count($opportunities));
 error_log("Assignments count: " . count($assignments));
+error_log("News count: " . count($news));
 ?>
 
 <!DOCTYPE html>
@@ -100,6 +133,7 @@ error_log("Assignments count: " . count($assignments));
     <meta charset="UTF-8">
     <title>Volunteer Dashboard - <?= htmlspecialchars($volunteer['NGOName'] ?? 'No NGO') ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -114,7 +148,7 @@ error_log("Assignments count: " . count($assignments));
             display: flex;
         }
         
-        /* ========== SIDEBAR STYLING (SAME AS PROFILE) ========== */
+        /* ========== SIDEBAR STYLING ========== */
         .sidebar {
             width: 250px;
             background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
@@ -177,6 +211,10 @@ error_log("Assignments count: " . count($assignments));
             gap: 10px;
         }
         
+        .card-title i {
+            font-size: 1.2rem;
+        }
+        
         .stat-card {
             background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
             color: white;
@@ -216,6 +254,93 @@ error_log("Assignments count: " . count($assignments));
         .opportunity-card:hover {
             background: #e8f5e9;
             transform: translateX(5px);
+        }
+        
+        /* News Card Styling */
+        .news-card {
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 15px;
+            background: white;
+            transition: all 0.3s;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+        }
+        
+        .news-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .news-image {
+            height: 160px;
+            overflow: hidden;
+            background: #f5f5f5;
+        }
+        
+        .news-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+        
+        .news-card:hover .news-image img {
+            transform: scale(1.05);
+        }
+        
+        .news-content {
+            padding: 15px;
+        }
+        
+        .news-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+        
+        .news-description {
+            color: #546e7a;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin-bottom: 10px;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            -webkit-line-clamp: 3;
+        }
+        
+        .news-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: #78909c;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #f0f0f0;
+        }
+        
+        .news-author, .news-date {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        /* No Image Placeholder */
+        .no-image {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #f5f5f5, #e0e0e0);
+        }
+        
+        .no-image i {
+            font-size: 3rem;
+            color: #bdbdbd;
         }
         
         .assignment-badge {
@@ -292,6 +417,25 @@ error_log("Assignments count: " . count($assignments));
             box-shadow: 0 5px 10px rgba(39, 174, 96, 0.3);
         }
         
+        .btn-news {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 6px 15px;
+            border-radius: 5px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 10px;
+        }
+        
+        .btn-news:hover {
+            background: #2980b9;
+        }
+        
         @media (max-width: 768px) {
             .sidebar {
                 width: 100%;
@@ -308,11 +452,15 @@ error_log("Assignments count: " . count($assignments));
             .stat-card {
                 margin-bottom: 15px;
             }
+            
+            .news-image {
+                height: 120px;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- SIDEBAR (SAME AS PROFILE) -->
+    <!-- SIDEBAR -->
     <div class="sidebar">
         <h4>Volunteer Panel</h4>
         <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
@@ -358,16 +506,68 @@ error_log("Assignments count: " . count($assignments));
                 </div>
                 <div class="col-md-3">
                     <div class="stat-card">
-                        <div class="stat-number">View Only</div>
-                        <div class="stat-label">Access Level</div>
+                        <div class="stat-number"><?= count($news) ?></div>
+                        <div class="stat-label">News Stories</div>
                     </div>
                 </div>
             </div>
         </div>
 
+        <!-- NEWS FROM YOUR NGO SECTION -->
+        <div class="dashboard-card">
+            <h5 class="card-title"><i class="fas fa-newspaper"></i> Latest News from <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?></h5>
+            <?php if (empty($news)): ?>
+                <div class="empty-state">
+                    <div class="empty-state-icon">📰</div>
+                    <h5>No News Available</h5>
+                    <p class="text-muted"><?= htmlspecialchars($volunteer['NGOName'] ?? 'Your NGO') ?> hasn't posted any news stories yet.</p>
+                    <p><small>Check back later for updates on their activities.</small></p>
+                </div>
+            <?php else: ?>
+                <div class="row">
+                    <?php foreach ($news as $story): 
+                        $short_description = strlen($story['Description']) > 120 
+                            ? substr($story['Description'], 0, 120) . '...' 
+                            : $story['Description'];
+                    ?>
+                    <div class="col-md-6">
+                        <div class="news-card">
+                            <div class="news-image">
+                                <?php if (!empty($story['ImageURL']) && file_exists($story['ImageURL'])): ?>
+                                    <img src="<?= htmlspecialchars($story['ImageURL']) ?>" alt="<?= htmlspecialchars($story['Title']) ?>">
+                                <?php else: ?>
+                                    <div class="no-image">
+                                        <i class="fas fa-newspaper"></i>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <div class="news-content">
+                                <h6 class="news-title"><?= htmlspecialchars($story['Title']) ?></h6>
+                                <p class="news-description"><?= htmlspecialchars($short_description) ?></p>
+                                <div class="news-meta">
+                                    <div class="news-author">
+                                        <i class="fas fa-user-circle"></i>
+                                        <span><?= htmlspecialchars($story['CreatedBy']) ?></span>
+                                    </div>
+                                    <div class="news-date">
+                                        <i class="fas fa-calendar-alt"></i>
+                                        <span><?= htmlspecialchars($story['FormattedDate']) ?></span>
+                                    </div>
+                                </div>
+                                <button class="btn-news" onclick="viewNews(<?= $story['NewsID'] ?>)">
+                                    <i class="fas fa-eye"></i> View Full Story
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
         <!-- Available Opportunities -->
         <div class="dashboard-card">
-            <h5 class="card-title">📋 Available Opportunities from <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?></h5>
+            <h5 class="card-title"><i class="fas fa-tasks"></i> Available Opportunities from <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?></h5>
             <?php if (empty($opportunities)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📭</div>
@@ -407,7 +607,7 @@ error_log("Assignments count: " . count($assignments));
 
         <!-- My Assignments -->
         <div class="dashboard-card">
-            <h5 class="card-title">📋 My Current Assignments</h5>
+            <h5 class="card-title"><i class="fas fa-clipboard-list"></i> My Current Assignments</h5>
             <?php if (empty($assignments)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📋</div>
@@ -448,6 +648,10 @@ error_log("Assignments count: " . count($assignments));
     <script>
         function viewOpportunity(opportunityId) {
             window.location.href = `opportunity_details.php?id=${opportunityId}`;
+        }
+        
+        function viewNews(newsId) {
+            window.location.href = `news_details.php?id=${newsId}`;
         }
     </script>
 </body>

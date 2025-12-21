@@ -1,40 +1,14 @@
-<?php
-// Database connection untuk ambil news
-$serverName = "localhost";
-$connectionOptions = array(
-    "Database" => "UserManagement",
-    "Uid" => "yanadb",
-    "PWD" => "yana123"
-);
-
-$conn = sqlsrv_connect($serverName, $connectionOptions);
-
-// Get latest 3 news
-$latest_news = array();
-if($conn !== false) {
-    $sql = "SELECT TOP 3 NewsID, Title, Description, ImageURL, CreatedAt 
-            FROM dbo.News 
-            ORDER BY CreatedAt DESC";
-    $stmt = sqlsrv_query($conn, $sql);
-    
-    if($stmt !== false) {
-        while($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
-            $latest_news[] = $row;
-        }
-        sqlsrv_free_stmt($stmt);
-    }
-    sqlsrv_close($conn);
-}
-?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Main Page</title>
+    <title>Disaster Relief Resource Management System (Negeri Melaka)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Include Slick Slider CSS -->
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/slick-carousel@1.8.1/slick/slick.css"/>
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/slick-carousel@1.8.1/slick/slick-theme.css"/>
     <style>
         * {
             margin: 0;
@@ -105,7 +79,6 @@ if($conn !== false) {
         /* HERO SECTION */
         .hero {
             height: 100vh;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             display: flex;
             flex-direction: column;
@@ -117,20 +90,49 @@ if($conn !== false) {
             overflow: hidden;
         }
 
-        .hero::before {
+        .hero-slider {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .hero-slide {
+            height: 100vh;
+            background-size: cover;
+            background-position: center;
+            position: relative;
+        }
+
+        .hero-slide::before {
             content: '';
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.3);
+            background: rgba(0,0,0,0.5);
         }
+
+        /* Melaka flood images - using placeholder images for demo */
+        .slide-1 {
+            background-image: url('https://3.bp.blogspot.com/-0vMqWZs5IOM/V0WxfZ6tpuI/AAAAAAAAAGE/4VNMQ-gQi2Q8_doXrQ9SF1QYnEgxLZ4lgCLcB/s1600/doa-anti-banjir.jpg');
+        }
+
+      .slide-2 {
+            background-image: url('https://www.kosmo.com.my/wp-content/uploads/2023/02/GEMPA1.jpg');
+        }
+
+
+
+    
 
         .hero-content {
             position: relative;
             z-index: 2;
-            max-width: 800px;
+            max-width: 900px;
             padding: 0 20px;
         }
 
@@ -138,44 +140,82 @@ if($conn !== false) {
             font-size: 3.5rem;
             font-weight: bold;
             margin-bottom: 10px;
-            text-shadow: 2px 2px 5px rgba(0,0,0,0.4);
+            text-shadow: 2px 2px 5px rgba(0,0,0,0.7);
         }
 
         .hero h2 {
-            font-size: 2rem;
-            margin-bottom: 30px;
+            font-size: 2.2rem;
+            margin-bottom: 20px;
             font-weight: 600;
-            text-shadow: 2px 2px 5px rgba(0,0,0,0.4);
+            text-shadow: 2px 2px 5px rgba(0,0,0,0.7);
+            color: #ffcc00;
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            margin-bottom: 30px;
+            opacity: 0.9;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
+            max-width: 700px;
+            line-height: 1.6;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 20px;
         }
 
         .hero .report-btn {
-            margin-top: 20px;
             padding: 15px 40px;
-            background: white;
-            color: #333;
+            background: #ff6b6b;
+            color: white;
+            font-size: 1.2rem;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            border: none;
+            cursor: pointer;
+        }
+
+        .hero .report-btn:hover {
+            background: #ff5252;
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+        }
+
+        .hero .info-btn {
+            padding: 15px 40px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
             font-size: 1.2rem;
             border-radius: 50px;
             text-decoration: none;
             font-weight: bold;
             transition: all 0.3s;
             box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            border: 2px solid white;
         }
 
-        .hero .report-btn:hover {
-            background: #f8f9fa;
+        .hero .info-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
             transform: translateY(-3px);
             box-shadow: 0 8px 20px rgba(0,0,0,0.3);
         }
 
-        /* LATEST NEWS SECTION */
-        .news-section {
-            padding: 80px 60px;
+        /* FEATURES SECTION */
+        .features-section {
+            padding: 100px 60px;
             background: #f8f9fa;
         }
 
         .section-title {
             text-align: center;
-            margin-bottom: 50px;
+            margin-bottom: 60px;
         }
 
         .section-title h2 {
@@ -187,122 +227,80 @@ if($conn !== false) {
         .section-title p {
             color: #666;
             font-size: 1.1rem;
-            max-width: 600px;
+            max-width: 700px;
             margin: 0 auto;
         }
 
-        .news-grid {
+        .features-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 30px;
             margin-top: 40px;
         }
 
-        .news-card {
+        .feature-card {
             background: white;
             border-radius: 15px;
-            overflow: hidden;
+            padding: 40px 30px;
+            text-align: center;
             box-shadow: 0 10px 30px rgba(0,0,0,0.08);
             transition: all 0.3s ease;
             height: 100%;
         }
 
-        .news-card:hover {
+        .feature-card:hover {
             transform: translateY(-10px);
             box-shadow: 0 15px 35px rgba(0,0,0,0.15);
         }
 
-        .news-img {
-            height: 200px;
-            width: 100%;
-            object-fit: cover;
-        }
-
-        .no-image {
-            height: 200px;
-            background: linear-gradient(45deg, #6a11cb 0%, #2575fc 100%);
+        .feature-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
+            margin: 0 auto 25px;
             color: white;
+            font-size: 2rem;
         }
 
-        .news-content {
-            padding: 25px;
-        }
-
-        .news-date {
-            font-size: 0.9rem;
-            color: #666;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-        }
-
-        .news-date i {
-            margin-right: 8px;
-            color: #007bff;
-        }
-
-        .news-title {
-            font-size: 1.3rem;
-            font-weight: 600;
+        .feature-card h3 {
+            font-size: 1.5rem;
             color: #333;
             margin-bottom: 15px;
-            line-height: 1.4;
         }
 
-        .news-desc {
+        .feature-card p {
             color: #666;
             line-height: 1.6;
-            margin-bottom: 20px;
-            display: -webkit-box;
-            
-            -webkit-box-orient: vertical;
-            overflow: hidden;
         }
 
-        .read-more {
-            color: #007bff;
-            text-decoration: none;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            transition: all 0.3s;
-        }
-
-        .read-more:hover {
-            color: #0056b3;
-            transform: translateX(5px);
-        }
-
-        .read-more i {
-            margin-left: 8px;
-            transition: transform 0.3s;
-        }
-
-        .read-more:hover i {
-            transform: translateX(5px);
-        }
-
-        .view-all-btn {
-            display: block;
-            width: 200px;
-            margin: 50px auto 0;
-            padding: 12px 30px;
-            background: #007bff;
+        /* QUICK STATS SECTION */
+        .stats-section {
+            padding: 80px 60px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
             color: white;
-            text-align: center;
-            border-radius: 50px;
-            text-decoration: none;
-            font-weight: 600;
-            transition: all 0.3s;
         }
 
-        .view-all-btn:hover {
-            background: #0056b3;
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0,123,255,0.3);
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 30px;
+            text-align: center;
+        }
+
+        .stat-item h3 {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #ffcc00;
+        }
+
+        .stat-item p {
+            font-size: 1.2rem;
+            opacity: 0.9;
         }
 
         /* FOOTER */
@@ -318,6 +316,7 @@ if($conn !== false) {
             justify-content: center;
             gap: 30px;
             margin-bottom: 20px;
+            flex-wrap: wrap;
         }
 
         .footer-links a {
@@ -333,9 +332,20 @@ if($conn !== false) {
         .copyright {
             color: #999;
             font-size: 0.9rem;
+            margin-top: 20px;
         }
 
         /* RESPONSIVE */
+        @media (max-width: 992px) {
+            .hero h1 {
+                font-size: 2.8rem;
+            }
+            
+            .hero h2 {
+                font-size: 1.8rem;
+            }
+        }
+
         @media (max-width: 768px) {
             .navbar {
                 padding: 15px 20px;
@@ -347,19 +357,53 @@ if($conn !== false) {
             }
             
             .hero h1 {
-                font-size: 2.5rem;
+                font-size: 2.2rem;
             }
             
             .hero h2 {
                 font-size: 1.5rem;
             }
             
-            .news-section {
-                padding: 50px 20px;
+            .hero p {
+                font-size: 1.1rem;
             }
             
-            .news-grid {
-                grid-template-columns: 1fr;
+            .features-section, .stats-section {
+                padding: 60px 20px;
+            }
+            
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .hero-buttons a {
+                width: 100%;
+                max-width: 300px;
+                text-align: center;
+            }
+            
+            .footer-links {
+                gap: 15px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .navbar {
+                flex-direction: column;
+                padding: 15px;
+            }
+            
+            .nav-left {
+                margin-bottom: 15px;
+            }
+            
+            .hero h1 {
+                font-size: 1.8rem;
+            }
+            
+            .hero h2 {
+                font-size: 1.3rem;
             }
         }
     </style>
@@ -372,6 +416,7 @@ if($conn !== false) {
             <a href="main_page.php">HOME</a>
             <a href="news.php">NEWS</a>
             <a href="#">MAP</a>
+            <a href="#">RESOURCES</a>
             <a href="#">CONTACT</a>
         </div>
 
@@ -381,75 +426,125 @@ if($conn !== false) {
         </div>
     </div>
 
-    <!-- HERO SECTION -->
+    <!-- HERO SECTION WITH SLIDER -->
     <div class="hero">
+        <!-- Image Slider -->
+        <div class="hero-slider" id="heroSlider">
+            <div class="hero-slide slide-1">
+                <!-- Background image set via CSS -->
+            </div>
+            <div class="hero-slide slide-2">
+                <!-- Background image set via CSS -->
+            </div>
+            <div class="hero-slide slide-3">
+                <!-- Background image set via CSS -->
+            </div>
+            <div class="hero-slide slide-4">
+                <!-- Background image set via CSS -->
+            </div>
+        </div>
+
         <div class="hero-content">
-            <h1>Welcome to</h1>
-            <h2>Disaster Management System</h2>
-            <p style="font-size: 1.2rem; margin-bottom: 30px; opacity: 0.9;">
-                Stay informed, stay prepared. Real-time disaster alerts and management.
+            <h1>Disaster Relief Resource</h1>
+            <h2>Management System (Negeri Melaka)</h2>
+            <p>
+                A centralized platform for coordinating disaster response, resource allocation, 
+                and emergency management in Melaka. Stay informed, stay prepared with real-time 
+                disaster alerts and comprehensive resource management.
             </p>
-            <a href="report_incident.php" class="report-btn">
-                <i class="fas fa-bullhorn me-2"></i>Report New Incident
-            </a>
+            
+            <div class="hero-buttons">
+                <a href="report_incident.php" class="report-btn">
+                    <i class="fas fa-bullhorn me-2"></i>Report Emergency
+                </a>
+               
+            </div>
         </div>
     </div>
 
-    <!-- LATEST NEWS SECTION -->
-    <div class="news-section">
+    <!-- FEATURES SECTION -->
+    <div class="features-section">
         <div class="section-title">
-            <h2>Latest News & Updates</h2>
-            <p>Stay updated with the latest disaster alerts, relief efforts, and community news</p>
+            <h2>System Features</h2>
+            <p>Comprehensive tools and features designed specifically for disaster management in Melaka</p>
         </div>
 
-        <?php if(!empty($latest_news)): ?>
-            <div class="news-grid">
-                <?php foreach($latest_news as $news): 
-                    $date = $news['CreatedAt'] instanceof DateTime 
-                        ? $news['CreatedAt']->format('M d, Y') 
-                        : date('M d, Y', strtotime($news['CreatedAt']));
-                ?>
-                <div class="news-card">
-                    <?php if(!empty($news['ImageURL'])): ?>
-                        <img src="<?php echo htmlspecialchars($news['ImageURL']); ?>" 
-                             alt="<?php echo htmlspecialchars($news['Title']); ?>" 
-                             class="news-img">
-                    <?php else: ?>
-                        <div class="no-image">
-                            <i class="fas fa-newspaper fa-3x"></i>
-                        </div>
-                    <?php endif; ?>
-                    
-                    <div class="news-content">
-                        <div class="news-date">
-                            <i class="far fa-calendar-alt"></i> <?php echo $date; ?>
-                        </div>
-                        <h3 class="news-title"><?php echo htmlspecialchars($news['Title']); ?></h3>
-                        <p class="news-desc">
-                            <?php 
-                            $desc = strip_tags($news['Description']);
-                            echo htmlspecialchars(substr($desc, 0, 150)) . '...';
-                            ?>
-                        </p>
-                        <a href="news_detail.php?id=<?php echo $news['NewsID']; ?>" class="read-more">
-                            Read More <i class="fas fa-arrow-right"></i>
-                        </a>
-                    </div>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-map-marked-alt"></i>
                 </div>
-                <?php endforeach; ?>
+                <h3>Real-Time Mapping</h3>
+                <p>Interactive maps showing disaster-affected areas, resource distribution points, and evacuation centers across Melaka.</p>
             </div>
-            
-            <a href="news.php" class="view-all-btn">
-                View All News <i class="fas fa-arrow-right ms-2"></i>
-            </a>
-            
-        <?php else: ?>
-            <div class="text-center py-5">
-                <i class="fas fa-newspaper fa-4x text-muted mb-4"></i>
-                <h3>No News Available</h3>
-                <p class="text-muted">Check back later for updates</p>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-bell"></i>
+                </div>
+                <h3>Emergency Alerts</h3>
+                <p>Instant notifications and warnings for floods, storms, and other emergencies in your area.</p>
             </div>
-        <?php endif; ?>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-boxes"></i>
+                </div>
+                <h3>Resource Management</h3>
+                <p>Track and allocate emergency supplies, equipment, and personnel efficiently during disaster response.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-users"></i>
+                </div>
+                <h3>Volunteer Coordination</h3>
+                <p>Register and coordinate volunteers for disaster relief operations throughout Melaka.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <h3>Analytics & Reporting</h3>
+                <p>Comprehensive data analysis and reporting tools for disaster preparedness and response assessment.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-phone-alt"></i>
+                </div>
+                <h3>Emergency Hotlines</h3>
+                <p>Direct access to emergency services, hospitals, and disaster management authorities in Melaka.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- QUICK STATS SECTION -->
+    <div class="stats-section">
+        <div class="section-title">
+            <h2>Melaka Disaster Response</h2>
+            <p>Current statistics and response data for Negeri Melaka</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-item">
+                <h3>24/7</h3>
+                <p>Emergency Monitoring</p>
+            </div>
+            <div class="stat-item">
+                <h3>15+</h3>
+                <p>Evacuation Centers</p>
+            </div>
+            <div class="stat-item">
+                <h3>500+</h3>
+                <p>Trained Volunteers</p>
+            </div>
+            <div class="stat-item">
+                <h3>10+</h3>
+                <p>Response Agencies</p>
+            </div>
+        </div>
     </div>
 
     <!-- FOOTER -->
@@ -457,42 +552,65 @@ if($conn !== false) {
         <div class="footer-links">
             <a href="main_page.php">Home</a>
             <a href="news.php">News</a>
-            <a href="#">About</a>
-            <a href="#">Contact</a>
+            <a href="#">About System</a>
+            <a href="#">Emergency Contacts</a>
+            <a href="#">Resources</a>
             <a href="#">Privacy Policy</a>
         </div>
         <div class="copyright">
-            &copy; <?php echo date('Y'); ?> Disaster Management System. All rights reserved.
+            &copy; <?php echo date('Y'); ?> Disaster Relief Resource Management System (Negeri Melaka).<br>
+            Developed in collaboration with Melaka State Disaster Management Committee.
         </div>
     </div>
 
+    <!-- jQuery and Slick Slider JS -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/slick-carousel@1.8.1/slick/slick.min.js"></script>
+    
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
-        // Smooth scroll for anchor links
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                const target = document.querySelector(this.getAttribute('href'));
-                if(target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth'
-                    });
+        // Initialize Slick Slider
+        $(document).ready(function(){
+            $('#heroSlider').slick({
+                dots: true,
+                infinite: true,
+                speed: 1000,
+                slidesToShow: 1,
+                slidesToScroll: 1,
+                autoplay: true,
+                autoplaySpeed: 5000,
+                fade: true,
+                cssEase: 'linear',
+                arrows: false,
+                pauseOnHover: false
+            });
+
+            // Navbar scroll effect
+            window.addEventListener('scroll', function() {
+                const navbar = document.querySelector('.navbar');
+                if (window.scrollY > 50) {
+                    navbar.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+                    navbar.style.padding = '15px 60px';
+                } else {
+                    navbar.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+                    navbar.style.padding = '20px 60px';
                 }
             });
-        });
 
-        // Navbar scroll effect
-        window.addEventListener('scroll', function() {
-            const navbar = document.querySelector('.navbar');
-            if (window.scrollY > 50) {
-                navbar.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-                navbar.style.padding = '15px 60px';
-            } else {
-                navbar.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
-                navbar.style.padding = '20px 60px';
-            }
+            // Smooth scroll for anchor links
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if(target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth'
+                        });
+                    }
+                });
+            });
         });
     </script>
 </body>
