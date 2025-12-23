@@ -1,5 +1,8 @@
 <?php
 session_start();
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 if(!isset($_SESSION['name']) || $_SESSION['role'] != "admin"){
     header("Location: login.php");
     exit();
@@ -7,46 +10,71 @@ if(!isset($_SESSION['name']) || $_SESSION['role'] != "admin"){
 
 require_once "connection.php";
 
-// Handle Approve/Reject/Delete Actions
-if(isset($_GET['action']) && isset($_GET['id'])){
-    $ngo_id = $_GET['id'];
-    $action = $_GET['action'];
-    
-    if($action == 'approve'){
-        $sql = "UPDATE NGO SET status = 'Approved' WHERE NGOID = ?";
-        $message = "NGO approved successfully!";
-    } elseif($action == 'reject'){
-        $sql = "UPDATE NGO SET status = 'Rejected' WHERE NGOID = ?";
-        $message = "NGO rejected.";
-    } elseif($action == 'delete'){
-        $sql = "DELETE FROM NGO WHERE NGOID = ?";
-        $message = "NGO deleted.";
+/* =========================
+   DELETE / APPROVE / REJECT ACTIONS
+========================= */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['action'], $_POST['id'])) {
+        $ngo_id = intval($_POST['id']);
+        $action = $_POST['action'];
+
+        if ($action === 'approve') {
+            $sql = "UPDATE NGO SET Status = 'Approved' WHERE NGOID = ?";
+            $stmt = sqlsrv_query($conn, $sql, [$ngo_id]);
+
+            if ($stmt) {
+                $_SESSION['success'] = "NGO approved successfully.";
+            } else {
+                $_SESSION['error'] = "Failed to approve NGO.";
+            }
+
+        } elseif ($action === 'reject') {
+            $sql = "UPDATE NGO SET Status = 'Rejected' WHERE NGOID = ?";
+            $stmt = sqlsrv_query($conn, $sql, [$ngo_id]);
+
+            if ($stmt) {
+                $_SESSION['success'] = "NGO rejected successfully.";
+            } else {
+                $_SESSION['error'] = "Failed to reject NGO.";
+            }
+
+        } elseif ($action === 'delete') {
+            // DELETE CHILD FIRST (WAJIB - ini yang berkesan!)
+            sqlsrv_query($conn, "DELETE FROM Volunteer WHERE AssignedNGO = ?", [$ngo_id]);
+
+            // DELETE NGO
+            $sql = "DELETE FROM NGO WHERE NGOID = ?";
+            $stmt = sqlsrv_query($conn, $sql, [$ngo_id]);
+
+            if ($stmt) {
+                $_SESSION['success'] = "NGO deleted permanently.";
+            } else {
+                // Show detailed error
+                $errors = sqlsrv_errors();
+                error_log("DELETE Error: " . print_r($errors, true));
+                $_SESSION['error'] = "Failed to delete NGO. Please try again.";
+            }
+        }
+
+        header("Location: admin_manage_ngo.php");
+        exit;
     }
-    
-    $params = array($ngo_id);
-    $stmt = sqlsrv_query($conn, $sql, $params);
-    
-    if($stmt){
-        $_SESSION['success'] = $message;
-    } else {
-        $_SESSION['error'] = "Failed to update NGO.";
-    }
-    
-    header("Location: admin_manage_ngo.php");
-    exit();
 }
 
-// Fetch NGOs with Pending status
-$sql = "SELECT * FROM NGO WHERE status = 'Pending' ORDER BY CreatedAt DESC";
-$stmt = sqlsrv_query($conn, $sql);
-if($stmt === false) die(print_r(sqlsrv_errors(), true));
+/* =========================
+   FETCH NGO LISTS
+========================= */
+// Fetch Pending NGOs
+$pending_sql = "SELECT * FROM NGO WHERE Status = 'Pending' ORDER BY CreatedAt DESC";
+$pending_stmt = sqlsrv_query($conn, $pending_sql);
+if($pending_stmt === false) die(print_r(sqlsrv_errors(), true));
 
 $pending_ngos = [];
-while($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)){
+while($row = sqlsrv_fetch_array($pending_stmt, SQLSRV_FETCH_ASSOC)){
     $pending_ngos[] = $row;
 }
 
-// Fetch ALL NGOs for the table view
+// Fetch ALL NGOs
 $all_sql = "SELECT * FROM NGO ORDER BY CreatedAt DESC";
 $all_stmt = sqlsrv_query($conn, $all_sql);
 if($all_stmt === false) die(print_r(sqlsrv_errors(), true));
@@ -58,9 +86,9 @@ while($row = sqlsrv_fetch_array($all_stmt, SQLSRV_FETCH_ASSOC)){
 
 // Count stats
 $statsSql = "SELECT 
-    SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending,
-    SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) as approved,
-    SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as rejected,
+    SUM(CASE WHEN Status = 'Pending' THEN 1 ELSE 0 END) as pending,
+    SUM(CASE WHEN Status = 'Approved' THEN 1 ELSE 0 END) as approved,
+    SUM(CASE WHEN Status = 'Rejected' THEN 1 ELSE 0 END) as rejected,
     COUNT(*) as total
     FROM NGO";
 $statsStmt = sqlsrv_query($conn, $statsSql);
@@ -489,6 +517,23 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
             margin-left: 0;
         }
 
+        /* Mobile Toggle */
+        .mobile-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 10px;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+
+        .mobile-toggle:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
         /* Page Header */
         .page-header {
             background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
@@ -809,23 +854,6 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
         .empty-state p {
             color: #95a5a6;
             font-size: 14px;
-        }
-
-        /* Mobile Toggle */
-        .mobile-toggle {
-            display: none;
-            background: none;
-            border: none;
-            color: white;
-            font-size: 20px;
-            cursor: pointer;
-            padding: 10px;
-            border-radius: 5px;
-            transition: background 0.3s ease;
-        }
-
-        .mobile-toggle:hover {
-            background: rgba(255, 255, 255, 0.1);
         }
 
         /* Toast Notification */
@@ -1315,14 +1343,32 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
                         </div>
                         
                         <div class="action-buttons">
-                            <a href="admin_manage_ngo.php?action=approve&id=<?php echo $ngo['NGOID']; ?>" 
-                               class="btn-action btn-approve">
-                                <i class="fas fa-check"></i> Approve
-                            </a>
-                            <a href="admin_manage_ngo.php?action=reject&id=<?php echo $ngo['NGOID']; ?>" 
-                               class="btn-action btn-reject">
-                                <i class="fas fa-times"></i> Reject
-                            </a>
+                            <!-- APPROVE FORM -->
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                <input type="hidden" name="action" value="approve">
+                                <button type="button" class="btn-action btn-approve" onclick="confirmAction(this, 'approve', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                    <i class="fas fa-check"></i> Approve
+                                </button>
+                            </form>
+                            
+                            <!-- REJECT FORM -->
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                <input type="hidden" name="action" value="reject">
+                                <button type="button" class="btn-action btn-reject" onclick="confirmAction(this, 'reject', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                    <i class="fas fa-times"></i> Reject
+                                </button>
+                            </form>
+                            
+                            <!-- DELETE FORM -->
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                <input type="hidden" name="action" value="delete">
+                                <button type="button" class="btn-action btn-delete" onclick="confirmDelete(this, '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
+                            </form>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -1392,19 +1438,19 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
                                 <td>
                                     <?php 
                                     $badgeClass = '';
-                                    if($ngo['status'] == 'Pending') $badgeClass = 'badge-pending';
-                                    if($ngo['status'] == 'Approved') $badgeClass = 'badge-approved';
-                                    if($ngo['status'] == 'Rejected') $badgeClass = 'badge-rejected';
+                                    if($ngo['Status'] == 'Pending') $badgeClass = 'badge-pending';
+                                    if($ngo['Status'] == 'Approved') $badgeClass = 'badge-approved';
+                                    if($ngo['Status'] == 'Rejected') $badgeClass = 'badge-rejected';
                                     ?>
                                     <span class="badge <?php echo $badgeClass; ?>">
-                                        <?php if($ngo['status'] == 'Pending'): ?>
+                                        <?php if($ngo['Status'] == 'Pending'): ?>
                                             <i class="fas fa-clock me-1"></i>
-                                        <?php elseif($ngo['status'] == 'Approved'): ?>
+                                        <?php elseif($ngo['Status'] == 'Approved'): ?>
                                             <i class="fas fa-check me-1"></i>
-                                        <?php elseif($ngo['status'] == 'Rejected'): ?>
+                                        <?php elseif($ngo['Status'] == 'Rejected'): ?>
                                             <i class="fas fa-times me-1"></i>
                                         <?php endif; ?>
-                                        <?php echo htmlspecialchars($ngo['status']); ?>
+                                        <?php echo htmlspecialchars($ngo['Status']); ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1419,32 +1465,53 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
                                     </div>
                                 </td>
                                 <td>
-                                    <div class="action-buttons" style="border: none; padding: 0; margin: 0;">
-                                        <?php if($ngo['status'] == 'Pending'): ?>
-                                            <a href="admin_manage_ngo.php?action=approve&id=<?php echo $ngo['NGOID']; ?>" 
-                                               class="btn-action btn-approve" style="padding: 5px 10px; font-size: 12px;">
-                                                <i class="fas fa-check"></i> Approve
-                                            </a>
-                                            <a href="admin_manage_ngo.php?action=reject&id=<?php echo $ngo['NGOID']; ?>" 
-                                               class="btn-action btn-reject" style="padding: 5px 10px; font-size: 12px;">
-                                                <i class="fas fa-times"></i> Reject
-                                            </a>
-                                        <?php elseif($ngo['status'] == 'Approved'): ?>
-                                            <a href="admin_manage_ngo.php?action=reject&id=<?php echo $ngo['NGOID']; ?>" 
-                                               class="btn-action btn-reject" style="padding: 5px 10px; font-size: 12px;">
-                                                <i class="fas fa-times"></i> Reject
-                                            </a>
-                                        <?php elseif($ngo['status'] == 'Rejected'): ?>
-                                            <a href="admin_manage_ngo.php?action=approve&id=<?php echo $ngo['NGOID']; ?>" 
-                                               class="btn-action btn-approve" style="padding: 5px 10px; font-size: 12px;">
-                                                <i class="fas fa-check"></i> Approve
-                                            </a>
+                                    <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+                                        <?php if($ngo['Status'] == 'Pending'): ?>
+                                            <!-- APPROVE -->
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                                <input type="hidden" name="action" value="approve">
+                                                <button type="button" class="btn-action btn-approve" style="padding: 5px 10px; font-size: 12px;" onclick="confirmAction(this, 'approve', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                                    <i class="fas fa-check"></i> Approve
+                                                </button>
+                                            </form>
+                                            
+                                            <!-- REJECT -->
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                                <input type="hidden" name="action" value="reject">
+                                                <button type="button" class="btn-action btn-reject" style="padding: 5px 10px; font-size: 12px;" onclick="confirmAction(this, 'reject', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                                    <i class="fas fa-times"></i> Reject
+                                                </button>
+                                            </form>
+                                        <?php elseif($ngo['Status'] == 'Approved'): ?>
+                                            <!-- REJECT (from Approved) -->
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                                <input type="hidden" name="action" value="reject">
+                                                <button type="button" class="btn-action btn-reject" style="padding: 5px 10px; font-size: 12px;" onclick="confirmAction(this, 'reject', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                                    <i class="fas fa-times"></i> Reject
+                                                </button>
+                                            </form>
+                                        <?php elseif($ngo['Status'] == 'Rejected'): ?>
+                                            <!-- APPROVE (from Rejected) -->
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                                <input type="hidden" name="action" value="approve">
+                                                <button type="button" class="btn-action btn-approve" style="padding: 5px 10px; font-size: 12px;" onclick="confirmAction(this, 'approve', '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                                    <i class="fas fa-check"></i> Approve
+                                                </button>
+                                            </form>
                                         <?php endif; ?>
                                         
-                                        <a href="admin_manage_ngo.php?action=delete&id=<?php echo $ngo['NGOID']; ?>" 
-                                           class="btn-action btn-delete" style="padding: 5px 10px; font-size: 12px;">
-                                            <i class="fas fa-trash"></i> Delete
-                                        </a>
+                                        <!-- DELETE (always shown) -->
+                                        <form method="post" style="display: inline;">
+                                            <input type="hidden" name="id" value="<?php echo $ngo['NGOID']; ?>">
+                                            <input type="hidden" name="action" value="delete">
+                                            <button type="button" class="btn-action btn-delete" style="padding: 5px 10px; font-size: 12px;" onclick="confirmDelete(this, '<?php echo htmlspecialchars(addslashes($ngo['NGOName'])); ?>')">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
+                                        </form>
                                     </div>
                                 </td>
                             </tr>
@@ -1507,91 +1574,81 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
         window.addEventListener('load', checkScreenSize);
         window.addEventListener('resize', checkScreenSize);
 
-        // User profile dropdown (simplified)
-        document.getElementById('userProfileBtn').addEventListener('click', function() {
-            window.location.href = 'admin_profile.php';
-        });
-
-        // Notifications dropdown (simplified)
-        document.getElementById('notificationsBtn').addEventListener('click', function() {
-            window.location.href = 'admin_manage_ngo.php#pending';
-        });
-
-        // Action confirmation with SweetAlert
-        document.querySelectorAll('.btn-action').forEach(button => {
-            button.addEventListener('click', function(e) {
-                e.preventDefault();
-                
-                const action = this.classList.contains('btn-approve') ? 'approve' : 
-                              this.classList.contains('btn-reject') ? 'reject' : 'delete';
-                const url = this.getAttribute('href');
-                const ngoName = this.closest('.ngo-card') ? 
-                    this.closest('.ngo-card').querySelector('h5').textContent.trim() :
-                    this.closest('tr').querySelector('td:nth-child(2) .fw-semibold').textContent.trim();
-                
-                let title, text, icon, confirmButtonText, confirmButtonColor;
-                
-                if(action === 'approve') {
-                    title = 'Approve NGO?';
-                    text = `Are you sure you want to approve "${ngoName}"?`;
-                    icon = 'warning';
-                    confirmButtonText = '<i class="fas fa-check me-2"></i>Approve';
-                    confirmButtonColor = '#27ae60';
-                } else if(action === 'reject') {
-                    title = 'Reject NGO?';
-                    text = `Are you sure you want to reject "${ngoName}"?`;
-                    icon = 'error';
-                    confirmButtonText = '<i class="fas fa-times me-2"></i>Reject';
-                    confirmButtonColor = '#e74c3c';
-                } else {
-                    title = 'Delete NGO?';
-                    text = `⚠️ Are you sure you want to permanently delete "${ngoName}"?<br><br><strong>This action cannot be undone!</strong>`;
-                    icon = 'warning';
-                    confirmButtonText = '<i class="fas fa-trash me-2"></i>Delete';
-                    confirmButtonColor = '#d33';
+        // Function for Approve/Reject confirmation
+        function confirmAction(button, action, ngoName) {
+            const form = button.closest('form');
+            const actionText = action === 'approve' ? 'Approve' : 'Reject';
+            const actionColor = action === 'approve' ? '#27ae60' : '#e74c3c';
+            const actionIcon = action === 'approve' ? 'success' : 'warning';
+            
+            Swal.fire({
+                title: `${actionText} NGO?`,
+                html: `Are you sure you want to ${action.toLowerCase()} <strong>"${ngoName}"</strong>?`,
+                icon: actionIcon,
+                showCancelButton: true,
+                confirmButtonColor: actionColor,
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: `<i class="fas fa-${action === 'approve' ? 'check' : 'times'} me-2"></i>${actionText}`,
+                cancelButtonText: '<i class="fas fa-times me-2"></i>Cancel',
+                reverseButtons: true,
+                width: '500px',
+                backdrop: true,
+                allowOutsideClick: false
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    // Show loading
+                    Swal.fire({
+                        title: 'Processing...',
+                        text: 'Please wait',
+                        allowOutsideClick: false,
+                        didOpen: () => {
+                            Swal.showLoading();
+                        }
+                    });
+                    
+                    // Submit the form
+                    form.submit();
                 }
-                
-                Swal.fire({
-                    title: title,
-                    html: text,
-                    icon: icon,
-                    showCancelButton: true,
-                    confirmButtonColor: confirmButtonColor,
-                    cancelButtonColor: '#7f8c8d',
-                    confirmButtonText: confirmButtonText,
-                    cancelButtonText: '<i class="fas fa-times me-2"></i>Cancel',
-                    width: '500px',
-                    reverseButtons: true,
-                    customClass: {
-                        popup: 'rounded-4',
-                        confirmButton: 'btn-lg',
-                        cancelButton: 'btn-lg'
-                    },
-                    buttonsStyling: false,
-                    showClass: {
-                        popup: 'animate__animated animate__fadeInDown'
-                    },
-                    hideClass: {
-                        popup: 'animate__animated animate__fadeOutUp'
-                    }
-                }).then((result) => {
-                    if (result.isConfirmed) {
-                        // Show loading
-                        Swal.fire({
-                            title: 'Processing...',
-                            text: 'Please wait',
-                            allowOutsideClick: false,
-                            didOpen: () => {
-                                Swal.showLoading();
-                            }
-                        });
-                        
-                        // Redirect to action URL
-                        window.location.href = url;
-                    }
-                });
             });
-        });
+        }
+
+        // Function for Delete confirmation
+        function confirmDelete(button, ngoName) {
+            const form = button.closest('form');
+            
+            Swal.fire({
+                title: 'Delete NGO?',
+                html: `⚠️ <strong>WARNING: This action is permanent!</strong><br><br>
+                       Are you sure you want to delete <strong>"${ngoName}"</strong>?<br><br>
+                       <small class="text-muted">This action cannot be undone.</small>`,
+                icon: 'error',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: '<i class="fas fa-trash me-2"></i>Delete Permanently',
+                cancelButtonText: '<i class="fas fa-times me-2"></i>Cancel',
+                reverseButtons: true,
+                width: '500px',
+                backdrop: true,
+                allowOutsideClick: false
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    // Show loading
+                    Swal.fire({
+                        title: 'Deleting...',
+                        html: `Deleting NGO: <strong>"${ngoName}"</strong><br>
+                               <small>This may take a moment</small>`,
+                        allowOutsideClick: false,
+                        didOpen: () => {
+                            Swal.showLoading();
+                        }
+                    });
+                    
+                    // Submit the form
+                    form.submit();
+                }
+            });
+        }
 
         // Search functionality
         document.getElementById('searchInput').addEventListener('input', function(e) {

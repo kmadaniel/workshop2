@@ -559,6 +559,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         
         <button type="submit">Login</button>
         
+        <div class="forgot-link" style="text-align: center; margin-top: 15px;">
+    <a href="forgot_password.php" style="color: #667eea; text-decoration: none; font-size: 14px;">
+        <i class="fas fa-key" style="margin-right: 5px;"></i> Forgot Password?
+    </a>
+        </div>
+
         <div class="register-link">
             Don't have an account? 
             <a href="register.php">Register here</a>
