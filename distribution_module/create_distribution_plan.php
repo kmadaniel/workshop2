@@ -55,7 +55,7 @@ if (!empty($schema_errors)) {
     $error .= "-- Add quantity_reserved to resource table\n";
     $error .= "ALTER TABLE resource ADD COLUMN quantity_reserved INT DEFAULT 0;\n\n";
     $error .= "-- Add status column to distribution if missing\n";
-    $error .= "ALTER TABLE distribution ADD COLUMN status VARCHAR(50) DEFAULT 'Planned';\n\n";
+    $error .= "ALTER TABLE distribution ADD COLUMN status VARCHAR(50) DEFAULT 'Planning';\n\n";
     $error .= "-- Add comments column to distribution if missing\n";
     $error .= "ALTER TABLE distribution ADD COLUMN comments TEXT NULL;\n";
     $error .= "</pre>";
@@ -306,7 +306,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
                 INSERT INTO distribution (
                     distribution_id, disaster_id, date, 
                     status, comments, quantity_sent
-                ) VALUES (?, ?, ?, 'Planned', ?, 0)
+                ) VALUES (?, ?, ?, 'Planning', ?, 0)
             ";
             
             // Prepare comments with all plan details
@@ -415,8 +415,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create Distribution Plan</title>
     <link rel="stylesheet" href="../css/style.css">
-    <link rel="stylesheet" href="../css/header.css?v=<?php echo time(); ?>">
-    <style>
+    <link rel="stylesheet" href="/WORKSHOP2/css/header.css">
+     <style>
         .need-card {
             border: 1px solid #e0e0e0;
             border-radius: 8px;
@@ -504,6 +504,146 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
             padding: 15px;
             margin: 15px 0;
         }
+        /* Action Cards */
+        .action-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 2px solid #e0e6ed;
+            display: block;
+            color: #2c3e50;
+            height: 100%;
+        }
+        .action-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            border-color: #3498db;
+        }
+        .action-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            color: white;
+            font-size: 20px;
+        }
+        .action-card h4 {
+            color: #2c3e50;
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .action-card p {
+            color: #7f8c8d;
+            font-size: 0.85rem;
+            margin: 0;
+        }
+        .action-card:hover h4 {
+            color: #3498db;
+        }
+        /* Top Action Buttons - Horizontal Layout */
+        .top-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .top-action-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 2px solid #e0e6ed;
+            display: block;
+            color: #2c3e50;
+            height: 100%;
+        }
+        .top-action-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-color: #3498db;
+        }
+        .top-action-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px;
+            color: white;
+            font-size: 18px;
+        }
+        .top-action-card h5 {
+            color: #2c3e50;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        .top-action-card:hover h5 {
+            color: #3498db;
+        }
+        /* Stats Cards */
+        .stat-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            border: 2px solid #e0e6ed;
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover {
+            border-color: #3498db;
+            transform: translateY(-3px);
+        }
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 0.85rem;
+            margin-bottom: 5px;
+        }
+        .stat-number {
+            color: #2c3e50;
+            font-size: 1.8rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stat-desc {
+            color: #95a5a6;
+            font-size: 0.8rem;
+        }
+        /* Back to Main Button */
+        .back-to-main {
+            display: inline-block;
+            margin-bottom: 20px;
+            text-decoration: none;
+        }
+        .back-to-main:hover {
+            text-decoration: underline;
+        }
+        /* Post-creation Action Buttons */
+        .post-creation-actions {
+            background: #e8f6f3;
+            border: 2px solid #27ae60;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .post-creation-actions h4 {
+            color: #27ae60;
+            margin-bottom: 15px;
+        }
+        .post-creation-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
     </style>
 </head>
 <body>
@@ -522,6 +662,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
         <?php if ($error): ?>
             <div class="alert alert-danger"><?php echo $error; ?></div>
         <?php endif; ?>
+
+        <!-- ✨ TOP ACTION BUTTONS -->
+        <div class="top-actions-grid">
+            
+            <!-- Back to Dashboard -->
+            <a href="distribution_main.php" class="top-action-card" style="text-decoration: none;">
+                <div class="top-action-icon" style="background: linear-gradient(135deg, #95a5a6, #7f8c8d);">
+                    <i class="fas fa-home"></i>
+                </div>
+                <h5>Dashboard</h5>
+            </a>
+        </div>
 
         <!-- Schema Status -->
         <?php if (!empty($schema_errors)): ?>

@@ -10,13 +10,57 @@ $disasters = [];
 $needs = [];
 $statistics = [];
 
-/* ----------------------------------------
-   NAVIGATION - Add these as per design
----------------------------------------- */
-// You can add navigation variables if needed
+// API Configuration
+$NEEDS_API_URL = 'http://192.168.195.116:3000/ikmal.php';
+$DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 
 /* ----------------------------------------
-   BULK ACTIONS (Approve/Reject Multiple) - AS PER DESIGN
+   FETCH DATA FROM API
+---------------------------------------- */
+function fetchDataFromAPI($url) {
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    
+    if (curl_errno($ch)) {
+        $error = curl_error($ch);
+        curl_close($ch);
+        return ['success' => false, 'error' => $error];
+    }
+    
+    curl_close($ch);
+    
+    if ($httpCode !== 200) {
+        return ['success' => false, 'error' => "HTTP Error: $httpCode"];
+    }
+    
+    $data = json_decode($response, true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return ['success' => false, 'error' => 'Invalid JSON response: ' . json_last_error_msg()];
+    }
+    
+    return ['success' => true, 'data' => $data];
+}
+
+// Fetch needs API data
+$needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
+
+// Fetch disaster API data from your friend's system
+$disasterApiResult = fetchDataFromAPI($DISASTER_API_URL);
+
+if (!$disasterApiResult['success']) {
+    $error = "Disaster API Error: " . $disasterApiResult['error'];
+}
+
+/* ----------------------------------------
+   BULK ACTIONS (Approve/Reject Multiple)
 ---------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action'])) {
     $action = $_POST['bulk_action'];
@@ -58,13 +102,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action'])) {
 }
 
 /* ----------------------------------------
-   SINGLE NEED STATUS UPDATE - SIMPLIFIED PER DESIGN
+   SINGLE NEED STATUS UPDATE
 ---------------------------------------- */
 if (isset($_GET['update_status']) && isset($_GET['need_id']) && isset($_GET['new_status'])) {
     $need_id = intval($_GET['need_id']);
     $new_status = $_GET['new_status'];
     
-    $valid_statuses = ['Pending', 'Approved', 'Rejected']; // Removed 'fulfilled' as per design
+    $valid_statuses = ['Pending', 'Approved', 'Rejected'];
     
     if (in_array($new_status, $valid_statuses)) {
         try {
@@ -85,33 +129,87 @@ if (isset($_GET['update_status']) && isset($_GET['need_id']) && isset($_GET['new
 }
 
 /* ----------------------------------------
-   GET ALL DISASTERS - UPDATED FOR NEW SYSTEM
+   GET ALL DISASTERS FROM API
 ---------------------------------------- */
-try {
-    $disasters_query = "
-        SELECT d.disaster_id, d.Disaster_Name, d.Location, d.Disaster_Type,
-               COUNT(n.need_id) as total_needs,
-               SUM(CASE WHEN n.status = 'Pending' THEN 1 ELSE 0 END) as pending,
-               SUM(CASE WHEN n.status = 'Approved' THEN 1 ELSE 0 END) as approved,
-               SUM(CASE WHEN n.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
-        FROM disaster d
-        LEFT JOIN needs n ON d.disaster_id = n.disaster_id
-        GROUP BY d.disaster_id
-        ORDER BY d.disaster_id DESC
-    ";
+if ($disasterApiResult['success'] && !empty($disasterApiResult['data'])) {
+    $apiDisasters = $disasterApiResult['data'];
     
-    $result = $db->query($disasters_query);
-    $disasters = $result->fetch_all(MYSQLI_ASSOC);
-    $result->free();
-} catch (Exception $e) {
-    $error = "Error loading disasters: " . $e->getMessage();
+    // Process API disasters and merge with local needs data
+    foreach ($apiDisasters as $apiDisaster) {
+        // Map API fields to your system's field names
+        $disaster_id = $apiDisaster['disaster_id'] ?? null;
+        
+        if ($disaster_id) {
+            // Count needs from your local database for this disaster
+            try {
+                $count_query = "
+                    SELECT 
+                        COUNT(*) as total_needs,
+                        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) as approved,
+                        SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM needs
+                    WHERE disaster_id = ?
+                ";
+                
+                $stmt = $db->prepare($count_query);
+                $stmt->bind_param("i", $disaster_id);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $counts = $result->fetch_assoc();
+                $stmt->close();
+                
+                // Merge API data with local counts
+                $disasters[] = [
+                    'disaster_id' => $disaster_id,
+                    'Disaster_Name' => $apiDisaster['disaster_name'] ?? 'Unknown',
+                    'Location' => $apiDisaster['district'] ?? 'Unknown',
+                    'Disaster_Type' => $apiDisaster['severity'] ?? 'Unknown',
+                    'description' => $apiDisaster['description'] ?? '',
+                    'status' => $apiDisaster['status'] ?? 'Unknown',
+                    'start_date' => $apiDisaster['start_date'] ?? null,
+                    'end_date' => $apiDisaster['end_date'] ?? null,
+                    'affected_people' => $apiDisaster['affected_people'] ?? 0,
+                    'alert_message' => $apiDisaster['alert_message'] ?? '',
+                    'total_needs' => $counts['total_needs'] ?? 0,
+                    'pending' => $counts['pending'] ?? 0,
+                    'approved' => $counts['approved'] ?? 0,
+                    'rejected' => $counts['rejected'] ?? 0
+                ];
+            } catch (Exception $e) {
+                // Skip this disaster if there's an error
+                continue;
+            }
+        }
+    }
+} else {
+    // Fallback to local database if API fails
+    try {
+        $disasters_query = "
+            SELECT d.disaster_id, d.Disaster_Name, d.Location, d.Disaster_Type,
+                   COUNT(n.need_id) as total_needs,
+                   SUM(CASE WHEN n.status = 'Pending' THEN 1 ELSE 0 END) as pending,
+                   SUM(CASE WHEN n.status = 'Approved' THEN 1 ELSE 0 END) as approved,
+                   SUM(CASE WHEN n.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
+            FROM disaster d
+            LEFT JOIN needs n ON d.disaster_id = n.disaster_id
+            GROUP BY d.disaster_id
+            ORDER BY d.disaster_id DESC
+        ";
+        
+        $result = $db->query($disasters_query);
+        $disasters = $result->fetch_all(MYSQLI_ASSOC);
+        $result->free();
+    } catch (Exception $e) {
+        $error = "Error loading disasters: " . $e->getMessage();
+    }
 }
 
 /* ----------------------------------------
-   GET NEEDS FOR SELECTED DISASTER - FOCUS ON PENDING & APPROVED
+   GET NEEDS FOR SELECTED DISASTER
 ---------------------------------------- */
 $selected_disaster_id = $_GET['disaster_id'] ?? null;
-$selected_status_filter = $_GET['status_filter'] ?? 'pending'; // Default to pending as per workflow
+$selected_status_filter = $_GET['status_filter'] ?? 'Pending';
 
 if ($selected_disaster_id) {
     try {
@@ -120,16 +218,13 @@ if ($selected_disaster_id) {
                    n.quantity_needed, n.priority, n.status, n.distribution_id,
                    v.name as victim_name, v.address, v.age, v.family_size,
                    r.name as resource_name, r.type as resource_type, r.unit,
-                   r.quantity_available,
-                   d.Disaster_Name
+                   r.quantity_available
             FROM needs n
             JOIN victim v ON n.victim_id = v.victim_id
             JOIN resource r ON n.resource_id = r.resource_id
-            JOIN disaster d ON n.disaster_id = d.disaster_id
             WHERE n.disaster_id = ?
         ";
         
-        // Add status filter
         if ($selected_status_filter !== 'all') {
             $needs_query .= " AND n.status = ?";
         }
@@ -146,7 +241,6 @@ if ($selected_disaster_id) {
         
         $stmt = $db->prepare($needs_query);
         
-        // Bind parameters based on filters
         if ($selected_status_filter !== 'all') {
             $stmt->bind_param("is", $selected_disaster_id, $selected_status_filter);
         } else {
@@ -158,7 +252,7 @@ if ($selected_disaster_id) {
         $needs = $result->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
         
-        // Get statistics for this disaster - FOCUSED ON APPROVAL WORKFLOW
+        // Get statistics
         $stats_query = "
             SELECT 
                 COUNT(*) as total,
@@ -188,7 +282,10 @@ function getStatusBadgeClass($status) {
     $classes = [
         'Pending' => 'badge-pending',
         'Approved' => 'badge-approved',
-        'Rejected' => 'badge-rejected'
+        'Rejected' => 'badge-rejected',
+        'Active' => 'badge-approved',
+        'Under Control' => 'badge-pending',
+        'Ended' => 'badge-rejected'
     ];
     return $classes[$status] ?? 'badge-default';
 }
@@ -202,6 +299,15 @@ function getPriorityBadgeClass($priority) {
     ];
     return $classes[$priority] ?? 'badge-default';
 }
+
+function getSeverityBadgeClass($severity) {
+    $classes = [
+        'Low' => 'badge-low',
+        'Medium' => 'badge-medium',
+        'High' => 'badge-high'
+    ];
+    return $classes[$severity] ?? 'badge-default';
+}
 ?>
 
 <!DOCTYPE html>
@@ -212,8 +318,10 @@ function getPriorityBadgeClass($priority) {
     <title>Manage Needs - Disaster Relief Distribution System</title>
     <link rel="stylesheet" href="../css/needs.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
     <div class="container">
-        <!-- Page Header with Navigation - AS PER DESIGN -->
+        <!-- Page Header -->
         <div class="header">
             <div class="header-content">
                 <h1><i class="fas fa-clipboard-check"></i> Manage Needs</h1>
@@ -232,6 +340,53 @@ function getPriorityBadgeClass($priority) {
             </div>
         </div>
 
+        <!-- API Status Banner -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+            <?php if ($disasterApiResult['success']): ?>
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-check-circle" style="font-size: 1.5em;"></i>
+                    <div>
+                        <div style="font-weight: 600; font-size: 1.1em;">Disaster API Connected</div>
+                        <div style="font-size: 0.9em; opacity: 0.9;"><?php echo count($disasterApiResult['data']); ?> disasters loaded from external system</div>
+                    </div>
+                </div>
+            </div>
+            <?php else: ?>
+            <div style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); color: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-exclamation-triangle" style="font-size: 1.5em;"></i>
+                    <div>
+                        <div style="font-weight: 600; font-size: 1.1em;">Disaster API Error</div>
+                        <div style="font-size: 0.9em; opacity: 0.9;">Using local database fallback</div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <?php if ($needsApiResult['success']): ?>
+            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-check-circle" style="font-size: 1.5em;"></i>
+                    <div>
+                        <div style="font-weight: 600; font-size: 1.1em;">Needs API Connected</div>
+                        <div style="font-size: 0.9em; opacity: 0.9;">Additional data available</div>
+                    </div>
+                </div>
+            </div>
+            <?php else: ?>
+            <div style="background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%); color: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-info-circle" style="font-size: 1.5em;"></i>
+                    <div>
+                        <div style="font-weight: 600; font-size: 1.1em;">Needs API Unavailable</div>
+                        <div style="font-size: 0.9em; opacity: 0.9;">Using local data only</div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+        </div>
+
         <!-- Success/Error Messages -->
         <?php if ($success): ?>
             <div class="alert alert-success">
@@ -247,27 +402,35 @@ function getPriorityBadgeClass($priority) {
 
         <!-- Disaster Selection Section -->
         <div class="card-3d" style="margin-bottom: 25px;">
-            <h2><i class="fas fa-exclamation-triangle"></i> Select Disaster</h2>
-            <p>Choose a disaster to manage its needs:</p>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <div>
+                    <h2><i class="fas fa-exclamation-triangle"></i> Select Disaster</h2>
+                    <p>Choose a disaster to manage its needs (Data from external API)</p>
+                </div>
+                <?php if ($disasterApiResult['success']): ?>
+                <div style="background: #e8f5e9; color: #2e7d32; padding: 10px 20px; border-radius: 8px; font-weight: 600;">
+                    <i class="fas fa-database"></i> External API Active
+                </div>
+                <?php endif; ?>
+            </div>
             
             <?php if (empty($disasters)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📭</div>
                     <h3>No disasters found</h3>
-                    <p>Create a disaster first to manage needs.</p>
-                    <a href="create_disaster.php" class="btn btn-primary mt-3">
-                        <i class="fas fa-plus"></i> Create Disaster
-                    </a>
+                    <p>No disaster data available from the API or local database.</p>
                 </div>
             <?php else: ?>
-                <div class="table-container" style="max-height: 300px;">
+                <div class="table-container" style="max-height: 400px;">
                     <table class="needs-table">
                         <thead>
                             <tr>
                                 <th>ID</th>
                                 <th>Disaster Name</th>
-                                <th>Location</th>
-                                <th>Type</th>
+                                <th>District</th>
+                                <th>Severity</th>
+                                <th>Status</th>
+                                <th>Affected</th>
                                 <th>Total Needs</th>
                                 <th>Pending</th>
                                 <th>Approved</th>
@@ -279,9 +442,28 @@ function getPriorityBadgeClass($priority) {
                             <?php foreach ($disasters as $disaster): ?>
                             <tr>
                                 <td><strong>#<?php echo $disaster['disaster_id']; ?></strong></td>
-                                <td><?php echo htmlspecialchars($disaster['Disaster_Name']); ?></td>
+                                <td>
+                                    <div style="font-weight: 600;"><?php echo htmlspecialchars($disaster['Disaster_Name']); ?></div>
+                                    <?php if (!empty($disaster['description'])): ?>
+                                    <div style="font-size: 0.85em; color: #7f8c8d; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        <?php echo htmlspecialchars($disaster['description']); ?>
+                                    </div>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?php echo htmlspecialchars($disaster['Location']); ?></td>
-                                <td><?php echo htmlspecialchars($disaster['Disaster_Type']); ?></td>
+                                <td>
+                                    <span class="<?php echo getSeverityBadgeClass($disaster['Disaster_Type']); ?>">
+                                        <?php echo htmlspecialchars($disaster['Disaster_Type']); ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="<?php echo getStatusBadgeClass($disaster['status'] ?? 'Unknown'); ?>">
+                                        <?php echo htmlspecialchars($disaster['status'] ?? 'Unknown'); ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <strong><?php echo number_format($disaster['affected_people']); ?></strong> people
+                                </td>
                                 <td><strong><?php echo $disaster['total_needs']; ?></strong></td>
                                 <td>
                                     <?php if ($disaster['pending'] > 0): ?>
@@ -319,7 +501,54 @@ function getPriorityBadgeClass($priority) {
         </div>
 
         <?php if ($selected_disaster_id && !empty($statistics)): ?>
-        <!-- Statistics for Selected Disaster -->
+        <!-- Get selected disaster info for display -->
+        <?php 
+        $selected_disaster_info = null;
+        foreach ($disasters as $d) {
+            if ($d['disaster_id'] == $selected_disaster_id) {
+                $selected_disaster_info = $d;
+                break;
+            }
+        }
+        ?>
+        
+        <?php if ($selected_disaster_info): ?>
+        <!-- Selected Disaster Info Card -->
+        <div class="card-3d" style="margin-bottom: 20px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
+            <h3 style="color: white; margin-bottom: 15px;">
+                <i class="fas fa-info-circle"></i> Selected Disaster Information
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                <div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Disaster Name</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Disaster_Name']); ?></div>
+                </div>
+                <div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">District</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Location']); ?></div>
+                </div>
+                <div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Severity</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Disaster_Type']); ?></div>
+                </div>
+                <div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Status</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['status'] ?? 'Unknown'); ?></div>
+                </div>
+                <div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Affected People</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo number_format($selected_disaster_info['affected_people']); ?></div>
+                </div>
+            </div>
+            <?php if (!empty($selected_disaster_info['alert_message'])): ?>
+            <div style="margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.2); border-radius: 8px;">
+                <strong><i class="fas fa-bell"></i> Alert:</strong> <?php echo htmlspecialchars($selected_disaster_info['alert_message']); ?>
+            </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
+        <!-- Statistics -->
         <div class="stats-grid">
             <div class="stat-card total">
                 <div class="stat-label">Total Needs</div>
@@ -377,7 +606,7 @@ function getPriorityBadgeClass($priority) {
             </form>
         </div>
 
-        <!-- Bulk Actions Bar -->
+        <!-- Bulk Actions Form -->
         <form method="POST" id="bulk-action-form">
             <div class="bulk-actions-bar" id="bulk-actions-bar">
                 <div>
@@ -486,12 +715,12 @@ function getPriorityBadgeClass($priority) {
                                         <?php echo $need['quantity_available']; ?> <?php echo htmlspecialchars($need['unit']); ?>
                                     </td>
                                     <td>
-                                        <span class="badge-<?php echo strtolower($need['priority']); ?>">
+                                        <span class="<?php echo getPriorityBadgeClass($need['priority']); ?>">
                                             <?php echo $need['priority']; ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="badge-<?php echo strtolower($need['status']); ?>">
+                                        <span class="<?php echo getStatusBadgeClass($need['status']); ?>">
                                             <?php echo $need['status']; ?>
                                         </span>
                                     </td>
@@ -566,6 +795,28 @@ function getPriorityBadgeClass($priority) {
                 </a>
             </div>
         </div>
+
+        <!-- API Debug Section (Optional - Remove in production) -->
+        <?php if (isset($_GET['debug']) && $_GET['debug'] == '1'): ?>
+        <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 10px; border: 2px dashed #dee2e6;">
+            <h3><i class="fas fa-bug"></i> API Debug Information</h3>
+            
+            <div style="margin-top: 15px;">
+                <h4>Disaster API Response:</h4>
+                <pre style="background: white; padding: 15px; border-radius: 5px; overflow-x: auto; max-height: 300px;"><?php echo json_encode($disasterApiResult, JSON_PRETTY_PRINT); ?></pre>
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h4>Needs API Response:</h4>
+                <pre style="background: white; padding: 15px; border-radius: 5px; overflow-x: auto; max-height: 300px;"><?php echo json_encode($needsApiResult, JSON_PRETTY_PRINT); ?></pre>
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h4>Processed Disasters:</h4>
+                <pre style="background: white; padding: 15px; border-radius: 5px; overflow-x: auto; max-height: 300px;"><?php echo json_encode($disasters, JSON_PRETTY_PRINT); ?></pre>
+            </div>
+        </div>
+        <?php endif; ?>
     </div>
 
     <script>

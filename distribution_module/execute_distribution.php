@@ -1,4 +1,5 @@
 <?php
+session_start();
 require_once 'config.php';
 
 $database = new Database();
@@ -20,15 +21,17 @@ if (!$distribution_id) {
     exit;
 }
 
-// Check if volunteer is assigned to this distribution
+// First, check if volunteer is assigned to this distribution
 $check_assignment = "
     SELECT dv.*, v.name as volunteer_name, d.*, dis.Disaster_Name 
     FROM distribution_volunteer dv
     JOIN volunteer v ON dv.volunteer_id = v.volunteer_id
     JOIN distribution d ON dv.distribution_id = d.distribution_id
     JOIN disaster dis ON d.disaster_id = dis.disaster_id
-    WHERE dv.distribution_id = ? AND dv.volunteer_id = ?
-    AND dv.status IN ('Assigned', 'Confirmed')
+    WHERE dv.distribution_id = ? 
+    AND dv.volunteer_id = ?
+    AND dv.status IN ('Assigned', 'Active')
+    LIMIT 1
 ";
 
 $stmt = $db->prepare($check_assignment);
@@ -41,6 +44,275 @@ $stmt->close();
 if (!$assignment) {
     header("Location: volunteer_dashboard.php?error=not_assigned");
     exit;
+}
+
+/* ----------------------------------------
+   GET VICTIMS FOR THIS DISTRIBUTION
+   Since there's no victim_id in distribution_volunteer, 
+   show all victims with approved needs for this distribution
+---------------------------------------- */
+// Get all victims with approved needs for this distribution
+$victims_query = "
+    SELECT DISTINCT v.*, 
+           COUNT(n.need_id) as total_needs
+    FROM victim v
+    JOIN needs n ON v.victim_id = n.victim_id
+    WHERE n.distribution_id = ?
+    AND n.status IN ('Approved', 'Scheduled')
+    GROUP BY v.victim_id
+    ORDER BY v.name
+    LIMIT 10
+";
+
+$stmt = $db->prepare($victims_query);
+$stmt->bind_param("i", $distribution_id);
+$stmt->execute();
+$victims_result = $stmt->get_result();
+$all_victims = $victims_result->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+// If there's only one victim, auto-select them
+if (count($all_victims) === 1) {
+    $victim_data = $all_victims[0];
+    $victim_id = $victim_data['victim_id'];
+    
+    // Get detailed needs for this victim
+    $needs_query = "
+        SELECT n.*, r.name as resource_name, r.unit, r.type
+        FROM needs n
+        JOIN resource r ON n.resource_id = r.resource_id
+        WHERE n.victim_id = ? 
+        AND n.distribution_id = ?
+        AND n.status IN ('Approved', 'Scheduled')
+    ";
+    
+    $stmt = $db->prepare($needs_query);
+$stmt->bind_param("ii", $victim_id, $distribution_id);
+$stmt->execute();
+$needs_result = $stmt->get_result();
+$needs_data = $needs_result->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+}
+
+/* ----------------------------------------
+   HANDLE VICTIM SELECTION (FROM LIST)
+---------------------------------------- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['select_victim'])) {
+        // Victim selected from list
+        $victim_id = $_POST['victim_id'];
+        
+        try {
+            // Get victim details
+            $victim_query = "
+                SELECT v.*, 
+                       COUNT(n.need_id) as total_needs
+                FROM victim v
+                LEFT JOIN needs n ON v.victim_id = n.victim_id 
+                    AND n.distribution_id = ?
+                    AND n.status = 'Approved'
+                WHERE v.victim_id = ?
+                GROUP BY v.victim_id
+            ";
+            
+            $stmt = $db->prepare($victim_query);
+            $stmt->bind_param("ii", $distribution_id, $victim_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $victim_data = $result->fetch_assoc();
+            $stmt->close();
+            
+            if (!$victim_data) {
+                throw new Exception("Victim not found");
+            }
+            
+            // Get detailed needs for this victim
+            $needs_query = "
+                SELECT n.*, r.name as resource_name, r.unit, r.type, r.category
+                FROM needs n
+                JOIN resource r ON n.resource_id = r.resource_id
+                WHERE n.victim_id = ? 
+                AND n.distribution_id = ?
+                AND n.status = 'Approved'
+            ";
+            
+            $stmt = $db->prepare($needs_query);
+            $stmt->bind_param("ii", $victim_id, $distribution_id);
+            $stmt->execute();
+            $needs_result = $stmt->get_result();
+            $needs_data = $needs_result->fetch_all(MYSQLI_ASSOC);
+            $stmt->close();
+            
+            if (empty($needs_data)) {
+                throw new Exception("No approved needs found for this victim");
+            }
+            
+        } catch (Exception $e) {
+            $error = $e->getMessage();
+        }
+    }
+    
+    /* ----------------------------------------
+       HANDLE DISTRIBUTION EXECUTION
+    ---------------------------------------- */
+    elseif (isset($_POST['distribute_items'])) {
+        $victim_id = $_POST['victim_id'];
+        $distributed_items = $_POST['distributed_items'] ?? [];
+        $signature_data = $_POST['signature_data'] ?? '';
+        $remarks = $_POST['remarks'] ?? '';
+        
+        try {
+            if (empty($distributed_items)) {
+                throw new Exception("Please select at least one item to distribute");
+            }
+            
+            $db->begin_transaction();
+            
+            $total_distributed = 0;
+            foreach ($distributed_items as $need_id) {
+                // Update need status to Fulfilled
+                $update_need = "UPDATE needs SET status = 'Fulfilled' WHERE need_id = ?";
+                $stmt = $db->prepare($update_need);
+                $stmt->bind_param("i", $need_id);
+                $stmt->execute();
+                $stmt->close();
+                
+                // Get need details for inventory update
+                $need_query = "SELECT resource_id, quantity_needed FROM needs WHERE need_id = ?";
+                $stmt = $db->prepare($need_query);
+                $stmt->bind_param("i", $need_id);
+                $stmt->execute();
+                $need_result = $stmt->get_result();
+                $need = $need_result->fetch_assoc();
+                $stmt->close();
+                
+                if ($need) {
+                    // Update inventory (deduct from quantity_reserved)
+                    $update_inventory = "
+                        UPDATE resource 
+                        SET quantity_reserved = quantity_reserved - ?,
+                            quantity_available = quantity_available - ?
+                        WHERE resource_id = ?
+                    ";
+                    $stmt = $db->prepare($update_inventory);
+                    $stmt->bind_param("iii", $need['quantity_needed'], $need['quantity_needed'], $need['resource_id']);
+                    $stmt->execute();
+                    $stmt->close();
+                    
+                    $total_distributed += $need['quantity_needed'];
+                }
+                
+                // Create distribution_log table if not exists
+                $check_table = $db->query("SHOW TABLES LIKE 'distribution_log'");
+                if ($check_table->num_rows == 0) {
+                    $create_table = "
+                        CREATE TABLE distribution_log (
+                            log_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+                            distribution_id BIGINT UNSIGNED,
+                            volunteer_id BIGINT UNSIGNED,
+                            victim_id BIGINT UNSIGNED,
+                            need_id BIGINT UNSIGNED,
+                            quantity_distributed INT,
+                            distributed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            signature_url VARCHAR(500),
+                            photo_url VARCHAR(500),
+                            remarks TEXT,
+                            FOREIGN KEY (distribution_id) REFERENCES distribution(distribution_id),
+                            FOREIGN KEY (volunteer_id) REFERENCES volunteer(volunteer_id),
+                            FOREIGN KEY (victim_id) REFERENCES victim(victim_id),
+                            FOREIGN KEY (need_id) REFERENCES needs(need_id)
+                        )
+                    ";
+                    $db->query($create_table);
+                }
+                
+                // Record distribution log
+                $log_query = "
+                    INSERT INTO distribution_log 
+                    (distribution_id, volunteer_id, victim_id, need_id, quantity_distributed, distributed_at, remarks)
+                    VALUES (?, ?, ?, ?, ?, NOW(), ?)
+                ";
+                
+                $stmt = $db->prepare($log_query);
+                $stmt->bind_param("iiiiis", 
+                    $distribution_id, 
+                    $volunteer_id, 
+                    $victim_id,
+                    $need_id,
+                    $need['quantity_needed'],
+                    $remarks
+                );
+                $stmt->execute();
+                $log_id = $stmt->insert_id;
+                $stmt->close();
+                
+                // Handle signature (in real system, save as image file)
+                if (!empty($signature_data) && $log_id) {
+                    // Create signatures directory if not exists
+                    if (!file_exists('../signatures')) {
+                        mkdir('../signatures', 0777, true);
+                    }
+                    
+                    // Save signature as image
+                    $signature_data = str_replace('data:image/png;base64,', '', $signature_data);
+                    $signature_data = str_replace(' ', '+', $signature_data);
+                    $signature_filename = "signature_{$log_id}.png";
+                    $signature_path = "../signatures/{$signature_filename}";
+                    
+                    if (file_put_contents($signature_path, base64_decode($signature_data))) {
+                        $update_signature = "UPDATE distribution_log SET signature_url = ? WHERE log_id = ?";
+                        $stmt = $db->prepare($update_signature);
+                        $stmt->bind_param("si", $signature_filename, $log_id);
+                        $stmt->execute();
+                        $stmt->close();
+                    }
+                }
+            }
+            
+            // Send SMS to victim (simulation) - CORRECTED: Removed phone field
+            $victim_info = $db->query("SELECT name FROM victim WHERE victim_id = {$victim_id}")->fetch_assoc();
+            if ($victim_info) {
+                $sms_message = "Bantuan telah diterima. Terima kasih. - JKM Melaka";
+                // In real system, integrate with SMS gateway like Twilio
+                error_log("SMS to victim {$victim_info['name']}: {$sms_message}");
+                
+                // Simulate SMS sending
+                $sms_sent = true;
+            }
+            
+            // Update volunteer assignment status to Completed - REMOVED completed_at since column doesn't exist
+            $update_volunteer = "
+                UPDATE distribution_volunteer 
+                SET status = 'Completed'
+                WHERE distribution_id = ? 
+                AND volunteer_id = ?
+            ";
+            $stmt = $db->prepare($update_volunteer);
+            $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+            $stmt->execute();
+            $stmt->close();
+            
+            $db->commit();
+            
+            $success = "✅ Distribution recorded successfully!";
+            if (isset($sms_sent) && $sms_sent) {
+                $success .= "<br>📱 SMS sent to victim.";
+            }
+            $success .= "<br><br><strong>Distribution Summary:</strong>";
+            $success .= "<br>• Items Distributed: " . count($distributed_items);
+            $success .= "<br>• Total Quantity: {$total_distributed} units";
+            $success .= "<br>• Date: " . date('d/m/Y H:i:s');
+            $success .= "<br><br><strong>Your distribution task is now completed!</strong>";
+            
+            // Clear victim data
+            $victim_data = null;
+            $needs_data = [];
+            
+        } catch (Exception $e) {
+            $db->rollback();
+            $error = "Error: " . $e->getMessage();
+        }
+    }
 }
 
 /* ----------------------------------------
@@ -61,225 +333,6 @@ $stmt->execute();
 $stats_result = $stmt->get_result();
 $stats = $stats_result->fetch_assoc();
 $stmt->close();
-
-/* ----------------------------------------
-   HANDLE VICTIM SEARCH (IC SCAN/Search)
----------------------------------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['search_victim'])) {
-    $search_term = trim($_POST['search_term']);
-    
-    try {
-        if (empty($search_term)) {
-            throw new Exception("Please enter IC number or Victim ID");
-        }
-        
-        // Search victim by IC or ID
-        $victim_query = "
-            SELECT v.*, 
-                   COUNT(n.need_id) as total_needs,
-                   GROUP_CONCAT(CONCAT(r.name, ' (', n.quantity_needed, ' ', r.unit, ')') SEPARATOR ', ') as needs_summary
-            FROM victim v
-            LEFT JOIN needs n ON v.victim_id = n.victim_id AND n.distribution_id = ?
-            LEFT JOIN resource r ON n.resource_id = r.resource_id
-            WHERE (v.victim_id = ? OR v.victim_id LIKE ?)
-            AND n.status = 'Approved'
-            GROUP BY v.victim_id
-            LIMIT 1
-        ";
-        
-        $stmt = $db->prepare($victim_query);
-        $search_param = is_numeric($search_term) ? $search_term : 0;
-        $like_param = "%{$search_term}%";
-        $stmt->bind_param("iis", $distribution_id, $search_param, $like_param);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $victim_data = $result->fetch_assoc();
-        $stmt->close();
-        
-        if (!$victim_data) {
-            throw new Exception("Victim not found or no approved needs for this distribution");
-        }
-        
-        // Get detailed needs for this victim
-        $needs_query = "
-            SELECT n.*, r.name as resource_name, r.unit, r.type, r.category
-            FROM needs n
-            JOIN resource r ON n.resource_id = r.resource_id
-            WHERE n.victim_id = ? 
-            AND n.distribution_id = ?
-            AND n.status = 'Approved'
-        ";
-        
-        $stmt = $db->prepare($needs_query);
-        $stmt->bind_param("ii", $victim_data['victim_id'], $distribution_id);
-        $stmt->execute();
-        $needs_result = $stmt->get_result();
-        $needs_data = $needs_result->fetch_all(MYSQLI_ASSOC);
-        $stmt->close();
-        
-        if (empty($needs_data)) {
-            throw new Exception("No approved needs found for this victim");
-        }
-        
-    } catch (Exception $e) {
-        $error = $e->getMessage();
-    }
-}
-
-/* ----------------------------------------
-   HANDLE DISTRIBUTION EXECUTION
----------------------------------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) {
-    $victim_id = $_POST['victim_id'];
-    $distributed_items = $_POST['distributed_items'] ?? [];
-    $signature_data = $_POST['signature_data'] ?? '';
-    $remarks = $_POST['remarks'] ?? '';
-    
-    try {
-        if (empty($distributed_items)) {
-            throw new Exception("Please select at least one item to distribute");
-        }
-        
-        $db->begin_transaction();
-        
-        $total_distributed = 0;
-        foreach ($distributed_items as $need_id) {
-            // Update need status to Fulfilled
-            $update_need = "UPDATE needs SET status = 'Fulfilled', fulfilled_date = NOW() WHERE need_id = ?";
-            $stmt = $db->prepare($update_need);
-            $stmt->bind_param("i", $need_id);
-            $stmt->execute();
-            $stmt->close();
-            
-            // Get need details for inventory update
-            $need_query = "SELECT resource_id, quantity_needed FROM needs WHERE need_id = ?";
-            $stmt = $db->prepare($need_query);
-            $stmt->bind_param("i", $need_id);
-            $stmt->execute();
-            $need_result = $stmt->get_result();
-            $need = $need_result->fetch_assoc();
-            $stmt->close();
-            
-            if ($need) {
-                // Update inventory (deduct from quantity_reserved)
-                $update_inventory = "
-                    UPDATE resource 
-                    SET quantity_reserved = quantity_reserved - ?,
-                        quantity_available = quantity_available - ?
-                    WHERE resource_id = ?
-                ";
-                $stmt = $db->prepare($update_inventory);
-                $stmt->bind_param("iii", $need['quantity_needed'], $need['quantity_needed'], $need['resource_id']);
-                $stmt->execute();
-                $stmt->close();
-                
-                $total_distributed += $need['quantity_needed'];
-            }
-            
-            // Create distribution_log table if not exists
-            $check_table = $db->query("SHOW TABLES LIKE 'distribution_log'");
-            if ($check_table->num_rows == 0) {
-                $create_table = "
-                    CREATE TABLE distribution_log (
-                        log_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-                        distribution_id BIGINT UNSIGNED,
-                        volunteer_id BIGINT UNSIGNED,
-                        victim_id BIGINT UNSIGNED,
-                        need_id BIGINT UNSIGNED,
-                        quantity_distributed INT,
-                        distributed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        signature_url VARCHAR(500),
-                        photo_url VARCHAR(500),
-                        remarks TEXT,
-                        FOREIGN KEY (distribution_id) REFERENCES distribution(distribution_id),
-                        FOREIGN KEY (volunteer_id) REFERENCES volunteer(volunteer_id),
-                        FOREIGN KEY (victim_id) REFERENCES victim(victim_id),
-                        FOREIGN KEY (need_id) REFERENCES needs(need_id)
-                    )
-                ";
-                $db->query($create_table);
-            }
-            
-            // Record distribution log
-            $log_query = "
-                INSERT INTO distribution_log 
-                (distribution_id, volunteer_id, victim_id, need_id, quantity_distributed, distributed_at, remarks)
-                VALUES (?, ?, ?, ?, ?, NOW(), ?)
-            ";
-            
-            $stmt = $db->prepare($log_query);
-            $stmt->bind_param("iiiiis", 
-                $distribution_id, 
-                $volunteer_id, 
-                $victim_id,
-                $need_id,
-                $need['quantity_needed'],
-                $remarks
-            );
-            $stmt->execute();
-            $log_id = $stmt->insert_id;
-            $stmt->close();
-            
-            // Handle signature (in real system, save as image file)
-            if (!empty($signature_data) && $log_id) {
-                // Create signatures directory if not exists
-                if (!file_exists('../signatures')) {
-                    mkdir('../signatures', 0777, true);
-                }
-                
-                // Save signature as image
-                $signature_data = str_replace('data:image/png;base64,', '', $signature_data);
-                $signature_data = str_replace(' ', '+', $signature_data);
-                $signature_filename = "signature_{$log_id}.png";
-                $signature_path = "../signatures/{$signature_filename}";
-                
-                if (file_put_contents($signature_path, base64_decode($signature_data))) {
-                    $update_signature = "UPDATE distribution_log SET signature_url = ? WHERE log_id = ?";
-                    $stmt = $db->prepare($update_signature);
-                    $stmt->bind_param("si", $signature_filename, $log_id);
-                    $stmt->execute();
-                    $stmt->close();
-                }
-            }
-        }
-        
-        // Send SMS to victim (simulation)
-        $victim_info = $db->query("SELECT name, phone FROM victim WHERE victim_id = {$victim_id}")->fetch_assoc();
-        if ($victim_info && !empty($victim_info['phone'])) {
-            $sms_message = "Bantuan telah diterima. Terima kasih. - JKM Melaka";
-            // In real system, integrate with SMS gateway like Twilio
-            error_log("SMS to {$victim_info['phone']}: {$sms_message}");
-            
-            // Simulate SMS sending
-            $sms_sent = true;
-        }
-        
-        $db->commit();
-        
-        $success = "✅ Distribution recorded successfully!";
-        $success .= "<br>📱 SMS sent to victim.";
-        $success .= "<br><br><strong>Distribution Summary:</strong>";
-        $success .= "<br>• Items Distributed: " . count($distributed_items);
-        $success .= "<br>• Total Quantity: {$total_distributed} units";
-        $success .= "<br>• Date: " . date('d/m/Y H:i:s');
-        
-        // Clear search results for next victim
-        $victim_data = null;
-        $needs_data = [];
-        
-        // Refresh stats
-        $stmt = $db->prepare($stats_query);
-        $stmt->bind_param("i", $distribution_id);
-        $stmt->execute();
-        $stats_result = $stmt->get_result();
-        $stats = $stats_result->fetch_assoc();
-        $stmt->close();
-        
-    } catch (Exception $e) {
-        $db->rollback();
-        $error = "Error: " . $e->getMessage();
-    }
-}
 ?>
 
 <!DOCTYPE html>
@@ -359,6 +412,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             margin-bottom: 5px;
         }
         
+        /* Assignment Info */
+        .assignment-info {
+            background: #e8f5e9;
+            margin: 15px;
+            padding: 15px;
+            border-radius: 15px;
+            border-left: 5px solid #2ecc71;
+        }
+        
+        .assignment-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .assignment-details {
+            color: #666;
+            line-height: 1.5;
+        }
+        
         /* Stats Cards */
         .stats-container {
             display: grid;
@@ -418,54 +494,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             transition: width 0.5s ease;
         }
         
-        /* Scan Section */
-        .scan-section {
+        /* Show either Victims List OR Selected Victim */
+        <?php if (!$victim_data || empty($all_victims)): ?>
+        /* No Victims Message */
+        .no-victims {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            color: #856404;
+            margin: 15px;
+            padding: 40px 25px;
+            border-radius: 20px;
+            text-align: center;
+            border-left: 5px solid #ffc107;
+        }
+        
+        .no-victims-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+            color: #ffc107;
+        }
+        
+        <?php elseif (!$victim_data && !empty($all_victims)): ?>
+        /* Victims List Section */
+        .victims-section {
             background: white;
             margin: 15px;
-            padding: 25px 20px;
+            padding: 20px;
             border-radius: 20px;
             box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            text-align: center;
         }
         
-        .scan-icon {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #25d366, #128C7E);
-            border-radius: 50%;
+        .section-title {
+            font-size: 1.2rem;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-weight: 600;
             display: flex;
             align-items: center;
-            justify-content: center;
-            margin: 0 auto 20px;
-            color: white;
-            font-size: 2rem;
-            box-shadow: 0 5px 15px rgba(37, 211, 102, 0.3);
+            gap: 10px;
         }
         
-        .scan-input {
-            width: 100%;
-            padding: 18px 20px;
+        .victims-list {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        
+        .victim-select-card {
+            background: #f8fafc;
             border: 2px solid #e0e6ed;
             border-radius: 15px;
-            font-size: 1rem;
-            margin: 15px 0;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
             transition: all 0.3s;
         }
         
-        .scan-input:focus {
-            outline: none;
+        .victim-select-card:hover {
             border-color: #3498db;
-            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.1);
         }
         
-        .scan-button {
+        .victim-select-card.selected {
+            background: #e8f5e9;
+            border-color: #2ecc71;
+        }
+        
+        .victim-select-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 10px;
+        }
+        
+        .victim-select-name {
+            font-size: 1.1rem;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+        
+        .victim-select-id {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .victim-select-details {
+            color: #666;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        
+        .victim-select-details p {
+            margin-bottom: 5px;
+        }
+        
+        .victim-select-needs {
+            background: #17a2b8;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            display: inline-block;
+            margin-top: 8px;
+        }
+        
+        /* Select Button */
+        .select-button {
             width: 100%;
-            padding: 18px;
-            background: linear-gradient(135deg, #3498db, #2980b9);
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
             border: none;
             border-radius: 15px;
-            font-size: 1.1rem;
+            font-size: 1rem;
             font-weight: 600;
             display: flex;
             align-items: center;
@@ -475,11 +620,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             transition: all 0.3s;
         }
         
-        .scan-button:hover {
+        .select-button:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
         }
         
+        <?php else: ?>
         /* Victim Card */
         .victim-card {
             background: white;
@@ -733,6 +879,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             border-color: #3498db;
         }
         
+        /* Back Button */
+        .back-button {
+            width: 100%;
+            padding: 16px;
+            background: #95a5a6;
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-size: 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        
+        .back-button:hover {
+            background: #7f8c8d;
+            transform: translateY(-2px);
+        }
+        <?php endif; ?>
+        
         /* Success Message */
         .success-message {
             background: linear-gradient(135deg, #d4edda, #c3e6cb);
@@ -865,7 +1036,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             <div class="header-content">
                 <div class="header-left">
                     <h1>📦 Execute Distribution</h1>
-                    <p><?php echo htmlspecialchars($assignment['volunteer_name']); ?> • <?php echo htmlspecialchars($assignment['assignment_role']); ?></p>
+                    <p><?php echo htmlspecialchars($assignment['volunteer_name']); ?> • <?php echo htmlspecialchars($assignment['role'] ?? 'Volunteer'); ?></p>
                 </div>
                 <div class="header-right">
                     <div class="dist-id">DIST<?php echo str_pad($distribution_id, 6, '0', STR_PAD_LEFT); ?></div>
@@ -884,9 +1055,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
                 <div style="text-align: left; margin-bottom: 20px;">
                     <?php echo $success; ?>
                 </div>
-                <button onclick="location.reload()" class="btn-distribute" style="margin-top: 10px;">
-                    <i class="fas fa-user-plus"></i> Next Victim
-                </button>
+                <a href="volunteer_dashboard.php" class="btn-distribute" style="display: block; text-decoration: none; margin-top: 10px;">
+                    <i class="fas fa-home"></i> Back to Dashboard
+                </a>
             </div>
         <?php endif; ?>
         
@@ -895,6 +1066,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
                 <strong>Error:</strong> <?php echo htmlspecialchars($error); ?>
             </div>
         <?php endif; ?>
+
+        <!-- Assignment Info -->
+        <div class="assignment-info">
+            <div class="assignment-title">
+                <i class="fas fa-user-check" style="color: #2ecc71;"></i>
+                Your Assignment
+            </div>
+            <div class="assignment-details">
+                <?php if (!empty($all_victims)): ?>
+                    <strong>Task:</strong> Distribute aid to victims<br>
+                    <strong>Victims to serve:</strong> <?php echo count($all_victims); ?> victims<br>
+                    <strong>Status:</strong> 
+                    <span style="color: <?php echo $assignment['status'] === 'Completed' ? '#27ae60' : '#f39c12'; ?>; font-weight: 600;">
+                        <?php echo $assignment['status']; ?>
+                    </span>
+                <?php else: ?>
+                    <strong>No victims assigned.</strong><br>
+                    Please check with your coordinator for assignment details.
+                <?php endif; ?>
+            </div>
+        </div>
 
         <!-- Stats Cards -->
         <div class="stats-container">
@@ -928,158 +1120,203 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['distribute_items'])) 
             </div>
         </div>
 
-        <!-- Scan/Search Section -->
-        <div class="scan-section">
-            <div class="scan-icon">
-                <i class="fas fa-qrcode"></i>
-            </div>
-            <h3 style="margin-bottom: 10px; color: #2c3e50;">Scan Victim IC</h3>
-            <p style="color: #7f8c8d; margin-bottom: 20px; font-size: 0.95rem;">Or enter Victim ID manually</p>
-            
-            <form method="POST" id="search-form">
-                <input type="hidden" name="search_victim" value="1">
-                
-                <input type="text" 
-                       name="search_term" 
-                       class="scan-input" 
-                       placeholder="Enter V2024001 or scan IC"
-                       id="searchInput"
-                       required
-                       autocomplete="off"
-                       autofocus>
-                
-                <button type="submit" class="scan-button">
-                    <i class="fas fa-search"></i> Search Victim
-                </button>
-                
-                <div style="margin-top: 15px;">
-                    <button type="button" class="scan-button" onclick="simulateCameraScan()" style="background: linear-gradient(135deg, #25d366, #128C7E);">
-                        <i class="fas fa-camera"></i> Scan IC Camera
-                    </button>
+        <!-- Show appropriate content based on state -->
+        <?php if (empty($all_victims)): ?>
+            <!-- No Victims Message -->
+            <div class="no-victims">
+                <div class="no-victims-icon">
+                    <i class="fas fa-user-slash"></i>
                 </div>
-            </form>
-        </div>
-
-        <!-- Victim Details -->
-        <?php if ($victim_data && !empty($needs_data)): ?>
-        <form method="POST" id="distribution-form" onsubmit="return validateDistribution()">
-            <input type="hidden" name="distribute_items" value="1">
-            <input type="hidden" name="victim_id" value="<?php echo $victim_data['victim_id']; ?>">
-            <input type="hidden" name="signature_data" id="signatureData" value="">
-            
-            <!-- Victim Card -->
-            <div class="victim-card">
-                <div class="victim-header">
-                    <div class="victim-name">
-                        <i class="fas fa-user-check" style="color: #2ecc71; margin-right: 8px;"></i>
-                        <?php echo htmlspecialchars($victim_data['name']); ?>
-                    </div>
-                    <div class="victim-id">
-                        V<?php echo str_pad($victim_data['victim_id'], 6, '0', STR_PAD_LEFT); ?>
-                    </div>
-                </div>
-                <div class="victim-details">
-                    <p><strong>📍 Address:</strong> <?php echo htmlspecialchars($victim_data['address']); ?></p>
-                    <p><strong>📞 Phone:</strong> <?php echo htmlspecialchars($victim_data['phone'] ?? 'N/A'); ?></p>
-                    <p><strong>👥 Family Size:</strong> <?php echo $victim_data['family_members'] ?? 'N/A'; ?></p>
-                    <p><strong>📋 Needs:</strong> <?php echo count($needs_data); ?> approved items</p>
-                </div>
-            </div>
-
-            <!-- Approved Needs List -->
-            <div class="needs-section">
-                <h3 class="section-title">
-                    <i class="fas fa-list-check"></i> Approved Needs
-                </h3>
-                
-                <div class="needs-list">
-                    <?php foreach ($needs_data as $need): ?>
-                    <div class="need-item" onclick="toggleNeed(<?php echo $need['need_id']; ?>, this)">
-                        <div class="checkbox-container">
-                            <div class="checkbox-custom checked" id="checkbox-<?php echo $need['need_id']; ?>"></div>
-                        </div>
-                        <div class="need-info">
-                            <div class="need-name"><?php echo htmlspecialchars($need['resource_name']); ?></div>
-                            <div class="need-details">
-                                <span style="background: #e3f2fd; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; margin-right: 8px;">
-                                    <?php echo htmlspecialchars($need['category'] ?? 'General'); ?>
-                                </span>
-                                <?php echo htmlspecialchars($need['type']); ?>
-                            </div>
-                        </div>
-                        <div class="need-quantity">
-                            <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
-                        </div>
-                        <input type="checkbox" 
-                               name="distributed_items[]" 
-                               value="<?php echo $need['need_id']; ?>" 
-                               style="display: none;"
-                               class="need-checkbox"
-                               checked
-                               id="need-<?php echo $need['need_id']; ?>">
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-                
-                <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button type="button" class="btn-clear" onclick="checkAllNeeds()">
-                        <i class="fas fa-check-double"></i> Check All
-                    </button>
-                    <button type="button" class="btn-save" onclick="uncheckAllNeeds()">
-                        <i class="fas fa-times"></i> Uncheck All
-                    </button>
-                </div>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="action-buttons">
-                <button type="button" class="action-button btn-camera" onclick="takePhoto()">
-                    <i class="fas fa-camera"></i> Take Photo
-                </button>
-                
-                <button type="button" class="action-button btn-signature" onclick="openSignatureSection()">
-                    <i class="fas fa-signature"></i> Signature
-                </button>
-            </div>
-
-            <!-- Signature Section (Initially Hidden) -->
-            <div class="signature-section" id="signatureSection" style="display: none;">
-                <h3 class="section-title">
-                    <i class="fas fa-signature"></i> Victim Signature
-                </h3>
-                <canvas class="signature-canvas" id="signatureCanvas"></canvas>
-                <p style="color: #7f8c8d; font-size: 0.9rem; margin-bottom: 15px;">
-                    Please sign in the box above to confirm receipt
+                <h3 style="margin-bottom: 10px;">No Victims Found</h3>
+                <p style="margin-bottom: 20px;">
+                    No victims with approved needs found for this distribution.<br>
+                    Please check with your coordinator or wait for victims to be assigned.
                 </p>
-                <div class="signature-actions">
-                    <button type="button" class="btn-clear" onclick="clearSignature()">
-                        <i class="fas fa-eraser"></i> Clear
+                <a href="volunteer_dashboard.php" class="btn-back" style="display: inline-flex;">
+                    <i class="fas fa-arrow-left"></i> Back to Dashboard
+                </a>
+            </div>
+        <?php elseif (!$victim_data): ?>
+            <!-- Victims List Section -->
+            <div class="victims-section">
+                <h3 class="section-title">
+                    <i class="fas fa-users"></i> Select Victim
+                    <span style="font-size: 0.9rem; color: #7f8c8d; margin-left: auto;">
+                        <?php echo count($all_victims); ?> victims
+                    </span>
+                </h3>
+                
+                <form method="POST" id="select-victim-form">
+                    <input type="hidden" name="select_victim" value="1">
+                    
+                    <div class="victims-list">
+                        <?php foreach ($all_victims as $index => $victim): ?>
+                        <div class="victim-select-card" onclick="selectVictimCard(<?php echo $victim['victim_id']; ?>)">
+                            <div class="victim-select-header">
+                                <div class="victim-select-name">
+                                    <?php echo ($index + 1) . '. ' . htmlspecialchars($victim['name']); ?>
+                                </div>
+                                <div class="victim-select-id">
+                                    V<?php echo str_pad($victim['victim_id'], 6, '0', STR_PAD_LEFT); ?>
+                                </div>
+                            </div>
+                            
+                            <div class="victim-select-details">
+                                <p><strong>📍:</strong> <?php echo substr(htmlspecialchars($victim['address']), 0, 50); ?>...</p>
+                                
+                                <?php if ($victim['total_needs'] > 0): ?>
+                                    <div class="victim-select-needs">
+                                        <i class="fas fa-box"></i> <?php echo $victim['total_needs']; ?> approved needs
+                                    </div>
+                                <?php else: ?>
+                                    <div style="color: #dc3545; font-size: 0.85rem;">
+                                        <i class="fas fa-exclamation-triangle"></i> No approved needs
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            
+                            <input type="radio" 
+                                   name="victim_id" 
+                                   value="<?php echo $victim['victim_id']; ?>" 
+                                   id="victim_<?php echo $victim['victim_id']; ?>"
+                                   style="display: none;">
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button type="submit" class="select-button" id="selectButton" disabled>
+                            <i class="fas fa-check-circle"></i> Select Victim
+                        </button>
+                    </div>
+                </form>
+            </div>
+        <?php else: ?>
+            <!-- Selected Victim Details and Distribution Form -->
+            <form method="POST" id="distribution-form" onsubmit="return validateDistribution()">
+                <input type="hidden" name="distribute_items" value="1">
+                <input type="hidden" name="victim_id" value="<?php echo $victim_data['victim_id']; ?>">
+                <input type="hidden" name="signature_data" id="signatureData" value="">
+                
+                <!-- Victim Card -->
+                <div class="victim-card">
+                    <div class="victim-header">
+                        <div class="victim-name">
+                            <i class="fas fa-user-check" style="color: #2ecc71; margin-right: 8px;"></i>
+                            <?php echo htmlspecialchars($victim_data['name']); ?>
+                        </div>
+                        <div class="victim-id">
+                            V<?php echo str_pad($victim_data['victim_id'], 6, '0', STR_PAD_LEFT); ?>
+                        </div>
+                    </div>
+                    <div class="victim-details">
+                        <p><strong>📍 Address:</strong> <?php echo htmlspecialchars($victim_data['address']); ?></p>
+                        <p><strong>📋 Needs:</strong> <?php echo count($needs_data); ?> approved items</p>
+                    </div>
+                </div>
+
+                <!-- Approved Needs List -->
+                <div class="needs-section">
+                    <h3 class="section-title">
+                        <i class="fas fa-list-check"></i> Approved Needs
+                    </h3>
+                    
+                    <div class="needs-list">
+                        <?php foreach ($needs_data as $need): ?>
+                        <div class="need-item" onclick="toggleNeed(<?php echo $need['need_id']; ?>, this)">
+                            <div class="checkbox-container">
+                                <div class="checkbox-custom checked" id="checkbox-<?php echo $need['need_id']; ?>"></div>
+                            </div>
+                            <div class="need-info">
+                                <div class="need-name"><?php echo htmlspecialchars($need['resource_name']); ?></div>
+                                <div class="need-details">
+                                    <?php if (isset($need['category'])): ?>
+                                    <span style="background: #e3f2fd; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; margin-right: 8px;">
+                                        <?php echo htmlspecialchars($need['category']); ?>
+                                    </span>
+                                    <?php endif; ?>
+                                    <?php echo htmlspecialchars($need['type']); ?>
+                                </div>
+                            </div>
+                            <div class="need-quantity">
+                                <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
+                            </div>
+                            <input type="checkbox" 
+                                   name="distributed_items[]" 
+                                   value="<?php echo $need['need_id']; ?>" 
+                                   style="display: none;"
+                                   class="need-checkbox"
+                                   checked
+                                   id="need-<?php echo $need['need_id']; ?>">
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button type="button" class="btn-clear" onclick="checkAllNeeds()">
+                            <i class="fas fa-check-double"></i> Check All
+                        </button>
+                        <button type="button" class="btn-save" onclick="uncheckAllNeeds()">
+                            <i class="fas fa-times"></i> Uncheck All
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="action-buttons">
+                    <button type="button" class="action-button btn-camera" onclick="takePhoto()">
+                        <i class="fas fa-camera"></i> Take Photo
                     </button>
-                    <button type="button" class="btn-save" onclick="saveSignature()">
-                        <i class="fas fa-save"></i> Save Signature
+                    
+                    <button type="button" class="action-button btn-signature" onclick="openSignatureSection()">
+                        <i class="fas fa-signature"></i> Signature
                     </button>
                 </div>
-            </div>
 
-            <!-- Remarks -->
-            <div class="remarks-section">
-                <h3 class="section-title">
-                    <i class="fas fa-edit"></i> Remarks
-                </h3>
-                <textarea name="remarks" 
-                          class="remarks-box" 
-                          placeholder="Enter any remarks (optional)... 
+                <!-- Signature Section (Initially Hidden) -->
+                <div class="signature-section" id="signatureSection" style="display: none;">
+                    <h3 class="section-title">
+                        <i class="fas fa-signature"></i> Victim Signature
+                    </h3>
+                    <canvas class="signature-canvas" id="signatureCanvas"></canvas>
+                    <p style="color: #7f8c8d; font-size: 0.9rem; margin-bottom: 15px;">
+                        Please sign in the box above to confirm receipt
+                    </p>
+                    <div class="signature-actions">
+                        <button type="button" class="btn-clear" onclick="clearSignature()">
+                            <i class="fas fa-eraser"></i> Clear
+                        </button>
+                        <button type="button" class="btn-save" onclick="saveSignature()">
+                            <i class="fas fa-save"></i> Save Signature
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Remarks -->
+                <div class="remarks-section">
+                    <h3 class="section-title">
+                        <i class="fas fa-edit"></i> Remarks
+                    </h3>
+                    <textarea name="remarks" 
+                              class="remarks-box" 
+                              placeholder="Enter any remarks (optional)... 
 Example: 
 • Special instructions
 • Condition of items
 • Additional notes"></textarea>
-            </div>
+                </div>
 
-            <!-- Submit Button -->
-            <button type="submit" class="action-button btn-distribute" id="submitButton">
-                <i class="fas fa-check-circle"></i> Mark as Distributed
-            </button>
-        </form>
+                <!-- Submit and Back Buttons -->
+                <div style="padding: 15px;">
+                    <button type="submit" class="action-button btn-distribute" id="submitButton">
+                        <i class="fas fa-check-circle"></i> Mark as Distributed
+                    </button>
+                    
+                    <button type="button" class="back-button" onclick="goBackToList()">
+                        <i class="fas fa-arrow-left"></i> Back to Victims List
+                    </button>
+                </div>
+            </form>
         <?php endif; ?>
 
         <!-- Footer -->
@@ -1096,6 +1333,46 @@ Example:
     </a>
 
     <script>
+        // Victim Selection
+        let selectedVictimId = null;
+        
+        function selectVictimCard(victimId) {
+            selectedVictimId = victimId;
+            
+            // Update radio button
+            document.getElementById(`victim_${victimId}`).checked = true;
+            
+            // Visual feedback
+            document.querySelectorAll('.victim-select-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            event.currentTarget.classList.add('selected');
+            
+            // Enable select button
+            document.getElementById('selectButton').disabled = false;
+            
+            // Auto-submit after 3 seconds if only one victim
+            const victimCount = <?php echo count($all_victims); ?>;
+            if (victimCount === 1) {
+                setTimeout(() => {
+                    document.getElementById('select-victim-form').submit();
+                }, 3000);
+            }
+        }
+        
+        // Auto-select first victim if only one
+        document.addEventListener('DOMContentLoaded', function() {
+            const victimCount = <?php echo count($all_victims); ?>;
+            if (victimCount === 1 && document.getElementById('select-victim-form')) {
+                const firstVictimId = <?php echo $all_victims[0]['victim_id'] ?? 0; ?>;
+                selectVictimCard(firstVictimId);
+            }
+        });
+        
+        function goBackToList() {
+            window.location.reload();
+        }
+        
         // Signature Canvas
         let canvas = null;
         let ctx = null;
@@ -1251,36 +1528,6 @@ Example:
             showToast('All items unselected', 'info');
         }
         
-        // Camera scan simulation
-        function simulateCameraScan() {
-            showLoading('Scanning IC...');
-            
-            // Simulate camera scan delay
-            setTimeout(() => {
-                hideLoading();
-                
-                // Sample data for demo
-                const sampleData = [
-                    'V2024001',
-                    'V2024002', 
-                    'V2024003',
-                    'V2024004',
-                    'V2024005'
-                ];
-                
-                const randomData = sampleData[Math.floor(Math.random() * sampleData.length)];
-                document.getElementById('searchInput').value = randomData;
-                
-                showToast(`Scanned: ${randomData}`, 'success');
-                
-                // Auto-submit after 2 seconds
-                setTimeout(() => {
-                    document.getElementById('search-form').submit();
-                }, 2000);
-                
-            }, 3000);
-        }
-        
         // Photo capture simulation
         function takePhoto() {
             if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -1371,22 +1618,8 @@ Example:
             }, 3000);
         }
         
-        // Auto-focus search input
+        // Auto-check all needs when victim selected
         document.addEventListener('DOMContentLoaded', function() {
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                
-                // Check for URL parameter (for QR code scanning)
-                const urlParams = new URLSearchParams(window.location.search);
-                const scannedData = urlParams.get('scan');
-                if (scannedData) {
-                    searchInput.value = scannedData;
-                    document.getElementById('search-form').submit();
-                }
-            }
-            
-            // Auto-check all needs when victim found
             if (document.querySelector('.need-checkbox')) {
                 setTimeout(checkAllNeeds, 500);
             }

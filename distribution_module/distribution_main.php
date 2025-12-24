@@ -240,253 +240,6 @@ try {
     <link rel="stylesheet" href="../css/main.css">
     <link rel="stylesheet" href="../css/header.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        /* Fix for dropdown positioning */
-        .user-dropdown, .notifications-dropdown {
-            display: none;
-            position: absolute;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
-            z-index: 1001;
-            border: 1px solid #ddd;
-        }
-        
-        .user-dropdown {
-            right: 20px;
-            top: 70px;
-            width: 280px;
-        }
-        
-        .notifications-dropdown {
-            right: 120px;
-            top: 70px;
-            width: 350px;
-        }
-        
-        .dropdown-header {
-            padding: 20px;
-            background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
-            color: white;
-            border-radius: 8px 8px 0 0;
-        }
-        
-        .dropdown-menu {
-            padding: 10px 0;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        
-        .dropdown-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 20px;
-            color: #333;
-            text-decoration: none;
-            transition: background 0.3s ease;
-        }
-        
-        .dropdown-item:hover {
-            background: #f5f5f5;
-        }
-        
-        .dropdown-footer {
-            padding: 15px 20px;
-            background: #f8f9fa;
-            border-radius: 0 0 8px 8px;
-            font-size: 11px;
-            color: #7f8c8d;
-            text-align: center;
-        }
-        
-        /* Loading screen */
-        .loading-screen {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.95);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 9999;
-            transition: opacity 0.5s ease;
-        }
-        
-        .loading-content {
-            text-align: center;
-        }
-        
-        .loading-spinner {
-            width: 50px;
-            height: 50px;
-            border: 5px solid #f3f3f3;
-            border-top: 5px solid #3498db;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        /* Modal styles */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .modal-content {
-            background: white;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 600px;
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        
-        .modal-header {
-            padding: 20px;
-            border-bottom: 1px solid #eee;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 24px;
-            cursor: pointer;
-            color: #666;
-        }
-        
-        .modal-body {
-            padding: 20px;
-        }
-        
-        /* Toast notifications */
-        .toast-container {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 1000;
-        }
-        
-        .toast {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            padding: 15px;
-            margin-bottom: 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            min-width: 300px;
-            animation: slideIn 0.3s ease;
-            border-left: 4px solid #3498db;
-        }
-        
-        .toast.toast-success {
-            border-left-color: #27ae60;
-        }
-        
-        .toast.toast-error {
-            border-left-color: #e74c3c;
-        }
-        
-        .toast.toast-warning {
-            border-left-color: #f39c12;
-        }
-        
-        .toast-content {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .toast-close {
-            background: none;
-            border: none;
-            font-size: 18px;
-            cursor: pointer;
-            color: #999;
-        }
-        
-        .toast.fade-out {
-            animation: slideOut 0.3s ease forwards;
-        }
-        
-        @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-        
-        @keyframes slideOut {
-            from {
-                transform: translateX(0);
-                opacity: 1;
-            }
-            to {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-        }
-        
-        /* Button colors */
-        .btn-purple { 
-            background: #9b59b6; 
-            color: white; 
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        
-        .btn-purple:hover { 
-            background: #8e44ad; 
-            color: white; 
-        }
-        
-        .btn-orange { 
-            background: #f39c12; 
-            color: white; 
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        
-        .btn-orange:hover { 
-            background: #e67e22; 
-            color: white; 
-        }
-        
-        /* Refresh button animation */
-        .refreshing {
-            animation: spin 1s linear infinite;
-        }
-    </style>
-</head>
-<body>
     <!-- Loading Screen -->
     <div id="loading-screen" class="loading-screen">
         <div class="loading-content">
@@ -979,6 +732,16 @@ try {
                                             <i class="fas fa-play-circle"></i>
                                         </a>
                                     <?php endif; ?>
+
+                                    <!-- Delete button -->
+                                    <?php if ($row['status'] == 'Assigned'): ?>
+                                        <button class="btn btn-danger btn-sm delete-btn" 
+                                                data-id="<?php echo $row['distribution_id']; ?>"
+                                                data-name="Distribution #<?php echo str_pad($row['distribution_id'], 4, '0', STR_PAD_LEFT); ?>"
+                                                title="Delete Distribution">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    <?php endif; ?>
                                     
                                     <!-- Quick View button -->
                                     <button class="btn btn-secondary btn-sm quick-view-btn" 
@@ -1384,6 +1147,156 @@ try {
                     if (event.target === modal) {
                         modal.style.display = 'none';
                     }
+                });
+            }
+            
+            // ========== ADDED: DELETE DISTRIBUTION FUNCTIONALITY ==========
+            const deleteButtons = document.querySelectorAll('.delete-btn');
+            const deleteModal = document.getElementById('delete-modal');
+            const deleteCancelBtn = document.getElementById('delete-cancel');
+            const deleteModalClose = document.getElementById('delete-modal-close');
+            const deleteConfirmBtn = document.getElementById('delete-confirm');
+            const deleteMessage = document.getElementById('delete-message');
+            const deleteDetails = document.getElementById('delete-details');
+            
+            let distributionToDelete = null;
+            
+            // Handle delete button clicks
+            deleteButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const distributionId = this.getAttribute('data-id');
+                    const distributionName = this.getAttribute('data-name');
+                    
+                    distributionToDelete = distributionId;
+                    
+                    // Get row data for display
+                    const row = document.querySelector(`#row-${distributionId}`);
+                    if (row) {
+                        const disasterName = row.querySelector('.disaster-cell strong').textContent;
+                        const location = row.querySelector('.location-cell').textContent.replace('📍', '').trim();
+                        const status = row.querySelector('.badge').textContent.trim();
+                        const victimCount = row.querySelector('.victim-count-badge') ? 
+                            row.querySelector('.victim-count-badge').textContent.replace('👤', '').trim() : '0';
+                        const needsCount = row.querySelector('.needs-count').textContent;
+                        
+                        deleteMessage.innerHTML = `Are you sure you want to delete <strong>${distributionName}</strong>?`;
+                        deleteDetails.innerHTML = `
+                            <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                                <p><strong>Disaster:</strong> ${disasterName}</p>
+                                <p><strong>Location:</strong> ${location}</p>
+                                <p><strong>Status:</strong> ${status}</p>
+                                <p><strong>Victims:</strong> ${victimCount}</p>
+                                <p><strong>Needs:</strong> ${needsCount} items</p>
+                            </div>
+                        `;
+                    } else {
+                        deleteMessage.textContent = `Are you sure you want to delete ${distributionName}?`;
+                        deleteDetails.innerHTML = '';
+                    }
+                    
+                    deleteModal.style.display = 'block';
+                });
+            });
+            
+            // Close delete modal
+            if (deleteCancelBtn) {
+                deleteCancelBtn.addEventListener('click', function() {
+                    deleteModal.style.display = 'none';
+                    distributionToDelete = null;
+                });
+            }
+            
+            if (deleteModalClose) {
+                deleteModalClose.addEventListener('click', function() {
+                    deleteModal.style.display = 'none';
+                    distributionToDelete = null;
+                });
+            }
+            
+            // Close modal when clicking outside
+            window.addEventListener('click', function(event) {
+                if (event.target === deleteModal) {
+                    deleteModal.style.display = 'none';
+                    distributionToDelete = null;
+                }
+            });
+            
+            // Handle delete confirmation
+            if (deleteConfirmBtn) {
+                deleteConfirmBtn.addEventListener('click', function() {
+                    if (!distributionToDelete) return;
+                    
+                    // Show loading state
+                    const originalText = deleteConfirmBtn.innerHTML;
+                    deleteConfirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+                    deleteConfirmBtn.disabled = true;
+                    
+                    // Send AJAX request
+                    fetch('delete_distribution.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: `distribution_id=${distributionToDelete}&confirm_delete=1`
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Success - remove row from table with animation
+                            const row = document.querySelector(`#row-${distributionToDelete}`);
+                            if (row) {
+                                row.style.transition = 'all 0.5s ease';
+                                row.style.opacity = '0';
+                                row.style.transform = 'translateX(-100%)';
+                                
+                                setTimeout(() => {
+                                    row.remove();
+                                    
+                                    // Show success toast
+                                    showToast(data.message, 'success');
+                                    
+                                    // Update total count if exists
+                                    const totalBadge = document.querySelector('.header-badge .badge-info');
+                                    if (totalBadge) {
+                                        const currentTotal = parseInt(totalBadge.textContent);
+                                        if (!isNaN(currentTotal)) {
+                                            totalBadge.textContent = currentTotal - 1;
+                                        }
+                                    }
+                                    
+                                    // Update results count
+                                    const resultsCount = document.querySelector('.results-count');
+                                    if (resultsCount) {
+                                        const text = resultsCount.textContent;
+                                        const match = text.match(/Showing (\d+) of (\d+)/);
+                                        if (match) {
+                                            const showing = parseInt(match[1]) - 1;
+                                            const total = parseInt(match[2]) - 1;
+                                            resultsCount.textContent = `Showing ${showing} of ${total} distributions`;
+                                        }
+                                    }
+                                }, 500);
+                            } else {
+                                showToast(data.message, 'success');
+                            }
+                        } else {
+                            // Error
+                            showToast(data.message, 'error');
+                            deleteConfirmBtn.innerHTML = originalText;
+                            deleteConfirmBtn.disabled = false;
+                        }
+                        
+                        // Close modal
+                        deleteModal.style.display = 'none';
+                        distributionToDelete = null;
+                    })
+                    .catch(error => {
+                        showToast('Error deleting distribution: ' + error.message, 'error');
+                        deleteConfirmBtn.innerHTML = originalText;
+                        deleteConfirmBtn.disabled = false;
+                        deleteModal.style.display = 'none';
+                        distributionToDelete = null;
+                    });
                 });
             }
             

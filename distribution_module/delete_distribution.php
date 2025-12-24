@@ -1,5 +1,5 @@
 <?php
-// delete_distribution.php - UPDATED VERSION
+// delete_distribution.php - AJAX VERSION
 require_once 'config.php';
 
 // Enable error reporting for debugging
@@ -7,6 +7,7 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+// Set header for JSON response
 header('Content-Type: application/json');
 
 try {
@@ -18,16 +19,16 @@ try {
         throw new Exception('Invalid request method. Use POST.');
     }
     
-    // Get distribution ID
-    $distribution_id = isset($_POST['id']) ? intval($_POST['id']) : 0;
-    $confirm = isset($_POST['confirm']) ? intval($_POST['confirm']) : 0;
+    // Get distribution ID from POST
+    $distribution_id = isset($_POST['distribution_id']) ? intval($_POST['distribution_id']) : 0;
+    $confirm = isset($_POST['confirm_delete']) ? intval($_POST['confirm_delete']) : 0;
     
     if ($distribution_id <= 0) {
         throw new Exception('Invalid distribution ID: ' . $distribution_id);
     }
     
     if ($confirm !== 1) {
-        throw new Exception('Confirmation required. Set confirm=1');
+        throw new Exception('Confirmation required. Set confirm_delete=1');
     }
     
     // First, check if distribution exists
