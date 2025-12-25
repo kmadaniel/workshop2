@@ -882,7 +882,7 @@ sqlsrv_close($conn);
         
         <!-- Sidebar Footer -->
         <div class="sidebar-footer">
-            <a href="logout.php">
+            <a href="main_page.php">
                 <i class="fas fa-sign-out-alt"></i>
                 <span>Logout</span>
             </a>
