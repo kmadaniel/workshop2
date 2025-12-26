@@ -1,146 +1,242 @@
 <?php
 include "db.php";
 
-// Handle feedback submission
+/* =======================
+   HANDLE FEEDBACK
+======================= */
 $feedback_message = "";
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['feedback_submit'])) {
-    $stmt = $conn->prepare("INSERT INTO feedback (rating, comments) VALUES (?, ?)");
     try {
+        $stmt = $conn->prepare("INSERT INTO feedback (rating, comments) VALUES (?, ?)");
         $stmt->execute([$_POST['rating'], $_POST['comments']]);
-        $feedback_message = "✅ Thank you for your feedback!";
+        $feedback_message = "✅ Thank you for sharing your feedback!";
     } catch (PDOException $e) {
-        $feedback_message = "❌ Failed to submit feedback: " . $e->getMessage();
+        $feedback_message = "❌ Unable to submit feedback.";
     }
 }
 
-// Fetch disasters with total victims
+/* =======================
+   FETCH DISASTERS
+======================= */
 $disasters = $conn->query("
-    SELECT d.disaster_id, d.disaster_name, d.district, d.severity, d.alert_message, d.status,
-           COUNT(vd.victim_id) AS total_victims
+    SELECT d.disaster_id, d.disaster_name, d.district, d.severity,
+           d.alert_message, d.status,
+           COUNT(v.victim_id) AS total_victims
     FROM disaster d
-    LEFT JOIN victim_disaster vd ON d.disaster_id = vd.disaster_id
-    GROUP BY d.disaster_id
+    LEFT JOIN victim v ON d.disaster_id = v.disaster_id
+    GROUP BY d.disaster_id, d.disaster_name, d.district, d.severity, d.alert_message, d.status
     ORDER BY d.created_at DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Static shelters info
+
+/* =======================
+   SHELTERS
+======================= */
 $shelters_by_district = [
     'Melaka Tengah' => [
-        ['name'=>'Melaka Tengah Shelter 1','address'=>'123 Jalan Merdeka','contact_number'=>'012-3456789','email'=>'mt1@shelter.gov.my'],
-        ['name'=>'Melaka Tengah Shelter 2','address'=>'45 Jalan Raya','contact_number'=>'012-9876543','email'=>'mt2@shelter.gov.my'],
-        ['name'=>'Melaka Tengah Shelter 3','address'=>'78 Jalan Bukit','contact_number'=>'012-1122334','email'=>'mt3@shelter.gov.my']
+        ['name'=>'Melaka Tengah Shelter 1','address'=>'123 Jalan Merdeka','phone'=>'012-3456789','email'=>'mt1@shelter.gov.my']
     ],
     'Alor Gajah' => [
-        ['name'=>'Alor Gajah Shelter 1','address'=>'12 Jalan Melati','contact_number'=>'013-1112223','email'=>'ag1@shelter.gov.my'],
-        ['name'=>'Alor Gajah Shelter 2','address'=>'34 Jalan Mawar','contact_number'=>'013-3334445','email'=>'ag2@shelter.gov.my']
+        ['name'=>'Alor Gajah Shelter 1','address'=>'12 Jalan Melati','phone'=>'013-1112223','email'=>'ag1@shelter.gov.my']
     ],
     'Jasin' => [
-        ['name'=>'Jasin Shelter 1','address'=>'56 Jalan Kenanga','contact_number'=>'014-5556667','email'=>'js1@shelter.gov.my'],
-        ['name'=>'Jasin Shelter 2','address'=>'78 Jalan Orkid','contact_number'=>'014-7778889','email'=>'js2@shelter.gov.my']
+        ['name'=>'Jasin Shelter 1','address'=>'56 Jalan Kenanga','phone'=>'014-5556667','email'=>'js1@shelter.gov.my']
     ]
 ];
 ?>
 
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="UTF-8">
 <title>Melaka Disaster Assistance Portal</title>
+
+<!-- Dashboard CSS -->
+<link rel="stylesheet" href="header.css">
+
+<!-- Icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+<!-- GLOBAL FONT -->
 <style>
-body { margin:0; font-family:'Segoe UI',sans-serif; background:#eef3f8; }
-.header { background:linear-gradient(135deg,#007bff,#4facfe); color:white; padding:30px; text-align:center; }
-.container { max-width:1000px; margin:30px auto; padding:0 20px; }
-.card { background:white; border-radius:14px; padding:25px; box-shadow:0 4px 12px rgba(0,0,0,0.08); margin-bottom:25px; }
-.actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:20px; }
-.action-card { background:white; border-radius:12px; padding:25px; text-align:center; box-shadow:0 3px 8px rgba(0,0,0,0.1); transition:.2s; }
-.action-card:hover { transform:translateY(-4px); }
-.action-card span { font-size:36px; display:block; }
-.alert { background:#f8f9fa; padding:12px; border-left:5px solid #dc3545; border-radius:6px; margin-bottom:10px; }
-.feedback-form { background:#f1f8ff; padding:20px; border-radius:12px; margin-top:25px; }
-.feedback-form input, .feedback-form textarea, .feedback-form select, .feedback-form button { width:100%; padding:12px; margin-bottom:10px; border-radius:8px; border:1px solid #ccc; }
-.feedback-form button { background:#007bff; color:white; border:none; cursor:pointer; }
-.feedback-form button:hover { background:#0056b3; }
-.message { padding:12px; border-radius:8px; margin-bottom:15px; }
-.success { background:#e8f5e9; color:#2e7d32; border-left:4px solid #28a745; }
-.error { background:#fdd; color:#c62828; border-left:4px solid #d9534f; }
-.shelter { background:#fff5e6; padding:12px; border-left:4px solid #ffa500; border-radius:6px; margin-bottom:10px; }
-a { text-decoration:none; color:inherit; }
+* {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
 </style>
 </head>
+
 <body>
 
-<div class="header">
-    <h1>🤝 Melaka Disaster Assistance Portal</h1>
-    <p>Supporting Melaka residents during emergencies</p>
+<!-- ================= HEADER ================= -->
+<header class="system-header">
+    <div class="header-container">
+        <div class="logo-section">
+            <i class="fas fa-shield-heart logo-icon"></i>
+            <div class="logo-text">
+                <h1>Melaka Disaster Assistance</h1>
+                <small>Public Support & Emergency Information</small>
+            </div>
+        </div>
+    </div>
+</header>
+
+<!-- ================= SIDEBAR ================= -->
+<div class="sidebar">
+    <ul class="nav-menu">
+        <li class="nav-item">
+            <a class="nav-link active">
+                <i class="fas fa-house"></i>
+                <span class="nav-text">Dashboard</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="victim_register.php" class="nav-link">
+                <i class="fas fa-user-plus"></i>
+                <span class="nav-text">Victim Registration</span>
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="report_disaster.php" class="nav-link">
+                <i class="fas fa-triangle-exclamation"></i>
+                <span class="nav-text">Report Disaster</span>
+            </a>
+        </li>
+    </ul>
 </div>
 
-<div class="container">
+<!-- ================= MAIN ================= -->
+<div class="main-content">
 
-<!-- Active Disasters -->
+<!-- ===== QUICK HELP ===== -->
+<div class="top-action-header">
+    <h2><i class="fas fa-hand-holding-heart"></i> How can we help you today?</h2>
+    <div class="action-buttons-grid">
+        <a href="victim_register.php" class="action-header-btn btn-create">
+            <i class="fas fa-user-injured"></i>
+            <div class="btn-text">
+                Register as a Victim
+                <small>Request help for yourself or others</small>
+            </div>
+        </a>
+        <a href="report_disaster.php" class="action-header-btn btn-report">
+            <i class="fas fa-bullhorn"></i>
+            <div class="btn-text">
+                Report a Disaster
+                <small>Inform authorities immediately</small>
+            </div>
+        </a>
+    </div>
+</div>
+
+<!-- ===== ACTIVE DISASTERS ===== -->
 <div class="card">
-<h3>🚨 Active Disasters</h3>
+<h3><i class="fas fa-triangle-exclamation"></i> Current Disaster Alerts</h3>
+
 <?php if (!$disasters): ?>
-<p>No active disasters.</p>
-<?php else: foreach ($disasters as $d): ?>
-<div class="alert">
-<strong><?= htmlspecialchars($d['disaster_name']) ?></strong> (<?= htmlspecialchars($d['status']) ?>)<br>
-📍 <?= htmlspecialchars($d['district']) ?> | ⚠ <?= htmlspecialchars($d['severity']) ?><br>
-Total Victims Registered: <?= $d['total_victims'] ?><br>
-<?= htmlspecialchars($d['alert_message']) ?>
-</div>
-<?php endforeach; endif; ?>
-</div>
+<p class="muted">No active disasters reported. Stay safe 💙</p>
+<?php else: ?>
+<div class="disaster-grid">
+<?php foreach ($disasters as $d): ?>
+<div class="disaster-card">
+    <div class="disaster-header">
+        <strong><?= htmlspecialchars($d['disaster_name']) ?></strong>
+        <span class="status-pill"><?= htmlspecialchars($d['status']) ?></span>
+    </div>
 
-<!-- Actions -->
-<div class="card">
-<h3>📌 Actions</h3>
-<div class="actions">
-<a href="victim_register.php" class="action-card">
-<span>🧾</span>
-<strong>Victim Registration</strong>
-</a>
-<a href="report_disaster.php" class="action-card">
-<span>🚨</span>
-<strong>Report Disaster</strong>
-</a>
-</div>
-</div>
+    <div class="disaster-info">
+        <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($d['district']) ?></span>
+        <span><i class="fas fa-bolt"></i> <?= htmlspecialchars($d['severity']) ?></span>
+        <span><i class="fas fa-users"></i> <?= $d['total_victims'] ?> victims</span>
+    </div>
 
-<!-- Feedback Form -->
-<div class="card feedback-form">
-<h3>💬 Give Your Feedback</h3>
-<?php if ($feedback_message): ?>
-<div class="message <?= strpos($feedback_message,'✅')!==false ? 'success':'error' ?>">
-<?= $feedback_message ?>
+    <p class="disaster-message">
+        <?= htmlspecialchars($d['alert_message']) ?>
+    </p>
+</div>
+<?php endforeach; ?>
 </div>
 <?php endif; ?>
-<form method="POST">
-<label>Rating (1-5)</label>
-<select name="rating" required>
-    <option value="">-- Select Rating --</option>
-    <?php for ($i=1;$i<=5;$i++): ?>
-    <option value="<?= $i ?>"><?= $i ?></option>
-    <?php endfor; ?>
-</select>
-<label>Comments / Suggestions</label>
-<textarea name="comments" placeholder="Your comments" required></textarea>
-<button type="submit" name="feedback_submit">Submit Feedback</button>
-</form>
+
+
+<div class="card">
+    <h3><i class="fas fa-comment-dots"></i> Your Feedback</h3>
+
+    <div class="feedback-layout">
+
+        <!-- LEFT -->
+        <div class="feedback-left">
+
+            <?php if ($feedback_message): ?>
+                <div class="message <?= str_contains($feedback_message,'✅') ? 'success':'error' ?>">
+                    <?= $feedback_message ?>
+                </div>
+            <?php endif; ?>
+
+            <form method="POST" class="feedback-form">
+
+                <!-- Rating -->
+                <div class="form-group">
+                    <label class="feedback-label">Overall experience</label>
+                    <div class="rating-row">
+                        <?php for ($i = 5; $i >= 1; $i--): ?>
+                            <input type="radio" name="rating" id="rate<?= $i ?>" value="<?= $i ?>" required>
+                            <label for="rate<?= $i ?>">★</label>
+                        <?php endfor; ?>
+                    </div>
+                </div>
+
+                <!-- Comments -->
+                <div class="form-group">
+                    <label class="feedback-label">Comments</label>
+                    <textarea
+                        name="comments"
+                        placeholder="Share your experience or suggestions"
+                        required></textarea>
+                </div>
+
+                <button type="submit" name="feedback_submit" class="btn-purple">
+                    <i class="fas fa-paper-plane"></i> Submit Feedback
+                </button>
+
+            </form>
+        </div>
+
+        <!-- RIGHT -->
+        <div class="feedback-right">
+            <h4>Why your feedback matters</h4>
+            <ul class="feedback-info">
+                <li><i class="fas fa-check-circle"></i> Improves emergency response</li>
+                <li><i class="fas fa-check-circle"></i> Helps allocate aid fairly</li>
+                <li><i class="fas fa-check-circle"></i> Identifies system issues</li>
+                <li><i class="fas fa-lock"></i> Anonymous & confidential</li>
+            </ul>
+        </div>
+
+    </div>
 </div>
 
-<!-- Static Shelters -->
+
+
+
+<!-- ===== SHELTERS ===== -->
 <div class="card">
-<h3>🏠 Nearest Shelters / Distribution Centers</h3>
-<?php foreach ($shelters_by_district as $district => $s_list): ?>
+<h3><i class="fas fa-building"></i> Nearby Shelters</h3>
+
+<div class="shelter-grid">
+<?php foreach ($shelters_by_district as $district => $list): ?>
+<div class="shelter-card">
 <h4><?= htmlspecialchars($district) ?></h4>
-<?php foreach ($s_list as $s): ?>
-<div class="shelter">
-<strong><?= htmlspecialchars($s['name']) ?></strong><br>
-📍 <?= htmlspecialchars($s['address']) ?><br>
-📞 <?= htmlspecialchars($s['contact_number']) ?><br>
-✉ <?= htmlspecialchars($s['email']) ?>
+<?php foreach ($list as $s): ?>
+<p><strong><?= $s['name'] ?></strong></p>
+<p>📍 <?= $s['address'] ?></p>
+<p>📞 <?= $s['phone'] ?></p>
+<p>✉ <?= $s['email'] ?></p>
+<hr>
+<?php endforeach; ?>
 </div>
 <?php endforeach; ?>
-<?php endforeach; ?>
+</div>
 </div>
 
 </div>
