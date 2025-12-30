@@ -1043,9 +1043,9 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
                 <i class="fas fa-user"></i>
                 <span>Profile</span>
             </a>
-            <a href="view_admin.php" class="nav-btn">
+            <a href="view_volunteer.php" class="nav-btn">
                 <i class="fas fa-users"></i>
-                <span>View Admins</span>
+                <span>View Volunteer</span>
             </a>
             <a href="admin_manage_ngo.php" class="nav-btn active">
                 <i class="fas fa-handshake"></i>
@@ -1103,9 +1103,9 @@ $stats = sqlsrv_fetch_array($statsStmt, SQLSRV_FETCH_ASSOC);
                 </li>
                 
                 <li class="nav-item">
-                    <a href="view_admin.php" class="nav-link">
+                    <a href="view_volunteer.php" class="nav-link">
                         <i class="fas fa-users"></i>
-                        <span class="nav-text">View Admins</span>
+                        <span class="nav-text">View Volunteer</span>
                     </a>
                 </li>
                 

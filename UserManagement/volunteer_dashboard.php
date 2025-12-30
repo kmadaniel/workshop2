@@ -309,7 +309,7 @@ error_log("News count: " . count($news));
             display: -webkit-box;
             -webkit-box-orient: vertical;
             overflow: hidden;
-            -webkit-line-clamp: 3;
+         
         }
         
         .news-meta {

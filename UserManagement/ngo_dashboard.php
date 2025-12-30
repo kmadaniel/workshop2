@@ -507,7 +507,7 @@
         
         <ul class="nav-menu">
             <li class="nav-item">
-                <a href="#" class="nav-link active">
+                <a href="ngo_dashboard.php" class="nav-link active">
                     <i class="fas fa-tachometer-alt"></i>Dashboard
                 </a>
             </li>
@@ -542,7 +542,7 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a href="#" class="nav-link">
+                <a href="resource.php" class="nav-link">
                     <i class="fas fa-boxes"></i>Resource
                 </a>
             </li>

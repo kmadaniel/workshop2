@@ -23,6 +23,7 @@ $sql = "SELECT
             v.PasswordHash, 
             v.SkillCategory,
             v.AssignedNGO,
+            v.Status,
             n.NGOName,
             n.RegistrationNo
         FROM Volunteer v
@@ -60,6 +61,7 @@ if (isset($_POST['update'])) {
     $phone = trim($_POST['phone']);
     $address = $_POST['address'] ?? null;
     $skill = $_POST['skill'];
+    $status = $_POST['status'];
     
     // Check if volunteer can change NGO
     $assignedNGO = $row['AssignedNGO'];
@@ -82,9 +84,10 @@ if (isset($_POST['update'])) {
                             Address = ?, 
                             PasswordHash = ?, 
                             SkillCategory = ?,
-                            AssignedNGO = ?
+                            AssignedNGO = ?,
+                            Status = ?
                           WHERE VolunteerID = ?";
-            $update_params = array($name, $email, $phone, $address, $passwordHash, $skill, $assignedNGO, $user_id);
+            $update_params = array($name, $email, $phone, $address, $passwordHash, $skill, $assignedNGO, $status, $user_id);
         }
     } else {
         $update_sql = "UPDATE Volunteer SET 
@@ -93,9 +96,10 @@ if (isset($_POST['update'])) {
                         Phone = ?, 
                         Address = ?, 
                         SkillCategory = ?,
-                        AssignedNGO = ?
+                        AssignedNGO = ?,
+                        Status = ?
                       WHERE VolunteerID = ?";
-        $update_params = array($name, $email, $phone, $address, $skill, $assignedNGO, $user_id);
+        $update_params = array($name, $email, $phone, $address, $skill, $assignedNGO, $status, $user_id);
     }
     
     // Execute update if no password validation error
@@ -117,6 +121,7 @@ if (isset($_POST['update'])) {
             $row['Address'] = $address;
             $row['SkillCategory'] = $skill;
             $row['AssignedNGO'] = $assignedNGO;
+            $row['Status'] = $status;
             
             // Refresh NGO name if changed
             if ($assignedNGO != $row['AssignedNGO']) {
@@ -140,7 +145,6 @@ if (isset($_POST['update'])) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Keep Original Sidebar Styles */
         * {
             margin: 0;
             padding: 0;
@@ -190,7 +194,6 @@ if (isset($_POST['update'])) {
             font-weight: 500;
         }
         
-        /* NEW: Admin-Style Main Content */
         .content {
             flex: 1;
             padding: 30px;
@@ -199,7 +202,6 @@ if (isset($_POST['update'])) {
             min-height: 100vh;
         }
         
-        /* Profile Header - Admin Style */
         .profile-header {
             background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
             padding: 25px;
@@ -218,7 +220,6 @@ if (isset($_POST['update'])) {
             gap: 10px;
         }
 
-        /* Toast Notification */
         .toast-container {
             position: fixed;
             top: 20px;
@@ -260,7 +261,6 @@ if (isset($_POST['update'])) {
             font-size: 18px;
         }
 
-        /* Profile Cards */
         .profile-card {
             background: white;
             border-radius: 12px;
@@ -327,7 +327,6 @@ if (isset($_POST['update'])) {
             font-weight: 500;
         }
 
-        /* Form Styles */
         .form-label {
             color: #2c3e50;
             font-weight: 600;
@@ -371,7 +370,6 @@ if (isset($_POST['update'])) {
             color: #27ae60;
         }
 
-        /* NGO Info Box */
         .ngo-info-box {
             background: linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
             border-radius: 10px;
@@ -413,7 +411,6 @@ if (isset($_POST['update'])) {
             color: #333;
         }
 
-        /* Skill Badge */
         .skill-badge {
             display: inline-block;
             background: #e3f2fd;
@@ -424,7 +421,33 @@ if (isset($_POST['update'])) {
             font-weight: 500;
         }
 
-        /* Security Tips */
+        .badge {
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .badge-success {
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+            color: white;
+        }
+        
+        .badge-warning {
+            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+            color: white;
+        }
+        
+        .badge-secondary {
+            background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
+            color: white;
+        }
+        
+        .badge-info {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+        }
+
         .security-tips {
             background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
             border-radius: 10px;
@@ -452,7 +475,6 @@ if (isset($_POST['update'])) {
             font-size: 14px;
         }
 
-        /* Volunteer Badge */
         .volunteer-badge {
             display: inline-block;
             background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
@@ -464,7 +486,6 @@ if (isset($_POST['update'])) {
             margin-left: 15px;
         }
 
-        /* Profile Title */
         .profile-title {
             display: flex;
             align-items: center;
@@ -482,7 +503,6 @@ if (isset($_POST['update'])) {
             }
         }
 
-        /* Responsive for Sidebar */
         @media (max-width: 768px) {
             .sidebar {
                 width: 100%;
@@ -504,8 +524,7 @@ if (isset($_POST['update'])) {
 </head>
 <body>
 
-    <!-- KEEP ORIGINAL SIDEBAR -->
-   <div class="sidebar">
+    <div class="sidebar">
         <h4>Volunteer Panel</h4>
         <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
         <a href="volunteer_profile.php">👤 Profile</a>
@@ -515,9 +534,7 @@ if (isset($_POST['update'])) {
         <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
 
-    <!-- NEW: Admin-Style Main Content -->
     <div class="content">
-        <!-- Toast Notification -->
         <?php if ($msg): ?>
         <div class="toast-container">
             <div class="toast <?php echo $msg_type == 'success' ? 'toast-success' : 'toast-error'; ?>">
@@ -532,7 +549,6 @@ if (isset($_POST['update'])) {
         </div>
         <?php endif; ?>
 
-        <!-- Profile Header -->
         <div class="profile-header">
             <div class="profile-title">
                 <h2>
@@ -547,10 +563,19 @@ if (isset($_POST['update'])) {
                     <i class="fas fa-star me-1"></i>
                     Skill: <?= htmlspecialchars($row['SkillCategory'] ?? 'Not specified') ?>
                 </span>
+                <?php 
+                $status = $row['Status'] ?? 'active';
+                $badgeClass = ($status == 'active') ? 'badge-success' : 
+                             (($status == 'busy') ? 'badge-warning' : 
+                             (($status == 'on leave') ? 'badge-info' : 'badge-secondary'));
+                ?>
+                <span class="badge <?= $badgeClass ?> ms-2">
+                    <i class="fas fa-user-clock me-1"></i>
+                    Status: <?= ucwords(htmlspecialchars($status)) ?>
+                </span>
             </div>
         </div>
 
-        <!-- NGO Information Box -->
         <div class="ngo-info-box">
             <div class="ngo-info-title">
                 <i class="fas fa-building"></i>
@@ -573,7 +598,6 @@ if (isset($_POST['update'])) {
         </div>
 
         <div class="row">
-            <!-- Left Column: Edit Form -->
             <div class="col-lg-8">
                 <div class="profile-card">
                     <h5><i class="fas fa-edit"></i> Edit Profile Information</h5>
@@ -643,10 +667,31 @@ if (isset($_POST['update'])) {
                                         <option value="Technical" <?= ($row['SkillCategory'] == 'Technical') ? 'selected' : '' ?>>Technical</option>
                                         <option value="Driver" <?= ($row['SkillCategory'] == 'Driver') ? 'selected' : '' ?>>Driver</option>
                                         <option value="Food Supply" <?= ($row['SkillCategory'] == 'Food Supply') ? 'selected' : '' ?>>Food Supply</option>
+                                        <option value="Counseling" <?= ($row['SkillCategory'] == 'Counseling') ? 'selected' : '' ?>>Counseling</option>
                                     </select>
                                 </div>
                             </div>
                             
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Availability Status <span class="text-danger">*</span></label>
+                                <div class="input-group">
+                                    <span class="input-group-text">
+                                        <i class="fas fa-user-clock"></i>
+                                    </span>
+                                    <select name="status" class="form-control" required>
+                                        <option value="active" <?= ($row['Status'] == 'active') ? 'selected' : '' ?>>Active (Available for tasks)</option>
+                                        <option value="busy" <?= ($row['Status'] == 'busy') ? 'selected' : '' ?>>Busy (Limited availability)</option>
+                                        <option value="on leave" <?= ($row['Status'] == 'on leave') ? 'selected' : '' ?>>On Leave (Temporary unavailable)</option>
+                                        <option value="inactive" <?= ($row['Status'] == 'inactive') ? 'selected' : '' ?>>Inactive (Not available)</option>
+                                    </select>
+                                </div>
+                                <small class="text-muted mt-2 d-block">
+                                    This status will be visible to NGOs when assigning tasks
+                                </small>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Change Assigned NGO (Optional)</label>
                                 <div class="input-group">
@@ -701,7 +746,6 @@ if (isset($_POST['update'])) {
                 </div>
             </div>
             
-            <!-- Right Column: Profile Summary -->
             <div class="col-lg-4">
                 <div class="profile-card">
                     <h5><i class="fas fa-user-circle"></i> Profile Summary</h5>
@@ -739,6 +783,23 @@ if (isset($_POST['update'])) {
                         </li>
                         <li class="info-item">
                             <span class="info-label">
+                                <i class="fas fa-user-clock text-success"></i>
+                                Status
+                            </span>
+                            <span class="info-value">
+                                <?php 
+                                $status = $row['Status'] ?? 'active';
+                                $badgeClass = ($status == 'active') ? 'badge-success' : 
+                                             (($status == 'busy') ? 'badge-warning' : 
+                                             (($status == 'on leave') ? 'badge-info' : 'badge-secondary'));
+                                ?>
+                                <span class="badge <?= $badgeClass ?>">
+                                    <?= ucwords(htmlspecialchars($status)) ?>
+                                </span>
+                            </span>
+                        </li>
+                        <li class="info-item">
+                            <span class="info-label">
                                 <i class="fas fa-calendar-alt text-success"></i>
                                 Member Since
                             </span>
@@ -753,6 +814,7 @@ if (isset($_POST['update'])) {
                             <li>Never share your login credentials</li>
                             <li>Log out when using public computers</li>
                             <li>Update your skills regularly</li>
+                            <li>Update your status to reflect availability</li>
                         </ul>
                     </div>
                 </div>
@@ -761,7 +823,6 @@ if (isset($_POST['update'])) {
     </div>
     
     <script>
-        // Password toggle
         function togglePassword() {
             var passwordField = document.getElementById("password");
             var toggleIcon = document.getElementById("toggleIcon");
@@ -777,7 +838,6 @@ if (isset($_POST['update'])) {
             }
         }
 
-        // Auto-remove toast after 5 seconds
         setTimeout(function() {
             var toast = document.querySelector('.toast');
             if(toast) {
@@ -786,21 +846,20 @@ if (isset($_POST['update'])) {
             }
         }, 5000);
 
-        // Form validation
         document.getElementById('profileForm').addEventListener('submit', function(e) {
             const name = document.querySelector('input[name="name"]').value.trim();
             const email = document.querySelector('input[name="email"]').value.trim();
             const phone = document.querySelector('input[name="phone"]').value.trim();
             const skill = document.querySelector('select[name="skill"]').value;
+            const status = document.querySelector('select[name="status"]').value;
             const password = document.getElementById('password').value.trim();
             
-            if (!name || !email || !phone || !skill) {
+            if (!name || !email || !phone || !skill || !status) {
                 e.preventDefault();
                 alert('Please fill in all required fields');
                 return false;
             }
             
-            // Email validation
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailRegex.test(email)) {
                 e.preventDefault();
@@ -808,7 +867,6 @@ if (isset($_POST['update'])) {
                 return false;
             }
             
-            // Phone validation
             const phoneRegex = /^[0-9\-\+\s\(\)]{10,}$/;
             if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
                 e.preventDefault();
@@ -816,20 +874,29 @@ if (isset($_POST['update'])) {
                 return false;
             }
             
-            // Password validation (if provided)
             if (password !== '' && password.length < 6) {
                 e.preventDefault();
                 alert('Password must be at least 6 characters long');
                 return false;
             }
             
-            // NGO change confirmation
             const ngoSelect = document.querySelector('select[name="assignedNGO"]');
             const currentNGO = "<?= $row['AssignedNGO'] ?>";
             
             if (ngoSelect.value && ngoSelect.value !== currentNGO) {
                 const newNGOName = ngoSelect.options[ngoSelect.selectedIndex].text;
                 if (!confirm(`Are you sure you want to change your assigned NGO to "${newNGOName}"?`)) {
+                    e.preventDefault();
+                    return false;
+                }
+            }
+            
+            const statusSelect = document.querySelector('select[name="status"]');
+            const currentStatus = "<?= $row['Status'] ?>";
+            
+            if (statusSelect.value && statusSelect.value !== currentStatus) {
+                const newStatus = statusSelect.options[statusSelect.selectedIndex].text;
+                if (!confirm(`Are you sure you want to change your status to "${newStatus}"?`)) {
                     e.preventDefault();
                     return false;
                 }

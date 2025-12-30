@@ -117,7 +117,7 @@ sqlsrv_close($conn);
             font-weight: 600;
             color: #333;
             display: -webkit-box;
-            -webkit-line-clamp: 2;
+            
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
@@ -125,7 +125,7 @@ sqlsrv_close($conn);
             font-size: 0.9rem;
             color: #666;
             display: -webkit-box;
-            -webkit-line-clamp: 3;
+            
             -webkit-box-orient: vertical;
             overflow: hidden;
         }

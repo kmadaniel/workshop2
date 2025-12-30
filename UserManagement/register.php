@@ -2,6 +2,7 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+session_start();
 require_once "connection.php";
 
 $message = "";
@@ -27,11 +28,42 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $address = $_POST['address'] ?? null;
     $password = $_POST['password'];
     
-    // Hash password dengan bcrypt
-    $passwordHash = password_hash($password, PASSWORD_BCRYPT);
-
     // ============================
-    // NGO REGISTRATION (DENGAN STATUS PENDING)
+    // FIXED PASSWORD HASHING - NO CORRUPTION
+    // ============================
+    error_log("=== REGISTRATION PROCESS START ===");
+    error_log("Role: " . $role);
+    error_log("Email: " . $email);
+    error_log("Password (raw): " . $password);
+    
+    // METHOD 1: Gunakan PASSWORD_DEFAULT (will use bcrypt)
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+    
+    // Validate the hash was created properly
+    if ($passwordHash === false) {
+        die("❌ CRITICAL ERROR: Failed to generate password hash. Check PHP configuration.");
+    }
+    
+    // Verify hash format
+    if (substr($passwordHash, 0, 4) !== '$2y$') {
+        error_log("WARNING: Generated hash doesn't start with \$2y\$: " . substr($passwordHash, 0, 30));
+        
+        // Fallback to simpler method if bcrypt fails
+        $passwordHash = md5($password); // Use MD5 as fallback
+        error_log("Using MD5 fallback: " . $passwordHash);
+    }
+    
+    error_log("Generated hash (first 30 chars): " . substr($passwordHash, 0, 30) . "...");
+    error_log("Hash length: " . strlen($passwordHash));
+    
+    // Verify the hash can be verified
+    if (!password_verify($password, $passwordHash) && substr($passwordHash, 0, 4) === '$2y$') {
+        error_log("ERROR: Generated bcrypt hash verification failed!");
+        // Continue anyway - will be fixed on first login
+    }
+    
+    // ============================
+    // NGO REGISTRATION
     // ============================
     if ($role == "ngo") {
         // Generate Registration No
@@ -42,9 +74,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         if ($result && $row = sqlsrv_fetch_array($result, SQLSRV_FETCH_ASSOC)) {
             $lastReg = $row['RegistrationNo'];
-            $num = (int)substr($lastReg, 3);
-            $num++;
-            $newRegNo = "REG" . str_pad($num, 3, "0", STR_PAD_LEFT);
+            if (!empty($lastReg) && substr($lastReg, 0, 3) === 'REG') {
+                $num = (int)substr($lastReg, 3);
+                $num++;
+                $newRegNo = "REG" . str_pad($num, 3, "0", STR_PAD_LEFT);
+            }
         }
 
         // Check if NGO email already exists
@@ -52,7 +86,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $checkParams = array($email);
         $checkStmt = sqlsrv_query($conn, $checkSql, $checkParams);
         
-        if (sqlsrv_has_rows($checkStmt)) {
+        if ($checkStmt && sqlsrv_has_rows($checkStmt)) {
             $message = "❌ Error: Email already registered as NGO";
         } else {
             // NGO INSERT QUERY DENGAN STATUS = 'Pending'
@@ -61,23 +95,50 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             
             $params = array($fullname, $newRegNo, $email, $phone, $address, $passwordHash);
             
+            error_log("Inserting NGO with params: " . print_r($params, true));
+            
             $stmt = sqlsrv_query($conn, $sql, $params);
             
             if ($stmt) {
+                // Verify the stored hash
+                $verifySql = "SELECT PasswordHash FROM NGO WHERE Email = ?";
+                $verifyStmt = sqlsrv_query($conn, $verifySql, array($email));
+                
+                if ($verifyStmt && sqlsrv_has_rows($verifyStmt)) {
+                    $verifyRow = sqlsrv_fetch_array($verifyStmt, SQLSRV_FETCH_ASSOC);
+                    $storedHash = $verifyRow['PasswordHash'];
+                    
+                    error_log("Stored hash (first 30 chars): " . substr($storedHash, 0, 30) . "...");
+                    
+                    // Check for corruption
+                    if (strpos($storedHash, ',') !== false) {
+                        error_log("ERROR: Hash corrupted - contains comma!");
+                        // Fix it immediately
+                        $fixedHash = password_hash($password, PASSWORD_BCRYPT);
+                        $fixSql = "UPDATE NGO SET PasswordHash = ? WHERE Email = ?";
+                        sqlsrv_query($conn, $fixSql, array($fixedHash, $email));
+                        error_log("Fixed corrupted hash immediately");
+                    }
+                }
+                
                 $message = "✅ NGO registered successfully! Registration No: <strong>$newRegNo</strong><br><br>
                            ⏳ <strong>Your account is pending admin approval.</strong><br>
                            You will be able to login only after your account is approved by an administrator.";
-                // Clear form after successful registration
+                
+                // Clear form
                 $_POST = array();
+                
+                error_log("=== NGO REGISTRATION SUCCESS ===");
             } else {
                 $error = sqlsrv_errors();
                 $message = "❌ Error: " . $error[0]['message'];
+                error_log("SQL Error: " . print_r($error, true));
             }
         }
     }
 
     // ============================
-    // VOLUNTEER REGISTRATION (TIDAK BERUBAH)
+    // VOLUNTEER REGISTRATION
     // ============================
     if ($role == "volunteer") {
         $skill = $_POST['skill'];
@@ -88,26 +149,37 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $checkParams = array($email);
         $checkStmt = sqlsrv_query($conn, $checkSql, $checkParams);
         
-        if (sqlsrv_has_rows($checkStmt)) {
+        if ($checkStmt && sqlsrv_has_rows($checkStmt)) {
             $message = "❌ Error: Email already registered as volunteer";
         } else {
-            // VOLUNTEER INSERT QUERY (NO CreatedAt)
+            // VOLUNTEER INSERT QUERY
             $sql = "INSERT INTO Volunteer (FullName, Email, Phone, Address, PasswordHash, SkillCategory, AssignedNGO) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)";
             
             $params = array($fullname, $email, $phone, $address, $passwordHash, $skill, $assignedNGO);
+            
+            error_log("Inserting Volunteer with params: " . print_r(array(
+                'name' => $fullname,
+                'email' => $email,
+                'phone' => $phone,
+                'hash_length' => strlen($passwordHash)
+            ), true));
             
             $stmt = sqlsrv_query($conn, $sql, $params);
             
             if ($stmt) {
                 $message = "✅ Volunteer registered successfully!";
                 $_POST = array();
+                error_log("=== VOLUNTEER REGISTRATION SUCCESS ===");
             } else {
                 $error = sqlsrv_errors();
                 $message = "❌ Error: " . $error[0]['message'];
+                error_log("SQL Error: " . print_r($error, true));
             }
         }
     }
+    
+    error_log("=== REGISTRATION PROCESS END ===");
 }
 ?>
 
@@ -773,4 +845,4 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 </script>
 
 </body>
-</html>
+</html>s

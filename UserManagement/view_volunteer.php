@@ -19,28 +19,44 @@ if($conn === false) {
     die(print_r(sqlsrv_errors(), true));
 }
 
-// Query to get all admins
-$sql = "SELECT AdminID, FullName, Email, PasswordHash, Phone, Role, CreatedAt FROM dbo.Admin ORDER BY CreatedAt DESC";
+// Query to get all volunteers with NGO name (JOIN with NGO table)
+$sql = "SELECT v.VolunteerID, v.FullName, v.Email, v.Phone, v.Address, 
+               v.AssignedNGO, v.PasswordHash, v.SkillCategory,
+               n.NGOName
+        FROM dbo.volunteer v
+        LEFT JOIN dbo.NGO n ON v.AssignedNGO = n.NGOID
+        ORDER BY v.VolunteerID DESC";
 $stmt = sqlsrv_query($conn, $sql);
 
 if($stmt === false) {
     die(print_r(sqlsrv_errors(), true));
 }
 
-// Fetch all admin data
-$admins = array();
+// Fetch all volunteer data
+$volunteers = array();
 while($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
-    $admins[] = $row;
+    $volunteers[] = $row;
 }
 
 // Get total count
-$sqlCount = "SELECT COUNT(*) as total FROM dbo.Admin";
+$sqlCount = "SELECT COUNT(*) as total FROM dbo.volunteer";
 $stmtCount = sqlsrv_query($conn, $sqlCount);
 $rowCount = sqlsrv_fetch_array($stmtCount, SQLSRV_FETCH_ASSOC);
-$totalAdmins = $rowCount['total'] ?? 0;
+$totalVolunteers = $rowCount['total'] ?? 0;
+
+// Get volunteers by category count
+$sqlByCategory = "SELECT SkillCategory, COUNT(*) as count 
+                  FROM dbo.volunteer 
+                  GROUP BY SkillCategory";
+$stmtCategory = sqlsrv_query($conn, $sqlByCategory);
+$categoryCounts = array();
+while($row = sqlsrv_fetch_array($stmtCategory, SQLSRV_FETCH_ASSOC)) {
+    $categoryCounts[$row['SkillCategory']] = $row['count'];
+}
 
 sqlsrv_free_stmt($stmt);
 sqlsrv_free_stmt($stmtCount);
+sqlsrv_free_stmt($stmtCategory);
 sqlsrv_close($conn);
 ?>
 
@@ -49,7 +65,7 @@ sqlsrv_close($conn);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Admins - Admin Panel</title>
+    <title>View Volunteers - Admin Panel</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
@@ -547,13 +563,48 @@ sqlsrv_close($conn);
         .stat-total { border-top: 4px solid #3498db; }
         .stat-total .stat-icon { background: rgba(52, 152, 219, 0.1); color: #3498db; }
 
-        .stat-superadmin { border-top: 4px solid #9b59b6; }
-        .stat-superadmin .stat-icon { background: rgba(155, 89, 182, 0.1); color: #9b59b6; }
+        .stat-medical { border-top: 4px solid #e74c3c; }
+        .stat-medical .stat-icon { background: rgba(231, 76, 60, 0.1); color: #e74c3c; }
 
-        .stat-admin { border-top: 4px solid #2ecc71; }
-        .stat-admin .stat-icon { background: rgba(46, 204, 113, 0.1); color: #2ecc71; }
+        .stat-technical { border-top: 4px solid #2ecc71; }
+        .stat-technical .stat-icon { background: rgba(46, 204, 113, 0.1); color: #2ecc71; }
 
-        /* Admin Table Card */
+        .stat-education { border-top: 4px solid #9b59b6; }
+        .stat-education .stat-icon { background: rgba(155, 89, 182, 0.1); color: #9b59b6; }
+
+        /* Badges */
+        .badge-category {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-medical {
+            background: rgba(231, 76, 60, 0.1);
+            color: #e74c3c;
+            border: 1px solid rgba(231, 76, 60, 0.3);
+        }
+        
+        .badge-technical {
+            background: rgba(46, 204, 113, 0.1);
+            color: #2ecc71;
+            border: 1px solid rgba(46, 204, 113, 0.3);
+        }
+        
+        .badge-education {
+            background: rgba(155, 89, 182, 0.1);
+            color: #9b59b6;
+            border: 1px solid rgba(155, 89, 182, 0.3);
+        }
+        
+        .badge-other {
+            background: rgba(52, 152, 219, 0.1);
+            color: #3498db;
+            border: 1px solid rgba(52, 152, 219, 0.3);
+        }
+
+        /* Volunteer Table Card */
         .table-card {
             background: white;
             border-radius: 12px;
@@ -635,13 +686,13 @@ sqlsrv_close($conn);
             font-size: 12px;
         }
 
-        .badge-superadmin {
-            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+        .badge-assigned {
+            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
             color: white;
         }
 
-        .badge-admin {
-            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        .badge-unassigned {
+            background: linear-gradient(135deg, #f39c12 0%, #d35400 100%);
             color: white;
         }
 
@@ -688,6 +739,16 @@ sqlsrv_close($conn);
 
         .btn-delete:hover {
             background: #e74c3c;
+            color: white;
+        }
+
+        .btn-assign {
+            background: rgba(46, 204, 113, 0.1);
+            color: #2ecc71;
+        }
+
+        .btn-assign:hover {
+            background: #2ecc71;
             color: white;
         }
 
@@ -811,7 +872,7 @@ sqlsrv_close($conn);
             <div class="header-controls">
                 <div class="search-box">
                     <i class="fas fa-search"></i>
-                    <input type="text" placeholder="Search...">
+                    <input type="text" placeholder="Search volunteers...">
                 </div>
                 
                 <div class="notifications" id="notificationsBtn">
@@ -851,9 +912,9 @@ sqlsrv_close($conn);
                 <i class="fas fa-user"></i>
                 <span>Profile</span>
             </a>
-            <a href="view_admin.php" class="nav-btn active">
-                <i class="fas fa-users"></i>
-                <span>View Admins</span>
+            <a href="view_volunteers.php" class="nav-btn active">
+                <i class="fas fa-hands-helping"></i>
+                <span>View Volunteers</span>
             </a>
             <a href="admin_manage_ngo.php" class="nav-btn">
                 <i class="fas fa-building"></i>
@@ -909,11 +970,11 @@ sqlsrv_close($conn);
                         <span class="nav-text">Profile</span>
                     </a>
                 </li>
-                
+            
                 <li class="nav-item">
-                    <a href="view_admin.php" class="nav-link active">
-                        <i class="fas fa-users"></i>
-                        <span class="nav-text">View Admins</span>
+                    <a href="view_volunteer.php" class="nav-link active">
+                        <i class="fas fa-hands-helping"></i>
+                        <span class="nav-text">View Volunteer</span>
                     </a>
                 </li>
                 
@@ -994,12 +1055,12 @@ sqlsrv_close($conn);
         <!-- Page Header -->
         <div class="page-header">
             <div>
-                <h2><i class="fas fa-users-cog"></i> Admin Management</h2>
-                <p>View and manage all system administrators</p>
+                <h2><i class="fas fa-hands-helping"></i> Volunteer Management</h2>
+                <p>View and manage all volunteers and their assigned NGOs</p>
             </div>
             <div>
-                <a href="add_admin.php" class="btn btn-primary">
-                    <i class="fas fa-plus me-2"></i> Add New Admin
+                <a href="add_volunteer.php" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i> Add New Volunteer
                 </a>
             </div>
         </div>
@@ -1010,55 +1071,43 @@ sqlsrv_close($conn);
                 <div class="stat-icon">
                     <i class="fas fa-users"></i>
                 </div>
-                <div class="stat-number"><?php echo $totalAdmins; ?></div>
-                <div class="stat-label">Total Admins</div>
+                <div class="stat-number"><?php echo $totalVolunteers; ?></div>
+                <div class="stat-label">Total Volunteers</div>
             </div>
             
-            <?php 
-            $superAdminCount = 0;
-            $adminCount = 0;
-            foreach($admins as $admin) {
-                if($admin['Role'] == 'SuperAdmin') {
-                    $superAdminCount++;
-                } else {
-                    $adminCount++;
-                }
-            }
-            ?>
-            
-            <div class="stat-card stat-superadmin">
+            <div class="stat-card stat-medical">
                 <div class="stat-icon">
-                    <i class="fas fa-crown"></i>
+                    <i class="fas fa-stethoscope"></i>
                 </div>
-                <div class="stat-number"><?php echo $superAdminCount; ?></div>
-                <div class="stat-label">Super Admins</div>
+                <div class="stat-number"><?php echo $categoryCounts['Medical'] ?? 0; ?></div>
+                <div class="stat-label">Medical Volunteers</div>
             </div>
             
-            <div class="stat-card stat-admin">
+            <div class="stat-card stat-technical">
                 <div class="stat-icon">
-                    <i class="fas fa-user-shield"></i>
+                    <i class="fas fa-tools"></i>
                 </div>
-                <div class="stat-number"><?php echo $adminCount; ?></div>
-                <div class="stat-label">Regular Admins</div>
+                <div class="stat-number"><?php echo $categoryCounts['Technical'] ?? 0; ?></div>
+                <div class="stat-label">Technical Volunteers</div>
             </div>
             
-            <div class="stat-card">
-                <div class="stat-icon" style="background: rgba(243, 156, 18, 0.1); color: #f39c12;">
-                    <i class="fas fa-clock"></i>
+            <div class="stat-card stat-education">
+                <div class="stat-icon">
+                    <i class="fas fa-graduation-cap"></i>
                 </div>
-                <div class="stat-number">Today</div>
-                <div class="stat-label"><?php echo date('M d, Y'); ?></div>
+                <div class="stat-number"><?php echo $categoryCounts['Education'] ?? 0; ?></div>
+                <div class="stat-label">Education Volunteers</div>
             </div>
         </div>
 
-        <!-- Admin Table Card -->
+        <!-- Volunteer Table Card -->
         <div class="table-card">
             <div class="card-header">
-                <h5><i class="fas fa-list"></i> Admin List</h5>
+                <h5><i class="fas fa-list"></i> Volunteer List</h5>
                 <div class="d-flex align-items-center gap-3">
                     <span class="badge badge-warning">
                         <i class="fas fa-exclamation-triangle me-1"></i>
-                        Total: <?php echo count($admins); ?> records
+                        Total: <?php echo count($volunteers); ?> records
                     </span>
                 </div>
             </div>
@@ -1069,104 +1118,126 @@ sqlsrv_close($conn);
                         <tr>
                             <th>ID</th>
                             <th>Name</th>
-                            <th>Email</th>
-                            <th>Phone</th>
-                            <th>Role</th>
-                            <th>Created</th>
-                            <th>Actions</th>
+                            <th>Contact</th>
+                            <th>Address</th>
+                            <th>Skills</th>
+                            <th>Assigned NGO</th>
+                            <th>Status</th>
+                           
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if(empty($admins)): ?>
+                        <?php if(empty($volunteers)): ?>
                             <tr>
-                                <td colspan="7" class="text-center py-4">
+                                <td colspan="8" class="text-center py-4">
                                     <div class="empty-state">
                                         <i class="fas fa-user-slash"></i>
-                                        <h5>No Admins Found</h5>
-                                        <p>Start by adding a new admin</p>
-                                        <a href="add_admin.php" class="btn btn-primary mt-2">
-                                            <i class="fas fa-plus me-2"></i> Add First Admin
+                                        <h5>No Volunteers Found</h5>
+                                        <p>Start by adding a new volunteer</p>
+                                        <a href="add_volunteer.php" class="btn btn-primary mt-2">
+                                            <i class="fas fa-plus me-2"></i> Add First Volunteer
                                         </a>
                                     </div>
                                 </td>
                             </tr>
                         <?php else: ?>
-                            <?php foreach($admins as $admin): ?>
+                            <?php foreach($volunteers as $volunteer): ?>
                             <tr>
                                 <td>
-                                    <strong class="text-primary">#<?php echo $admin['AdminID']; ?></strong>
+                                    <strong class="text-primary">#<?php echo $volunteer['VolunteerID']; ?></strong>
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-2">
                                         <div class="user-avatar-sm">
-                                            <?php echo strtoupper(substr($admin['FullName'], 0, 1)); ?>
+                                            <?php echo strtoupper(substr($volunteer['FullName'], 0, 1)); ?>
                                         </div>
                                         <div>
-                                            <div class="fw-semibold"><?php echo htmlspecialchars($admin['FullName']); ?></div>
-                                            <small class="text-muted" title="Password Hash">
-                                                <?php 
-                                                $password = $admin['PasswordHash'];
-                                                echo strlen($password) > 15 ? substr($password, 0, 15).'...' : $password;
-                                                ?>
+                                            <div class="fw-semibold"><?php echo htmlspecialchars($volunteer['FullName']); ?></div>
+                                            <small class="text-muted">
+                                                <?php echo htmlspecialchars($volunteer['Email']); ?>
                                             </small>
                                         </div>
                                     </div>
                                 </td>
                                 <td>
-                                    <div class="d-flex align-items-center">
-                                        <i class="fas fa-envelope text-muted me-2"></i>
-                                        <?php echo htmlspecialchars($admin['Email']); ?>
+                                    <div class="d-flex flex-column">
+                                        <div>
+                                            <i class="fas fa-envelope text-muted me-2"></i>
+                                            <?php echo htmlspecialchars($volunteer['Email']); ?>
+                                        </div>
+                                        <?php if($volunteer['Phone']): ?>
+                                        <div class="mt-1">
+                                            <i class="fas fa-phone text-muted me-2"></i>
+                                            <?php echo htmlspecialchars($volunteer['Phone']); ?>
+                                        </div>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <?php if($admin['Phone']): ?>
-                                        <div class="d-flex align-items-center">
-                                            <i class="fas fa-phone text-muted me-2"></i>
-                                            <?php echo htmlspecialchars($admin['Phone']); ?>
-                                        </div>
+                                    <div class="text-muted small">
+                                        <?php echo htmlspecialchars($volunteer['Address']); ?>
+                                    </div>
+                                </td>
+                                <td>
+                                    <?php if($volunteer['SkillCategory']): 
+                                        $badgeClass = '';
+                                        $category = $volunteer['SkillCategory'];
+                                        
+                                        if(strpos(strtolower($category), 'medic') !== false) {
+                                            $badgeClass = 'badge-medical';
+                                            $icon = 'fa-stethoscope';
+                                        } elseif(strpos(strtolower($category), 'tech') !== false) {
+                                            $badgeClass = 'badge-technical';
+                                            $icon = 'fa-tools';
+                                        } elseif(strpos(strtolower($category), 'edu') !== false) {
+                                            $badgeClass = 'badge-education';
+                                            $icon = 'fa-graduation-cap';
+                                        } else {
+                                            $badgeClass = 'badge-other';
+                                            $icon = 'fa-star';
+                                        }
+                                    ?>
+                                        <span class="badge-category <?php echo $badgeClass; ?>">
+                                            <i class="fas <?php echo $icon; ?> me-1"></i>
+                                            <?php echo htmlspecialchars($volunteer['SkillCategory']); ?>
+                                        </span>
                                     <?php else: ?>
-                                        <span class="text-muted">-</span>
+                                        <span class="text-muted">Not specified</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php 
-                                    $badgeClass = ($admin['Role'] == 'SuperAdmin') ? 'badge-superadmin' : 'badge-admin';
-                                    ?>
-                                    <span class="badge <?php echo $badgeClass; ?>">
-                                        <i class="fas fa-<?php echo $admin['Role'] == 'SuperAdmin' ? 'crown' : 'user-shield'; ?> me-1"></i>
-                                        <?php echo htmlspecialchars($admin['Role']); ?>
-                                    </span>
+                                    <?php if($volunteer['AssignedNGO'] && $volunteer['NGOName']): ?>
+                                        <div class="fw-semibold">
+                                            <i class="fas fa-building text-primary me-1"></i>
+                                            <?php echo htmlspecialchars($volunteer['NGOName']); ?>
+                                        </div>
+                                        <small class="text-muted">
+                                            ID: <?php echo $volunteer['AssignedNGO']; ?>
+                                        </small>
+                                    <?php elseif($volunteer['AssignedNGO']): ?>
+                                        <div class="text-warning">
+                                            <i class="fas fa-building me-1"></i>
+                                            NGO ID: <?php echo $volunteer['AssignedNGO']; ?>
+                                        </div>
+                                        <small class="text-muted">(Name not found)</small>
+                                    <?php else: ?>
+                                        <span class="text-muted">Not assigned</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="text-muted">
-                                        <?php 
-                                        if($admin['CreatedAt'] instanceof DateTime) {
-                                            $date = $admin['CreatedAt']->format('Y-m-d');
-                                            $time = $admin['CreatedAt']->format('H:i');
-                                        } else {
-                                            $date = date('Y-m-d', strtotime($admin['CreatedAt']));
-                                            $time = date('H:i', strtotime($admin['CreatedAt']));
-                                        }
-                                        ?>
-                                        <div class="small"><?php echo $date; ?></div>
-                                        <div class="small"><?php echo $time; ?></div>
-                                    </div>
+                                    <?php if($volunteer['AssignedNGO']): ?>
+                                        <span class="badge badge-assigned">
+                                            <i class="fas fa-check-circle me-1"></i>
+                                            Assigned
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="badge badge-unassigned">
+                                            <i class="fas fa-clock me-1"></i>
+                                            Unassigned
+                                        </span>
+                                    <?php endif; ?>
                                 </td>
-                                <td>
-                                    <div class="action-buttons">
-                                        <a href="edit_admin.php?id=<?php echo $admin['AdminID']; ?>" 
-                                           class="btn-action btn-edit" 
-                                           title="Edit Admin">
-                                            <i class="fas fa-edit"></i>
-                                        </a>
-                                        <button class="btn-action btn-delete delete-btn" 
-                                                data-id="<?php echo $admin['AdminID']; ?>"
-                                                data-name="<?php echo htmlspecialchars($admin['FullName']); ?>"
-                                                title="Delete Admin">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </td>
+                            
                             </tr>
                             <?php endforeach; ?>
                         <?php endif; ?>
@@ -1234,14 +1305,14 @@ sqlsrv_close($conn);
             button.addEventListener('click', function(e) {
                 e.preventDefault();
                 
-                const adminId = this.getAttribute('data-id');
-                const adminName = this.getAttribute('data-name');
+                const volunteerId = this.getAttribute('data-id');
+                const volunteerName = this.getAttribute('data-name');
                 
                 Swal.fire({
-                    title: 'Delete Admin?',
+                    title: 'Delete Volunteer?',
                     html: `<div style="text-align: center;">
                               <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
-                              <p>Are you sure you want to delete admin <strong>"${adminName}"</strong>?</p>
+                              <p>Are you sure you want to delete volunteer <strong>"${volunteerName}"</strong>?</p>
                               <div class="alert alert-warning mt-2 mb-0">
                                   <i class="fas fa-exclamation-circle me-2"></i>
                                   This action cannot be undone.
@@ -1272,7 +1343,7 @@ sqlsrv_close($conn);
                         // Show loading
                         Swal.fire({
                             title: 'Deleting...',
-                            text: 'Please wait while we delete the admin',
+                            text: 'Please wait while we delete the volunteer',
                             allowOutsideClick: false,
                             didOpen: () => {
                                 Swal.showLoading();
@@ -1280,7 +1351,7 @@ sqlsrv_close($conn);
                         });
                         
                         // Redirect to delete script
-                        window.location.href = `delete_admin.php?id=${adminId}`;
+                        window.location.href = `delete_volunteer.php?id=${volunteerId}`;
                     }
                 });
             });
@@ -1294,7 +1365,7 @@ sqlsrv_close($conn);
             if(deleteStatus === 'success') {
                 Swal.fire({
                     title: 'Success!',
-                    text: 'Admin has been deleted successfully.',
+                    text: 'Volunteer has been deleted successfully.',
                     icon: 'success',
                     confirmButtonColor: '#3085d6',
                     timer: 3000,
@@ -1308,7 +1379,7 @@ sqlsrv_close($conn);
             } else if(deleteStatus === 'error') {
                 Swal.fire({
                     title: 'Error!',
-                    text: 'Failed to delete admin. Please try again.',
+                    text: 'Failed to delete volunteer. Please try again.',
                     icon: 'error',
                     confirmButtonColor: '#d33'
                 }).then(() => {
