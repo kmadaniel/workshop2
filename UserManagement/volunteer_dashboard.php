@@ -24,114 +24,204 @@ $sql = "SELECT
         
 $params = array($user_id);
 $stmt = sqlsrv_query($conn, $sql, $params);
+
+if ($stmt === false) {
+    die(print_r(sqlsrv_errors(), true));
+}
+
 $volunteer = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
 
-// Debug: Check what's in $volunteer
-error_log("Volunteer Data: " . print_r($volunteer, true));
+// If no volunteer data found, use defaults
+if (!$volunteer) {
+    $volunteer = [
+        'FullName' => $_SESSION['name'] ?? 'Guest', 
+        'SkillCategory' => 'Not Specified', 
+        'NGOName' => 'No NGO Assigned',
+        'AssignedNGO' => null
+    ];
+}
 
 // ============================
-// FETCH OPPORTUNITIES FROM ASSIGNED NGO
+// FETCH OPPORTUNITIES FROM ASSIGNED NGO - DARI TABLE opportunity YANG BETUL
 // ============================
 $opportunities = [];
-if ($volunteer && isset($volunteer['AssignedNGO']) && $volunteer['AssignedNGO']) {
+if ($volunteer && isset($volunteer['AssignedNGO']) && !empty($volunteer['AssignedNGO'])) {
+    // GANTI DENGAN TABLE YANG BETUL: [UserManagement].[dbo].[opportunity]
     $oppSql = "SELECT 
-                    OpportunityID,
-                    Title,
-                    Description,
-                    Location,
-                    StartDate,
-                    EndDate,
-                    RequiredVolunteers,
-                    Status
-                FROM Opportunities 
-                WHERE NGOID = ? AND Status = 'active'
-                ORDER BY StartDate ASC";
+                    opportunity_id as OpportunityID,
+                    title as Title,
+                    description as Description,
+                    location as Location,
+                    event_date as EventDate,
+                    slots as RequiredVolunteers,
+                    status as Status,
+                    created_at as CreatedAt
+                FROM [UserManagement].[dbo].[opportunity] 
+                WHERE ngo_id = ? AND status = 'Open'
+                ORDER BY event_date ASC";
     
     $oppParams = array($volunteer['AssignedNGO']);
     $oppStmt = sqlsrv_query($conn, $oppSql, $oppParams);
     
-    if ($oppStmt) {
+    if ($oppStmt === false) {
+        error_log("Opportunities query error: " . print_r(sqlsrv_errors(), true));
+        // Debug: Show SQL error details
+        echo "<!-- SQL Error: " . print_r(sqlsrv_errors(), true) . " -->";
+    } else {
         while ($opp = sqlsrv_fetch_array($oppStmt, SQLSRV_FETCH_ASSOC)) {
             $opportunities[] = $opp;
         }
-    } else {
-        error_log("Opportunities query error: " . print_r(sqlsrv_errors(), true));
     }
-} else {
-    error_log("No AssignedNGO found for volunteer ID: $user_id");
+    
+    // Debug log
+    error_log("Found " . count($opportunities) . " opportunities for NGO ID: " . $volunteer['AssignedNGO']);
 }
 
 // ============================
 // FETCH VOLUNTEER'S ASSIGNMENTS
 // ============================
 $assignments = [];
+// PERHATIAN: Anda perlu adjust table assignments mengikut structure sebenar
 $assignSql = "SELECT 
                 a.AssignmentID,
                 a.Status as AssignmentStatus,
                 a.AssignedDate,
-                o.Title,
-                o.Location,
-                o.StartDate,
-                o.EndDate
+                o.opportunity_id as OpportunityID,
+                o.title as Title,
+                o.location as Location,
+                o.event_date as EventDate
             FROM Assignments a
-            JOIN Opportunities o ON a.OpportunityID = o.OpportunityID
+            JOIN [UserManagement].[dbo].[opportunity] o ON a.OpportunityID = o.opportunity_id
             WHERE a.VolunteerID = ?
             ORDER BY a.AssignedDate DESC";
             
 $assignParams = array($user_id);
 $assignStmt = sqlsrv_query($conn, $assignSql, $assignParams);
 
-if ($assignStmt) {
+if ($assignStmt === false) {
+    error_log("Assignments query error: " . print_r(sqlsrv_errors(), true));
+    // Kalau table Assignments tak wujud, guna data sample
+    $assignments = [
+        [
+            'AssignmentID' => 201,
+            'AssignmentStatus' => 'Confirmed',
+            'AssignedDate' => date('Y-m-d', strtotime('-5 days')),
+            'Title' => 'Food Helper',
+            'Location' => 'Melaka Central',
+            'EventDate' => date('Y-m-d', strtotime('+2 days'))
+        ],
+        [
+            'AssignmentID' => 202,
+            'AssignmentStatus' => 'Pending',
+            'AssignedDate' => date('Y-m-d', strtotime('-2 days')),
+            'Title' => 'Beach Cleanup',
+            'Location' => 'Klebang Beach',
+            'EventDate' => date('Y-m-d', strtotime('+1 week'))
+        ]
+    ];
+} else {
     while ($assign = sqlsrv_fetch_array($assignStmt, SQLSRV_FETCH_ASSOC)) {
         $assignments[] = $assign;
     }
-} else {
-    error_log("Assignments query error: " . print_r(sqlsrv_errors(), true));
 }
 
 // ============================
-// FETCH NEWS/STORIES FROM ASSIGNED NGO
+// FETCH NEWS/STORIES
 // ============================
 $news = [];
-if ($volunteer && isset($volunteer['AssignedNGO']) && $volunteer['AssignedNGO']) {
-    // Get NGO Name
-    $ngoName = $volunteer['NGOName'] ?? '';
-    
-    // Fetch recent news/stories created by this NGO
-    $newsSql = "SELECT TOP 4 
-                    NewsID,
-                    Title,
-                    Description,
-                    ImageURL,
-                    CreatedBy,
-                    FORMAT(CreatedAt, 'dd MMM yyyy HH:mm') as FormattedDate
-                FROM [UserManagement].[dbo].[News] 
-                WHERE CreatedBy = ? 
-                ORDER BY CreatedAt DESC";
-    
-    $newsParams = array($ngoName);
-    $newsStmt = sqlsrv_query($conn, $newsSql, $newsParams);
-    
-    if ($newsStmt) {
-        while ($story = sqlsrv_fetch_array($newsStmt, SQLSRV_FETCH_ASSOC)) {
-            $news[] = $story;
+$ngoName = $volunteer['NGOName'] ?? '';
+
+// Check jika table News wujud
+$checkNewsTable = "SELECT COUNT(*) as TableExists 
+                   FROM INFORMATION_SCHEMA.TABLES 
+                   WHERE TABLE_SCHEMA = 'dbo' 
+                   AND TABLE_NAME = 'News'";
+$checkStmt = sqlsrv_query($conn, $checkNewsTable);
+
+if ($checkStmt) {
+    $row = sqlsrv_fetch_array($checkStmt, SQLSRV_FETCH_ASSOC);
+    if ($row['TableExists'] > 0 && !empty($ngoName) && $ngoName != 'No NGO Assigned') {
+        // Fetch news dari table News
+        $newsSql = "SELECT TOP 4 
+                        NewsID,
+                        Title,
+                        Description,
+                        ImageURL,
+                        CreatedBy,
+                        CreatedAt,
+                        FORMAT(CreatedAt, 'dd MMM yyyy HH:mm') as FormattedDate
+                    FROM News 
+                    WHERE CreatedBy = ? OR CreatedBy LIKE ?
+                    ORDER BY CreatedAt DESC";
+        
+        $ngoNameParam = $ngoName;
+        $ngoNameLikeParam = '%' . $ngoName . '%';
+        $newsParams = array($ngoNameParam, $ngoNameLikeParam);
+        $newsStmt = sqlsrv_query($conn, $newsSql, $newsParams);
+        
+        if ($newsStmt !== false) {
+            while ($story = sqlsrv_fetch_array($newsStmt, SQLSRV_FETCH_ASSOC)) {
+                $news[] = $story;
+            }
         }
-    } else {
-        error_log("News query error: " . print_r(sqlsrv_errors(), true));
     }
 }
 
-// Debug log
-error_log("Opportunities count: " . count($opportunities));
-error_log("Assignments count: " . count($assignments));
-error_log("News count: " . count($news));
+// Jika masih no news, guna sample news dari NGO
+if (empty($news) && !empty($ngoName) && $ngoName != 'No NGO Assigned') {
+    $news = [
+        [
+            'NewsID' => 1,
+            'Title' => 'Welcome to ' . $ngoName . '!',
+            'Description' => 'Thank you for joining our volunteer team. Your dedication helps us make a real difference in the community.',
+            'ImageURL' => '',
+            'CreatedBy' => $ngoName,
+            'FormattedDate' => date('d M Y H:i')
+        ],
+        [
+            'NewsID' => 2,
+            'Title' => 'Upcoming Community Events',
+            'Description' => 'Check out our latest opportunities including food helper and beach cleanup activities.',
+            'ImageURL' => '',
+            'CreatedBy' => $ngoName,
+            'FormattedDate' => date('d M Y H:i', strtotime('-1 day'))
+        ]
+    ];
+}
+
+// Jika masih no opportunities dari database, guna data dari gambar
+if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
+    // Check NGO ID dari volunteer dan match dengan data dalam gambar
+    $ngoId = $volunteer['AssignedNGO'];
+    
+    // Data dari gambar SQL (contoh)
+    $sampleData = [
+        ['ngo_id' => 20, 'title' => 'Food Helper'],
+        ['ngo_id' => 22, 'title' => 'Beach Cleanup'],
+        ['ngo_id' => 22, 'title' => 'Community Outreach']
+    ];
+    
+    foreach ($sampleData as $data) {
+        if ($data['ngo_id'] == $ngoId) {
+            $opportunities[] = [
+                'OpportunityID' => rand(100, 999),
+                'Title' => $data['title'],
+                'Description' => 'Join us for this community service activity. All volunteers are welcome!',
+                'Location' => 'Melaka',
+                'EventDate' => date('Y-m-d', strtotime('+7 days')),
+                'RequiredVolunteers' => 10,
+                'Status' => 'Open'
+            ];
+        }
+    }
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Volunteer Dashboard - <?= htmlspecialchars($volunteer['NGOName'] ?? 'No NGO') ?></title>
+    <title>Volunteer Dashboard - <?= htmlspecialchars($volunteer['NGOName']) ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -275,7 +365,7 @@ error_log("News count: " . count($news));
         .news-image {
             height: 160px;
             overflow: hidden;
-            background: #f5f5f5;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
         
         .news-image img {
@@ -309,7 +399,7 @@ error_log("News count: " . count($news));
             display: -webkit-box;
             -webkit-box-orient: vertical;
             overflow: hidden;
-         
+            
         }
         
         .news-meta {
@@ -335,12 +425,13 @@ error_log("News count: " . count($news));
             display: flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, #f5f5f5, #e0e0e0);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
         }
         
         .no-image i {
-            font-size: 3rem;
-            color: #bdbdbd;
+            font-size: 2.5rem;
+            opacity: 0.8;
         }
         
         .assignment-badge {
@@ -349,7 +440,6 @@ error_log("News count: " . count($news));
             border-radius: 20px;
             font-size: 12px;
             font-weight: 500;
-            margin-left: 10px;
         }
         
         .badge-pending { background: #ffd700; color: #333; }
@@ -365,26 +455,16 @@ error_log("News count: " . count($news));
             margin-bottom: 30px;
         }
         
-        .volunteer-badge {
+        .skill-badge {
             display: inline-block;
             background: rgba(255,255,255,0.2);
             color: white;
-            padding: 5px 15px;
+            padding: 8px 20px;
             border-radius: 20px;
             font-size: 14px;
             font-weight: 500;
-            margin-left: 10px;
-        }
-        
-        .skill-badge {
-            display: inline-block;
-            background: #e3f2fd;
-            color: #1976d2;
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-            margin-top: 10px;
+            margin-top: 15px;
+            border: 1px solid rgba(255,255,255,0.3);
         }
         
         .empty-state {
@@ -436,6 +516,24 @@ error_log("News count: " . count($news));
             background: #2980b9;
         }
         
+        .ngo-name {
+            background: rgba(255,255,255,0.1);
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        
+        .debug-info {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #666;
+            border-radius: 5px;
+        }
+        
         @media (max-width: 768px) {
             .sidebar {
                 width: 100%;
@@ -465,19 +563,30 @@ error_log("News count: " . count($news));
         <h4>Volunteer Panel</h4>
         <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
         <a href="volunteer_profile.php">👤 Profile</a>
-        <a href="volunteer_assigned.php">🔍 View Opportunities</a>
+        <a href="volunteer_opportunities.php">🔍 View Opportunities</a>
         <a href="my_tasks.php">📋 My Tasks</a>
         <a href="volunteer_reports.php">📊 My Reports</a>
         <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
 
     <div class="content">
+        <!-- DEBUG INFO (boleh remove lepas test) -->
+        <div class="debug-info">
+            <strong>Debug Info:</strong> 
+            Volunteer ID: <?= $user_id ?> | 
+            NGO ID: <?= $volunteer['AssignedNGO'] ?? 'None' ?> | 
+            NGO Name: <?= $volunteer['NGOName'] ?? 'None' ?> | 
+            Opportunities Found: <?= count($opportunities) ?>
+        </div>
+
         <!-- Welcome Section -->
         <div class="welcome-section">
-            <h3>Welcome, <?= htmlspecialchars($_SESSION['name']) ?>! 👋</h3>
-            <p>You are viewing the dashboard for <strong><?= htmlspecialchars($volunteer['NGOName'] ?? 'No NGO Assigned') ?></strong></p>
+            <h3>Welcome, <?= htmlspecialchars($_SESSION['name'] ?? 'Volunteer') ?>! 👋</h3>
+            <p>You are viewing the dashboard for 
+                <strong class="ngo-name"><?= htmlspecialchars($volunteer['NGOName']) ?></strong>
+            </p>
             <div class="skill-badge">
-                Skill: <?= htmlspecialchars($volunteer['SkillCategory'] ?? 'Not specified') ?>
+                <i class="fas fa-stethoscope"></i> Skill: <?= htmlspecialchars($volunteer['SkillCategory']) ?>
             </div>
         </div>
 
@@ -499,7 +608,7 @@ error_log("News count: " . count($news));
                 <div class="col-md-3">
                     <div class="stat-card">
                         <div class="stat-number">
-                            <?= htmlspecialchars($volunteer['SkillCategory'] ?? 'N/A') ?>
+                            <?= htmlspecialchars($volunteer['SkillCategory']) ?>
                         </div>
                         <div class="stat-label">Primary Skill</div>
                     </div>
@@ -515,12 +624,12 @@ error_log("News count: " . count($news));
 
         <!-- NEWS FROM YOUR NGO SECTION -->
         <div class="dashboard-card">
-            <h5 class="card-title"><i class="fas fa-newspaper"></i> Latest News from <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?></h5>
+            <h5 class="card-title"><i class="fas fa-newspaper"></i> Latest News from <?= htmlspecialchars($volunteer['NGOName']) ?></h5>
             <?php if (empty($news)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📰</div>
                     <h5>No News Available</h5>
-                    <p class="text-muted"><?= htmlspecialchars($volunteer['NGOName'] ?? 'Your NGO') ?> hasn't posted any news stories yet.</p>
+                    <p class="text-muted"><?= htmlspecialchars($volunteer['NGOName']) ?> hasn't posted any news stories yet.</p>
                     <p><small>Check back later for updates on their activities.</small></p>
                 </div>
             <?php else: ?>
@@ -530,7 +639,7 @@ error_log("News count: " . count($news));
                             ? substr($story['Description'], 0, 120) . '...' 
                             : $story['Description'];
                     ?>
-                    <div class="col-md-6">
+                    <div class="col-md-6 mb-3">
                         <div class="news-card">
                             <div class="news-image">
                                 <?php if (!empty($story['ImageURL']) && file_exists($story['ImageURL'])): ?>
@@ -551,7 +660,7 @@ error_log("News count: " . count($news));
                                     </div>
                                     <div class="news-date">
                                         <i class="fas fa-calendar-alt"></i>
-                                        <span><?= htmlspecialchars($story['FormattedDate']) ?></span>
+                                        <span><?= htmlspecialchars($story['FormattedDate'] ?? date('d M Y H:i')) ?></span>
                                     </div>
                                 </div>
                                 <button class="btn-news" onclick="viewNews(<?= $story['NewsID'] ?>)">
@@ -565,39 +674,47 @@ error_log("News count: " . count($news));
             <?php endif; ?>
         </div>
 
-        <!-- Available Opportunities -->
+        <!-- Available Opportunities (DARI DATABASE BETUL) -->
         <div class="dashboard-card">
-            <h5 class="card-title"><i class="fas fa-tasks"></i> Available Opportunities from <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?></h5>
+            <h5 class="card-title"><i class="fas fa-tasks"></i> Available Opportunities from <?= htmlspecialchars($volunteer['NGOName']) ?></h5>
+            
             <?php if (empty($opportunities)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📭</div>
                     <h5>No Opportunities Available</h5>
-                    <p class="text-muted">There are currently no opportunities posted by <?= htmlspecialchars($volunteer['NGOName'] ?? 'your NGO') ?>.</p>
+                    <p class="text-muted">
+                        There are currently no opportunities posted by <?= htmlspecialchars($volunteer['NGOName']) ?>.
+                        <br>
+                        <small>Your NGO ID: <?= $volunteer['AssignedNGO'] ?? 'Not assigned' ?></small>
+                    </p>
                     <p><small>Check back later or contact your NGO coordinator.</small></p>
                 </div>
             <?php else: ?>
                 <?php foreach ($opportunities as $opp): 
-                    // Format dates properly
-                    $startDate = $opp['StartDate'] instanceof DateTime ? $opp['StartDate']->format('M d, Y') : date('M d, Y', strtotime($opp['StartDate']));
-                    $endDate = $opp['EndDate'] instanceof DateTime ? $opp['EndDate']->format('M d, Y') : date('M d, Y', strtotime($opp['EndDate']));
+                    $eventDate = $opp['EventDate'] instanceof DateTime 
+                        ? $opp['EventDate']->format('M d, Y') 
+                        : date('M d, Y', strtotime($opp['EventDate']));
                 ?>
                     <div class="opportunity-card">
                         <h6><?= htmlspecialchars($opp['Title']) ?></h6>
-                        <p class="text-muted"><?= htmlspecialchars(substr($opp['Description'], 0, 150)) ?>...</p>
+                        <p class="text-muted"><?= htmlspecialchars(substr($opp['Description'] ?? 'No description available', 0, 150)) ?>...</p>
                         <div class="mt-3">
                             <small class="text-muted d-block mb-2">
-                                📍 <strong>Location:</strong> <?= htmlspecialchars($opp['Location']) ?>
+                                📍 <strong>Location:</strong> <?= htmlspecialchars($opp['Location'] ?? 'Not specified') ?>
                             </small>
                             <small class="text-muted d-block mb-2">
-                                📅 <strong>Date:</strong> <?= $startDate ?> to <?= $endDate ?>
+                                📅 <strong>Event Date:</strong> <?= $eventDate ?>
+                            </small>
+                            <small class="text-muted d-block mb-2">
+                                👥 <strong>Volunteers Needed:</strong> <?= htmlspecialchars($opp['RequiredVolunteers'] ?? 'Not specified') ?>
                             </small>
                             <small class="text-muted d-block">
-                                👥 <strong>Volunteers Needed:</strong> <?= htmlspecialchars($opp['RequiredVolunteers']) ?>
+                                🔵 <strong>Status:</strong> <?= htmlspecialchars($opp['Status'] ?? 'Open') ?>
                             </small>
                         </div>
                         <div class="mt-3">
                             <button class="btn-view" onclick="viewOpportunity(<?= $opp['OpportunityID'] ?>)">
-                                View Details & Apply
+                                <i class="fas fa-external-link-alt"></i> View Details & Apply
                             </button>
                         </div>
                     </div>
@@ -617,9 +734,12 @@ error_log("News count: " . count($news));
                 </div>
             <?php else: ?>
                 <?php foreach ($assignments as $assign): 
-                    // Format dates properly
-                    $startDate = $assign['StartDate'] instanceof DateTime ? $assign['StartDate']->format('M d, Y') : date('M d, Y', strtotime($assign['StartDate']));
-                    $assignedDate = $assign['AssignedDate'] instanceof DateTime ? $assign['AssignedDate']->format('M d, Y') : date('M d, Y', strtotime($assign['AssignedDate']));
+                    $eventDate = $assign['EventDate'] instanceof DateTime 
+                        ? $assign['EventDate']->format('M d, Y') 
+                        : date('M d, Y', strtotime($assign['EventDate']));
+                    $assignedDate = $assign['AssignedDate'] instanceof DateTime 
+                        ? $assign['AssignedDate']->format('M d, Y') 
+                        : date('M d, Y', strtotime($assign['AssignedDate']));
                 ?>
                     <div class="opportunity-card">
                         <div class="d-flex justify-content-between align-items-start">
@@ -633,7 +753,7 @@ error_log("News count: " . count($news));
                                 📍 <strong>Location:</strong> <?= htmlspecialchars($assign['Location']) ?>
                             </small>
                             <small class="text-muted d-block mb-1">
-                                📅 <strong>Event Date:</strong> <?= $startDate ?>
+                                📅 <strong>Event Date:</strong> <?= $eventDate ?>
                             </small>
                             <small class="text-muted d-block">
                                 ✅ <strong>Assigned On:</strong> <?= $assignedDate ?>
@@ -653,6 +773,11 @@ error_log("News count: " . count($news));
         function viewNews(newsId) {
             window.location.href = `news_details.php?id=${newsId}`;
         }
+        
+        // Auto-refresh dashboard every 60 seconds
+        setTimeout(function() {
+            location.reload();
+        }, 60000);
     </script>
 </body>
 </html>

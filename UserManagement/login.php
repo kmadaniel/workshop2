@@ -14,9 +14,14 @@ require_once "connection.php";
 $message = "";
 $debug_info = "";
 
+// Check if we're coming from a system choice
+$system_choice = $_GET['system'] ?? $_POST['system'] ?? '';
+$return_to = $_GET['return_to'] ?? '';
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $email = trim($_POST['email']);
     $password = $_POST['password'];
+    $system_choice = $_POST['system'] ?? $system_choice;
 
     if (empty($email) || empty($password)) {
         $message = "Please enter both email and password.";
@@ -26,6 +31,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $debug_info .= "=== LOGIN ATTEMPT ===\n";
         $debug_info .= "Email: " . $email . "\n";
         $debug_info .= "Password length: " . strlen($password) . "\n";
+        $debug_info .= "System choice: " . $system_choice . "\n";
         
         // --- CHECK ADMIN TABLE ---
         $sql = "SELECT AdminID AS ID, FullName, Email, PasswordHash, 'admin' AS Role
@@ -250,7 +256,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     $_SESSION["email"] = $row["Email"];
                     $_SESSION["role"] = "volunteer";
                     $debug_info .= "Volunteer login SUCCESS\n";
-                    header("Location: volunteer_dashboard.php");
+                    
+                    // ============================================================
+                    // MODIFIED: Check which system to redirect to
+                    // ============================================================
+                    if ($system_choice === 'distribution') {
+                        // Redirect to YOUR distribution system
+                        header("Location: http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $row["ID"]);
+                    } else {
+                        // Default: Redirect to original volunteer dashboard
+                        header("Location: volunteer_dashboard.php");
+                    }
                     exit;
                 }
             } else {
@@ -266,7 +282,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
                     
                     $debug_info .= "Volunteer login SUCCESS (plain text, upgraded to bcrypt)\n";
-                    header("Location: volunteer_dashboard.php");
+                    
+                    // ============================================================
+                    // MODIFIED: Check which system to redirect to
+                    // ============================================================
+                    if ($system_choice === 'distribution') {
+                        // Redirect to YOUR distribution system
+                        header("Location: http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $row["ID"]);
+                    } else {
+                        // Default: Redirect to original volunteer dashboard
+                        header("Location: volunteer_dashboard.php");
+                    }
                     exit;
                 }
             }
@@ -309,7 +335,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         
         .container {
             width: 100%;
-            max-width: 400px;
+            max-width: 450px;
             background: rgba(255, 255, 255, 0.95);
             padding: 40px 30px;
             border-radius: 20px;
@@ -321,9 +347,69 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         h2 {
             text-align: center;
             color: #333;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             font-size: 28px;
             font-weight: 600;
+        }
+        
+        .system-choice {
+            background: #f0f7ff;
+            border: 1px solid #c2e0ff;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .system-choice h3 {
+            color: #0366d6;
+            font-size: 16px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .system-options {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .system-option {
+            flex: 1;
+            text-align: center;
+        }
+        
+        .system-option input[type="radio"] {
+            display: none;
+        }
+        
+        .system-option label {
+            display: block;
+            padding: 12px 10px;
+            background: white;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            color: #555;
+            transition: all 0.3s;
+        }
+        
+        .system-option input[type="radio"]:checked + label {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .system-option label:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+        
+        .system-note {
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+            margin-top: 5px;
         }
         
         .error {
@@ -510,6 +596,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             h2 {
                 font-size: 24px;
             }
+            
+            .system-options {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
@@ -540,6 +630,26 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <?php } ?>
 
     <form action="" method="POST" id="loginForm">
+        <!-- System Choice Section -->
+        <div class="system-choice">
+            <h3>Choose System to Access:</h3>
+            <div class="system-options">
+                <div class="system-option">
+                    <input type="radio" id="system_main" name="system" value="main" 
+                           <?= ($system_choice === 'main' || empty($system_choice)) ? 'checked' : '' ?>>
+                    <label for="system_main">Main System</label>
+                </div>
+                <div class="system-option">
+                    <input type="radio" id="system_distribution" name="system" value="distribution"
+                           <?= $system_choice === 'distribution' ? 'checked' : '' ?>>
+                    <label for="system_distribution">Distribution System</label>
+                </div>
+            </div>
+            <div class="system-note">
+                Volunteers: Select "Distribution System" to access distribution management
+            </div>
+        </div>
+
         <div class="form-group">
             <label for="email">Email Address</label>
             <input type="email" id="email" name="email" 
@@ -560,9 +670,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <button type="submit">Login</button>
         
         <div class="forgot-link" style="text-align: center; margin-top: 15px;">
-    <a href="forgot_password.php" style="color: #667eea; text-decoration: none; font-size: 14px;">
-        <i class="fas fa-key" style="margin-right: 5px;"></i> Forgot Password?
-    </a>
+            <a href="forgot_password.php" style="color: #667eea; text-decoration: none; font-size: 14px;">
+                <i class="fas fa-key" style="margin-right: 5px;"></i> Forgot Password?
+            </a>
         </div>
 
         <div class="register-link">
@@ -611,6 +721,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     document.getElementById('loginForm').addEventListener('submit', function(e) {
         const email = document.getElementById('email').value.trim();
         const password = document.getElementById('password').value.trim();
+        const systemChoice = document.querySelector('input[name="system"]:checked').value;
         const submitBtn = document.querySelector('button[type="submit"]');
         
         // Disable button untuk prevent double click
@@ -635,6 +746,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             return false;
         }
         
+        // Show system confirmation for distribution system
+        if (systemChoice === 'distribution') {
+            const confirmMsg = "You are logging into the Distribution System.\n\n" +
+                             "After successful login, you will be redirected to:\n" +
+                             "http://10.147.17.154:8000/distribution_module/\n\n" +
+                             "Continue?";
+            
+            if (!confirm(confirmMsg)) {
+                e.preventDefault();
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = 'Login';
+                return false;
+            }
+        }
+        
         return true;
     });
     
@@ -653,6 +779,47 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         setTimeout(() => {
             toggleDebug();
         }, 500);
+    });
+    <?php endif; ?>
+    
+    // Auto-detect volunteer emails and suggest distribution system
+    document.getElementById('email').addEventListener('blur', function() {
+        const email = this.value.trim().toLowerCase();
+        
+        // Common volunteer email patterns
+        const volunteerPatterns = [
+            '@volunteer.',
+            '@ngo.',
+            '.vol@',
+            'volunteer@',
+            'vol@',
+            'v@'
+        ];
+        
+        let isLikelyVolunteer = false;
+        for (const pattern of volunteerPatterns) {
+            if (email.includes(pattern)) {
+                isLikelyVolunteer = true;
+                break;
+            }
+        }
+        
+        if (isLikelyVolunteer) {
+            // Check if distribution system is not already selected
+            const distributionRadio = document.getElementById('system_distribution');
+            if (!distributionRadio.checked) {
+                // Ask if they want to use distribution system
+                if (confirm("This looks like a volunteer email. Would you like to login to the Distribution System?")) {
+                    distributionRadio.checked = true;
+                }
+            }
+        }
+    });
+    
+    // Auto-select system based on return_to parameter
+    <?php if ($return_to === 'distribution'): ?>
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('system_distribution').checked = true;
     });
     <?php endif; ?>
 </script>
