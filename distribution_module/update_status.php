@@ -1,4 +1,15 @@
 <?php
+// ========================================
+// UPDATE DISTRIBUTION STATUS - COMPLETE FIXED VERSION
+// ========================================
+
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Set a longer execution time for this script
+set_time_limit(60); // 60 seconds
+
 require_once 'config.php';
 
 $database = new Database();
@@ -7,7 +18,7 @@ $db = $database->getConnection();
 $distribution_id = $_GET['id'] ?? null;
 
 if (!$distribution_id) {
-    header("Location: index.php");
+    header("Location: distribution_main.php");
     exit;
 }
 
@@ -26,17 +37,7 @@ if (!$basic_distribution) {
 }
 
 // Get distribution details
-$query = "
-    SELECT 
-        d.*,
-        dis.Disaster_Name,
-        dis.Disaster_Type,
-        dis.Severity_level,
-        dis.Location as disaster_location
-    FROM distribution d
-    LEFT JOIN disaster dis ON d.disaster_id = dis.disaster_id
-    WHERE d.distribution_id = ?
-";
+$query = "SELECT * FROM distribution WHERE distribution_id = ?";
 
 $stmt = $db->prepare($query);
 $stmt->bind_param("i", $distribution_id);
@@ -45,44 +46,53 @@ $result = $stmt->get_result();
 $distribution = $result->fetch_assoc();
 $stmt->close();
 
-// Get ALL needs for this distribution (REMOVED LIMIT 1)
-$needs_query = "
+// ============ Get victims from distribution_items table ============
+$victims_query = "
     SELECT 
-        n.*,
-        v.name as victim_name,
-        v.age as victim_age,
-        v.address as victim_address,
-        v.family_size,
-        r.name as resource_name,
-        r.unit as resource_unit,
-        r.type as resource_type
-    FROM needs n
-    LEFT JOIN victim v ON n.victim_id = v.victim_id
-    LEFT JOIN resource r ON n.resource_id = r.resource_id
-    WHERE n.distribution_id = ?
+        di.*
+    FROM distribution_items di
+    WHERE di.distribution_id = ?
+    ORDER BY di.item_id
 ";
 
-$needs_stmt = $db->prepare($needs_query);
-$needs_stmt->bind_param("i", $distribution_id);
-$needs_stmt->execute();
-$needs_result = $needs_stmt->get_result();
-$needs = $needs_result->fetch_all(MYSQLI_ASSOC); // Get ALL needs
-$needs_stmt->close();
+$victims_stmt = $db->prepare($victims_query);
+$victims_stmt->bind_param("i", $distribution_id);
+$victims_stmt->execute();
+$victims_result = $victims_stmt->get_result();
+$distribution_victims = $victims_result->fetch_all(MYSQLI_ASSOC);
+$victims_stmt->close();
 
-// Get total quantity needed from ALL needs
+// ============ Get resource allocations from distribution_resources table ============
+$resources_query = "
+    SELECT 
+        dr.*
+    FROM distribution_resources dr
+    WHERE dr.distribution_id = ?
+    ORDER BY dr.allocation_id
+";
+
+$resources_stmt = $db->prepare($resources_query);
+$resources_stmt->bind_param("i", $distribution_id);
+$resources_stmt->execute();
+$resources_result = $resources_stmt->get_result();
+$distribution_resources = $resources_result->fetch_all(MYSQLI_ASSOC);
+$resources_stmt->close();
+
+// Calculate totals from ACTUAL distribution data
+$total_families = count($distribution_victims);
+$total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
+
+// Calculate total quantity from resources
 $total_quantity_needed = 0;
-foreach ($needs as $need_item) {
-    $total_quantity_needed += $need_item['quantity_needed'] ?? 0;
+foreach ($distribution_resources as $resource) {
+    $total_quantity_needed += $resource['quantity_allocated'];
 }
 
-// Get assigned volunteers for this distribution
+// ============ Get assigned volunteers ============
 $volunteers_query = "
     SELECT 
-        dv.*,
-        v.name as volunteer_name,
-        v.role as volunteer_role
+        dv.*
     FROM distribution_volunteer dv
-    LEFT JOIN volunteer v ON dv.volunteer_id = v.volunteer_id
     WHERE dv.distribution_id = ?
     ORDER BY dv.assigned_timestamp DESC
 ";
@@ -91,7 +101,7 @@ $volunteers_stmt = $db->prepare($volunteers_query);
 $volunteers_stmt->bind_param("i", $distribution_id);
 $volunteers_stmt->execute();
 $volunteers_result = $volunteers_stmt->get_result();
-$assigned_volunteers = $volunteers_result->fetch_all(MYSQLI_ASSOC);
+$assigned_volunteers_raw = $volunteers_result->fetch_all(MYSQLI_ASSOC);
 $volunteers_stmt->close();
 
 // Handle status update
@@ -109,8 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
         $update_query = "
             UPDATE distribution 
             SET status = ?, 
-                quantity_received = ?, 
-                comments = CONCAT(IFNULL(comments, ''), '\n\nStatus Update (', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), '): ', ?)
+                quantity_sent = ?, 
+                comments = CONCAT(IFNULL(comments, ''), '\n\nStatus Update (', DATE_FORMAT(NOW(), '%Y-%m-d %H:%i:%s'), '): ', ?)
             WHERE distribution_id = ?
         ";
         $update_stmt = $db->prepare($update_query);
@@ -121,32 +131,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
         }
         $update_stmt->close();
 
-        // If status is Completed, update resource inventory
-        if ($new_status === 'Completed' && !empty($needs[0]['resource_id'])) {
-            // Update resource quantity
-            $resource_query = "
-                UPDATE resource 
-                SET quantity_available = quantity_available - ? 
-                WHERE resource_id = ?
-            ";
-            $resource_stmt = $db->prepare($resource_query);
-            $resource_stmt->bind_param("ii", $quantity_received, $needs[0]['resource_id']);
-            
-            if (!$resource_stmt->execute()) {
-                throw new Exception("Error updating resource inventory: " . $resource_stmt->error);
-            }
-            $resource_stmt->close();
-
-            // Update needs status if exists
-            $needs_update_query = "
-                UPDATE needs 
-                SET status = 'fulfilled' 
+        // If status is Completed, update distribution_items and distribution_resources
+        if ($new_status === 'Completed') {
+            // Update distribution_items status to 'Delivered'
+            $items_update_query = "
+                UPDATE distribution_items 
+                SET status = 'Delivered' 
                 WHERE distribution_id = ?
             ";
-            $needs_update_stmt = $db->prepare($needs_update_query);
-            $needs_update_stmt->bind_param("i", $distribution_id);
-            $needs_update_stmt->execute();
-            $needs_update_stmt->close();
+            $items_update_stmt = $db->prepare($items_update_query);
+            $items_update_stmt->bind_param("i", $distribution_id);
+            
+            if (!$items_update_stmt->execute()) {
+                throw new Exception("Error updating distribution items: " . $items_update_stmt->error);
+            }
+            $items_update_stmt->close();
+
+            // Update distribution_resources with distributed quantity
+            $resources_update_query = "
+                UPDATE distribution_resources 
+                SET quantity_distributed = quantity_allocated 
+                WHERE distribution_id = ?
+            ";
+            $resources_update_stmt = $db->prepare($resources_update_query);
+            $resources_stmt->bind_param("i", $distribution_id);
+            $resources_update_stmt->execute();
+            $resources_update_stmt->close();
         }
 
         // Commit transaction
@@ -162,6 +172,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
         $distribution = $result->fetch_assoc();
         $stmt->close();
         
+        // Refresh other data
+        $victims_stmt = $db->prepare($victims_query);
+        $victims_stmt->bind_param("i", $distribution_id);
+        $victims_stmt->execute();
+        $victims_result = $victims_stmt->get_result();
+        $distribution_victims = $victims_result->fetch_all(MYSQLI_ASSOC);
+        $victims_stmt->close();
+
+        $resources_stmt = $db->prepare($resources_query);
+        $resources_stmt->bind_param("i", $distribution_id);
+        $resources_stmt->execute();
+        $resources_result = $resources_stmt->get_result();
+        $distribution_resources = $resources_result->fetch_all(MYSQLI_ASSOC);
+        $resources_stmt->close();
+
+        // Recalculate totals
+        $total_families = count($distribution_victims);
+        $total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
+        
     } catch (Exception $e) {
         // Rollback transaction on error
         $db->rollback();
@@ -172,6 +201,260 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
 // Helper function to safely output data
 function safe_output($data, $default = '') {
     return htmlspecialchars($data ?? $default);
+}
+
+// ============ IMPROVED API FETCH FUNCTION ============
+function fetchDataWithDebug($url, $timeout = 5) {
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'User-Agent: DisasterReliefSystem/1.0'
+        ]
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    
+    if ($response === false) {
+        return [
+            'success' => false,
+            'error' => "CURL Error: $error",
+            'http_code' => $httpCode
+        ];
+    }
+    
+    $data = json_decode($response, true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return [
+            'success' => false,
+            'error' => 'Invalid JSON: ' . json_last_error_msg(),
+            'raw_response' => substr($response, 0, 200),
+            'http_code' => $httpCode
+        ];
+    }
+    
+    return [
+        'success' => true,
+        'data' => $data,
+        'http_code' => $httpCode
+    ];
+}
+
+// ============ API URLs ============
+$DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
+$VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
+$VOLUNTEER_API_URL = 'http://10.147.17.30:8000/api_volunteer.php';
+
+// Initialize variables
+$disaster_name = "Unknown Disaster";
+$disaster_location = "Unknown";
+$victim_names_by_id = [];
+$volunteer_names_by_id = [];
+$assigned_volunteers = [];
+
+// Track API status
+$disaster_api_status = false;
+$victim_api_status = false;
+$volunteer_api_status = false;
+
+$api_debug_info = [];
+
+// Get disaster ID from distribution
+$disaster_id = $distribution['disaster_id'] ?? 0;
+
+// DEBUG: Get and display raw disaster API response
+$disaster_api_result = fetchDataWithDebug($DISASTER_API_URL);
+$api_debug_info['disaster'] = $disaster_api_result;
+
+if ($disaster_api_result['success']) {
+    $disaster_api_status = true;
+    
+    // Check different response formats
+    $disaster_data = $disaster_api_result['data'];
+    
+    // Debug: Log what we got
+    error_log("Disaster API Response: " . print_r($disaster_data, true));
+    
+    // Check if data is an array
+    if (is_array($disaster_data)) {
+        // Try to find disaster by ID
+        foreach ($disaster_data as $item) {
+            if (!is_array($item)) continue;
+            
+            // Try multiple possible ID field names
+            $possible_id_fields = ['disaster_id', 'Disaster_ID', 'disasterId', 'DisasterID', 'id'];
+            $found_id = null;
+            
+            foreach ($possible_id_fields as $field) {
+                if (isset($item[$field]) && is_numeric($item[$field])) {
+                    $found_id = intval($item[$field]);
+                    break;
+                }
+            }
+            
+            if ($found_id && $found_id == $disaster_id) {
+                // Try multiple possible name fields
+                $possible_name_fields = ['disaster_name', 'Disaster_Name', 'disasterName', 'name', 'title', 'Name'];
+                $possible_location_fields = ['location', 'Location', 'district', 'District', 'area', 'Area', 'city', 'City'];
+                
+                foreach ($possible_name_fields as $field) {
+                    if (isset($item[$field]) && !empty($item[$field])) {
+                        $disaster_name = htmlspecialchars($item[$field]);
+                        break;
+                    }
+                }
+                
+                foreach ($possible_location_fields as $field) {
+                    if (isset($item[$field]) && !empty($item[$field])) {
+                        $disaster_location = htmlspecialchars($item[$field]);
+                        break;
+                    }
+                }
+                
+                // If still not found, use first non-empty string value
+                if ($disaster_name == "Unknown Disaster") {
+                    foreach ($item as $key => $value) {
+                        if (is_string($value) && !empty($value) && $key !== 'disaster_id' && $key !== 'id') {
+                            $disaster_name = htmlspecialchars($value);
+                            break;
+                        }
+                    }
+                }
+                
+                error_log("Found disaster: ID=$disaster_id, Name=$disaster_name, Location=$disaster_location");
+                break;
+            }
+        }
+        
+        // If still not found, use first item as fallback
+        if ($disaster_name == "Unknown Disaster" && !empty($disaster_data[0]) && is_array($disaster_data[0])) {
+            $first_item = $disaster_data[0];
+            foreach ($first_item as $key => $value) {
+                if (is_string($value) && !empty($value) && $key !== 'disaster_id' && $key !== 'id') {
+                    $disaster_name = "Disaster: " . htmlspecialchars($value);
+                    break;
+                }
+            }
+        }
+    }
+} else {
+    error_log("Disaster API failed: " . $disaster_api_result['error']);
+}
+
+// Get victim data
+$victim_api_result = fetchDataWithDebug($VICTIM_API_URL);
+$api_debug_info['victim'] = $victim_api_result;
+
+if ($victim_api_result['success']) {
+    $victim_api_status = true;
+    $victim_data = $victim_api_result['data'];
+    
+    if (is_array($victim_data)) {
+        foreach ($victim_data as $victim) {
+            if (!is_array($victim)) continue;
+            
+            // Get victim ID
+            $victim_id = null;
+            $possible_id_fields = ['victim_id', 'Victim_ID', 'victimId', 'VictimID', 'id'];
+            
+            foreach ($possible_id_fields as $field) {
+                if (isset($victim[$field]) && is_numeric($victim[$field])) {
+                    $victim_id = intval($victim[$field]);
+                    break;
+                }
+            }
+            
+            if ($victim_id) {
+                // Get victim name
+                $victim_name = 'Unknown';
+                $possible_name_fields = ['full_name', 'Full_Name', 'fullName', 'name', 'victim_name', 'Name'];
+                
+                foreach ($possible_name_fields as $field) {
+                    if (isset($victim[$field]) && !empty($victim[$field])) {
+                        $victim_name = htmlspecialchars($victim[$field]);
+                        break;
+                    }
+                }
+                
+                $victim_names_by_id[$victim_id] = $victim_name;
+            }
+        }
+    }
+}
+
+// Get volunteer data
+$volunteer_api_result = fetchDataWithDebug($VOLUNTEER_API_URL);
+$api_debug_info['volunteer'] = $volunteer_api_result;
+
+if ($volunteer_api_result['success']) {
+    $volunteer_api_status = true;
+    $volunteer_data = $volunteer_api_result['data'];
+    
+    if (is_array($volunteer_data)) {
+        foreach ($volunteer_data as $volunteer) {
+            if (!is_array($volunteer)) continue;
+            
+            $volunteer_id = $volunteer['volunteer_id'] ?? 
+                          $volunteer['Volunteer_ID'] ?? 
+                          $volunteer['id'] ?? null;
+            
+            if ($volunteer_id) {
+                $volunteer_name = $volunteer['name'] ?? 
+                                $volunteer['full_name'] ?? 
+                                $volunteer['Full_Name'] ?? 
+                                "Volunteer #" . $volunteer_id;
+                $volunteer_role = $volunteer['role'] ?? 
+                                $volunteer['Role'] ?? 
+                                'Volunteer';
+                $volunteer_names_by_id[$volunteer_id] = [
+                    'name' => $volunteer_name,
+                    'role' => $volunteer_role
+                ];
+            }
+        }
+    }
+}
+
+// ============ Process assigned volunteers with API data ============
+foreach ($assigned_volunteers_raw as $volunteer) {
+    $volunteer_id = $volunteer['volunteer_id'];
+    
+    if (isset($volunteer_names_by_id[$volunteer_id])) {
+        $volunteer_info = $volunteer_names_by_id[$volunteer_id];
+        $assigned_volunteers[] = [
+            'volunteer_id' => $volunteer_id,
+            'volunteer_name' => $volunteer_info['name'],
+            'volunteer_role' => $volunteer_info['role'],
+            'status' => $volunteer['status'] ?? 'Active',
+            'assigned_timestamp' => $volunteer['assigned_timestamp'] ?? date('Y-m-d H:i:s')
+        ];
+    } else {
+        $assigned_volunteers[] = [
+            'volunteer_id' => $volunteer_id,
+            'volunteer_name' => "Volunteer #" . $volunteer_id,
+            'volunteer_role' => 'Unknown',
+            'status' => $volunteer['status'] ?? 'Active',
+            'assigned_timestamp' => $volunteer['assigned_timestamp'] ?? date('Y-m-d H:i:s')
+        ];
+    }
+}
+
+// ============ Get victim names for this distribution ============
+$distribution_victim_names = [];
+foreach ($distribution_victims as $victim) {
+    $victim_id = $victim['victim_id'];
+    $distribution_victim_names[$victim_id] = $victim_names_by_id[$victim_id] ?? "Victim #" . $victim_id;
 }
 
 // Get current status for CSS classes
@@ -199,6 +482,9 @@ switch ($current_status_mapped) {
     case 'completed': $progress_percentage = 100; break;
     default: $progress_percentage = 0;
 }
+
+// Get unit for display (use default)
+$resource_unit = 'units';
 ?>
 
 <!DOCTYPE html>
@@ -210,7 +496,24 @@ switch ($current_status_mapped) {
     <style>
         <?php
         // Include the CSS from the example
-        echo file_get_contents('../css/update.css');
+        if (file_exists('../css/update.css')) {
+            echo file_get_contents('../css/update.css');
+        } else {
+            // Fallback CSS if update.css doesn't exist
+            ?>
+            /* Fallback basic styles */
+            .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+            .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .alert { padding: 16px 20px; border-radius: 10px; margin-bottom: 20px; }
+            .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+            .alert-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+            .alert-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+            .alert-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+            .btn { padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; font-weight: bold; }
+            .btn-update { background: #3498db; color: white; }
+            .form-control { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+            <?php
+        }
         ?>
         
         /* Additional styles for your PHP integration */
@@ -235,13 +538,13 @@ switch ($current_status_mapped) {
         
         .alert-success {
             background-color: rgba(16, 185, 129, 0.1);
-            border-color: var(--success);
+            border-color: #10b981;
             color: #065f46;
         }
         
         .alert-error {
             background-color: rgba(239, 68, 68, 0.1);
-            border-color: var(--danger);
+            border-color: #ef4444;
             color: #991b1b;
         }
         
@@ -316,36 +619,317 @@ switch ($current_status_mapped) {
             background: linear-gradient(135deg, #e74c3c, #c0392b);
             color: white;
         }
+        
+        /* Custom styles */
+        .breadcrumb {
+            margin-bottom: 20px;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .breadcrumb a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        
+        .breadcrumb-current {
+            color: #666;
+        }
+        
+        .page-header {
+            margin-bottom: 30px;
+        }
+        
+        .page-header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .page-title-section h1 {
+            margin: 0;
+            color: #2c3e50;
+        }
+        
+        .page-subtitle {
+            color: #7f8c8d;
+            margin: 5px 0 0 0;
+        }
+        
+        .distribution-id-badge {
+            background: #3498db;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+        
+        .quick-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .quick-stat-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .quick-stat-label {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-bottom: 5px;
+        }
+        
+        .quick-stat-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+        }
+        
+        
+        .action-buttons-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 10px 15px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-outline {
+            background: white;
+            color: #3498db;
+            border: 1px solid #3498db;
+        }
+        
+        .btn-update {
+            background: #9b59b6;
+            color: white;
+            padding: 12px 24px;
+            font-size: 1.1em;
+            width: 100%;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .required-star {
+            color: #e74c3c;
+        }
+        
+        .form-control-icon {
+            position: relative;
+        }
+        
+        .input-icon {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        
+        .form-control-icon select,
+        .form-control-icon input {
+            padding-left: 35px;
+        }
+        
+        .volunteers-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .volunteers-table th,
+        .volunteers-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .volunteers-table th {
+            background: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        
+        .empty-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+        
+        .timeline-badge {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        
+        .badge-completed {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .badge-active {
+            background: #3498db;
+            color: white;
+        }
+        
+        .badge-pending {
+            background: #f39c12;
+            color: white;
+        }
+        
+        .api-status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 5px;
+        }
+        
+        .api-online {
+            background-color: #27ae60;
+        }
+        
+        .api-offline {
+            background-color: #e74c3c;
+        }
+        
+        .api-warning {
+            background-color: #f39c12;
+        }
+        
+        /* API Debug Panel */
+        .api-debug-panel {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .api-debug-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #666;
+        }
+        
+        .api-debug-item {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .api-debug-item:last-child {
+            border-bottom: none;
+        }
+        
+        .api-success { color: #27ae60; font-weight: bold; }
+        .api-error { color: #e74c3c; font-weight: bold; }
+        
+        .raw-response {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Debug Information (Remove this section after testing) -->
-        <?php if (isset($_GET['debug'])): ?>
-        <div class="debug-panel">
-            <h4>Debug Information</h4>
-            <div class="data-row">
-                <span class="data-label">Distribution ID:</span>
-                <span><?php echo $distribution_id; ?></span>
+        <!-- API Debug Panel -->
+        <div class="api-debug-panel">
+            <div class="api-debug-title">API Connection Status:</div>
+            
+            <div class="api-debug-item">
+                <strong>Disaster API:</strong> 
+                <span class="<?php echo $disaster_api_status ? 'api-success' : 'api-error'; ?>">
+                    <?php echo $disaster_api_status ? '✅ Connected' : '❌ Failed'; ?>
+                </span>
+                <?php if (!$disaster_api_status): ?>
+                    <div>Error: <?php echo htmlspecialchars($api_debug_info['disaster']['error'] ?? 'Unknown error'); ?></div>
+                    <?php if (isset($api_debug_info['disaster']['raw_response'])): ?>
+                        <div class="raw-response">
+                            <?php echo htmlspecialchars($api_debug_info['disaster']['raw_response']); ?>
+                        </div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <div>Found: <strong><?php echo $disaster_name; ?></strong> in <strong><?php echo $disaster_location; ?></strong></div>
+                    <div>Looking for Disaster ID: <?php echo $disaster_id; ?></div>
+                <?php endif; ?>
             </div>
-            <div class="data-row">
-                <span class="data-label">Current Status:</span>
-                <span><?php echo $distribution['status'] ?? 'NULL'; ?></span>
+            
+            <div class="api-debug-item">
+                <strong>Victim API:</strong> 
+                <span class="<?php echo $victim_api_status ? 'api-success' : 'api-error'; ?>">
+                    <?php echo $victim_api_status ? '✅ Connected' : '❌ Failed'; ?>
+                </span>
+                <?php if ($victim_api_status): ?>
+                    <div>Loaded <?php echo count($victim_names_by_id); ?> victim names</div>
+                <?php endif; ?>
             </div>
-            <div class="data-row">
-                <span class="data-label">Basic Distribution Found:</span>
-                <span><?php echo $basic_distribution ? 'YES' : 'NO'; ?></span>
-            </div>
-            <div class="data-row">
-                <span class="data-label">Number of Needs Found:</span>
-                <span><?php echo count($needs); ?></span>
-            </div>
-            <div class="data-row">
-                <span class="data-label">Total Quantity Needed:</span>
-                <span><?php echo $total_quantity_needed; ?></span>
+            
+            <div class="api-debug-item">
+                <strong>Volunteer API:</strong> 
+                <span class="<?php echo $volunteer_api_status ? 'api-success' : 'api-error'; ?>">
+                    <?php echo $volunteer_api_status ? '✅ Connected' : '❌ Failed'; ?>
+                </span>
             </div>
         </div>
-        <?php endif; ?>
 
         <!-- Alert Messages -->
         <?php if (!empty($success)): ?>
@@ -376,9 +960,25 @@ switch ($current_status_mapped) {
                     <p class="page-subtitle">
                         <span>📍</span>
                         Distribution ID: #<?php echo $distribution_id; ?> - 
-                        <?php echo count($needs); ?> victim(s) - 
-                        Total needed: <?php echo $total_quantity_needed; ?> 
-                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
+                        <?php echo $total_families; ?> family(ies) - 
+                        Total allocated: <?php echo $total_quantity_needed; ?> 
+                        <?php echo $resource_unit; ?>
+                        <span class="api-status <?php 
+                            if ($disaster_api_status && $victim_api_status && $volunteer_api_status) echo 'api-online';
+                            elseif (!$disaster_api_status && !$victim_api_status && !$volunteer_api_status) echo 'api-offline';
+                            else echo 'api-warning';
+                        ?>" title="
+                            <?php
+                            $statuses = [];
+                            if ($disaster_api_status) $statuses[] = 'Disaster API: Online';
+                            else $statuses[] = 'Disaster API: Offline';
+                            if ($victim_api_status) $statuses[] = 'Victim API: Online';
+                            else $statuses[] = 'Victim API: Offline';
+                            if ($volunteer_api_status) $statuses[] = 'Volunteer API: Online';
+                            else $statuses[] = 'Volunteer API: Offline';
+                            echo implode(', ', $statuses);
+                            ?>
+                        "></span>
                     </p>
                 </div>
                 <div class="distribution-id-badge">
@@ -390,25 +990,25 @@ switch ($current_status_mapped) {
             <div class="quick-stats">
                 <div class="quick-stat-item">
                     <div class="quick-stat-label">Disaster</div>
-                    <div class="quick-stat-value"><?php echo safe_output($distribution['Disaster_Name'] ?? 'Not linked'); ?></div>
+                    <div class="quick-stat-value"><?php echo safe_output($disaster_name); ?></div>
                 </div>
                 <div class="quick-stat-item">
-                    <div class="quick-stat-label">Quantity Needed</div>
+                    <div class="quick-stat-label">Families</div>
+                    <div class="quick-stat-value"><?php echo $total_families; ?></div>
+                </div>
+                <div class="quick-stat-item">
+                    <div class="quick-stat-label">Resources Allocated</div>
                     <div class="quick-stat-value">
                         <?php echo $total_quantity_needed; ?> 
-                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
+                        <?php echo $resource_unit; ?>
                     </div>
                 </div>
                 <div class="quick-stat-item">
                     <div class="quick-stat-label">Quantity Sent</div>
                     <div class="quick-stat-value">
                         <?php echo safe_output($basic_distribution['quantity_sent'] ?? '0'); ?> 
-                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
+                        <?php echo $resource_unit; ?>
                     </div>
-                </div>
-                <div class="quick-stat-item">
-                    <div class="quick-stat-label">Volunteers</div>
-                    <div class="quick-stat-value"><?php echo count($assigned_volunteers); ?> assigned</div>
                 </div>
             </div>
         </header>
@@ -454,15 +1054,15 @@ switch ($current_status_mapped) {
                                 <div class="section-title">Disaster Details</div>
                                 <div class="info-item">
                                     <span class="info-label">Disaster</span>
-                                    <span class="info-value"><?php echo safe_output($distribution['Disaster_Name'] ?? 'Not linked'); ?></span>
+                                    <span class="info-value"><?php echo safe_output($disaster_name); ?></span>
                                 </div>
                                 <div class="info-item">
                                     <span class="info-label">Location</span>
-                                    <span class="info-value"><?php echo safe_output($distribution['disaster_location'] ?? 'Unknown'); ?></span>
+                                    <span class="info-value"><?php echo safe_output($disaster_location); ?></span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Type</span>
-                                    <span class="info-value"><?php echo safe_output($distribution['Disaster_Type'] ?? 'Unknown'); ?></span>
+                                    <span class="info-label">Disaster ID</span>
+                                    <span class="info-value">#<?php echo $distribution['disaster_id'] ?? 'N/A'; ?></span>
                                 </div>
                             </div>
 
@@ -470,69 +1070,54 @@ switch ($current_status_mapped) {
                             <div class="overview-section">
                                 <div class="section-title">Resource Details</div>
                                 <div class="info-item">
-                                    <span class="info-label">Resource</span>
-                                    <span class="info-value">
-                                        <?php 
-                                        $resource_names = [];
-                                        foreach ($needs as $need_item) {
-                                            if (!empty($need_item['resource_name'])) {
-                                                $resource_names[] = safe_output($need_item['resource_name']);
-                                            }
-                                        }
-                                        echo !empty($resource_names) ? implode(', ', array_unique($resource_names)) : 'No resources specified';
-                                        ?>
-                                    </span>
+                                    <span class="info-label">Resources Allocated</span>
+                                    <span class="info-value"><?php echo count($distribution_resources); ?> types</span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Total Needed</span>
+                                    <span class="info-label">Total Allocated</span>
                                     <span class="info-value">
                                         <?php echo $total_quantity_needed; ?> 
-                                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
+                                        <?php echo $resource_unit; ?>
                                     </span>
                                 </div>
                                 <div class="info-item">
                                     <span class="info-label">Quantity Sent</span>
                                     <span class="info-value">
                                         <?php echo safe_output($basic_distribution['quantity_sent'] ?? '0'); ?> 
-                                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
+                                        <?php echo $resource_unit; ?>
                                     </span>
                                 </div>
-                                <?php if (!empty($distribution['quantity_received'])): ?>
-                                <div class="info-item">
-                                    <span class="info-label">Quantity Received</span>
-                                    <span class="info-value">
-                                        <?php echo safe_output($distribution['quantity_received'] ?? '0'); ?> 
-                                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>
-                                    </span>
-                                </div>
-                                <?php endif; ?>
                             </div>
 
-                            <!-- Victims and Their Needs -->
-                            <?php if (!empty($needs)): ?>
+                            <!-- Families Assigned -->
+                            <?php if (!empty($distribution_victims)): ?>
                             <div class="overview-section">
-                                <div class="section-title">Victims & Their Needs (<?php echo count($needs); ?>)</div>
-                                <?php foreach ($needs as $index => $need_item): ?>
+                                <div class="section-title">Families Assigned (<?php echo $total_families; ?>)</div>
+                                <?php $index = 1; ?>
+                                <?php foreach ($distribution_victim_names as $victim_id => $victim_name): ?>
                                 <div class="info-item" style="border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px;">
                                     <div style="display: flex; justify-content: space-between; width: 100%;">
                                         <div>
                                             <div style="font-weight: 600; color: #333; margin-bottom: 3px;">
-                                                <?php echo ($index + 1) . '. ' . safe_output($need_item['victim_name'] ?? 'Unknown Victim'); ?>
+                                                <?php echo ($index++) . '. ' . safe_output($victim_name); ?>
                                             </div>
+                                            <?php 
+                                            // Find the victim status from distribution_victims array
+                                            $victim_status = 'Scheduled';
+                                            foreach ($distribution_victims as $victim) {
+                                                if ($victim['victim_id'] == $victim_id) {
+                                                    $victim_status = $victim['status'] ?? 'Scheduled';
+                                                    break;
+                                                }
+                                            }
+                                            ?>
                                             <div style="font-size: 0.8rem; color: #666;">
-                                                Needs: <?php echo $need_item['quantity_needed'] ?? 0; ?> 
-                                                <?php echo safe_output($need_item['resource_unit'] ?? 'units'); ?> 
-                                                of <?php echo safe_output($need_item['resource_name'] ?? 'Unknown Resource'); ?>
+                                                Status: <?php echo safe_output($victim_status); ?>
                                             </div>
                                         </div>
                                         <div style="text-align: right;">
                                             <div style="font-size: 0.8rem; color: #666;">
-                                                Priority: <?php echo safe_output($need_item['priority_level'] ?? 'Medium'); ?>
-                                            </div>
-                                            <div style="font-size: 0.8rem; color: #666;">
-                                                Status: <span class="timeline-badge badge-<?php echo strtolower($need_item['status'] ?? 'pending'); ?>">
-                                                    <?php echo safe_output($need_item['status'] ?? 'Pending'); ?>
-                                                </span>
+                                                ID: <?php echo $victim_id; ?>
                                             </div>
                                         </div>
                                     </div>
@@ -626,17 +1211,17 @@ switch ($current_status_mapped) {
 
                                 <div class="form-group" id="quantityGroup" style="display: <?php echo ($current_status === 'Completed') ? 'block' : 'none'; ?>;">
                                     <label class="form-label">
-                                        Quantity Received <span class="required-star">*</span>
+                                        Quantity Sent <span class="required-star">*</span>
                                     </label>
                                     <div class="form-control-icon">
                                         <span class="input-icon">📦</span>
                                         <input type="number" class="form-control" id="quantityInput" name="quantity_received"
-                                               placeholder="Enter quantity received" min="0" max="<?php echo $basic_distribution['quantity_sent'] ?? 0; ?>"
-                                               value="<?php echo $distribution['quantity_received'] ?? ($basic_distribution['quantity_sent'] ?? 0); ?>">
+                                               placeholder="Enter quantity sent" min="0" max="<?php echo $total_quantity_needed; ?>"
+                                               value="<?php echo $distribution['quantity_sent'] ?? $total_quantity_needed; ?>">
                                     </div>
                                     <small class="form-text">
-                                        Actual quantity received by victim (max: <?php echo $basic_distribution['quantity_sent'] ?? 0; ?> 
-                                        <?php echo !empty($needs) ? safe_output($needs[0]['resource_unit'] ?? 'units') : 'units'; ?>)
+                                        Actual quantity sent (max: <?php echo $total_quantity_needed; ?> 
+                                        <?php echo $resource_unit; ?>)
                                     </small>
                                 </div>
 
@@ -663,11 +1248,11 @@ switch ($current_status_mapped) {
                                 <div class="status-guide-title">Status Meanings</div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-planned">Planned</div>
-                                    <div class="status-guide-text">Distribution created, resources planned</div>
+                                    <div class="status-guide-text">Distribution is being planned and organized</div>
                                 </div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-assigned">Assigned</div>
-                                    <div class="status-guide-text">Volunteers assigned to distribute</div>
+                                    <div class="status-guide-text">Volunteers have been assigned to this distribution</div>
                                 </div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-active">In Transit/Delivered</div>
@@ -680,18 +1265,6 @@ switch ($current_status_mapped) {
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-cancelled">Cancelled</div>
                                     <div class="status-guide-text">Distribution has been cancelled</div>
-                                </div>
-                            </div>
-
-                            <div style="margin-top: 20px; padding: 15px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; border-left: 3px solid var(--info);">
-                                <div style="display: flex; align-items: start; gap: 10px;">
-                                    <span style="font-size: 1.2rem;">💡</span>
-                                    <div>
-                                        <div style="font-weight: 600; color: var(--info); margin-bottom: 5px;">Pro Tip</div>
-                                        <div style="font-size: 0.85rem; color: var(--gray-600);">
-                                            Make sure to add detailed notes when updating status. This helps maintain clear communication with your team.
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -801,8 +1374,11 @@ switch ($current_status_mapped) {
         const btnText = document.getElementById('btnText');
 
         // Get quantities from PHP
-        const maxQuantitySent = <?php echo $basic_distribution['quantity_sent'] ?? 0; ?>;
-        const totalNeeded = <?php echo $total_quantity_needed; ?>;
+        const maxQuantityAllocated = <?php echo $total_quantity_needed; ?>;
+        const currentQuantitySent = <?php echo $basic_distribution['quantity_sent'] ?? $total_quantity_needed; ?>;
+
+        // Initialize quantity input with current sent value
+        quantityInput.value = currentQuantitySent;
 
         statusSelect.addEventListener('change', function() {
             const status = this.value;
@@ -880,19 +1456,19 @@ switch ($current_status_mapped) {
 
             if (status === 'Completed' && !quantityInput.value) {
                 e.preventDefault();
-                showNotification('Error', 'Please enter the quantity received', 'error');
+                showNotification('Error', 'Please enter the quantity sent', 'error');
                 return;
             }
 
-            if (status === 'Completed' && quantity > maxQuantitySent) {
+            if (status === 'Completed' && quantity > maxQuantityAllocated) {
                 e.preventDefault();
-                showNotification('Error', `Quantity received (${quantity}) cannot exceed quantity sent (${maxQuantitySent})`, 'error');
+                showNotification('Error', `Quantity sent (${quantity}) cannot exceed quantity allocated (${maxQuantityAllocated})`, 'error');
                 return;
             }
 
-            // Add warning if quantity is less than total needed
-            if (status === 'Completed' && quantity < totalNeeded) {
-                if (!confirm(`Warning: Quantity received (${quantity}) is less than total needed (${totalNeeded}). Some victims may not receive enough. Are you sure you want to continue?`)) {
+            // Add warning if quantity is less than total allocated
+            if (status === 'Completed' && quantity < maxQuantityAllocated) {
+                if (!confirm(`Warning: Quantity sent (${quantity}) is less than quantity allocated (${maxQuantityAllocated}). Some families may not receive enough. Are you sure you want to continue?`)) {
                     e.preventDefault();
                     return;
                 }
@@ -907,7 +1483,13 @@ switch ($current_status_mapped) {
         // Notification System
         function showNotification(title, message, type = 'info') {
             const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
+            notification.className = `alert alert-${type}`;
+            notification.style.position = 'fixed';
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '1000';
+            notification.style.maxWidth = '400px';
+            notification.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
 
             const icons = {
                 success: '✅',
@@ -917,18 +1499,26 @@ switch ($current_status_mapped) {
             };
 
             notification.innerHTML = `
-                <div class="notification-icon">${icons[type]}</div>
-                <div class="notification-content">
-                    <div class="notification-title">${title}</div>
-                    <div class="notification-message">${message}</div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="font-size: 1.2em;">${icons[type]}</div>
+                    <div>
+                        <div style="font-weight: bold; margin-bottom: 2px;">${title}</div>
+                        <div style="font-size: 0.9em;">${message}</div>
+                    </div>
                 </div>
             `;
 
             document.body.appendChild(notification);
 
+            // Remove after 3 seconds
             setTimeout(() => {
-                notification.style.animation = 'slideInRight 0.3s ease reverse';
-                setTimeout(() => notification.remove(), 300);
+                notification.style.opacity = '0';
+                notification.style.transition = 'opacity 0.3s ease';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.remove();
+                    }
+                }, 300);
             }, 3000);
         }
 
@@ -936,28 +1526,14 @@ switch ($current_status_mapped) {
         quantityInput.addEventListener('input', function() {
             const value = parseInt(this.value) || 0;
 
-            if (value > maxQuantitySent) {
-                this.style.borderColor = 'var(--danger)';
-                showNotification('Warning', `Quantity cannot exceed ${maxQuantitySent}`, 'warning');
-            } else if (value < totalNeeded) {
-                this.style.borderColor = 'var(--warning)';
-                showNotification('Notice', `Quantity is less than total needed (${totalNeeded})`, 'warning');
+            if (value > maxQuantityAllocated) {
+                this.style.borderColor = '#e74c3c';
+                showNotification('Warning', `Quantity cannot exceed ${maxQuantityAllocated}`, 'warning');
+            } else if (value < maxQuantityAllocated) {
+                this.style.borderColor = '#f39c12';
+                showNotification('Notice', `Quantity is less than allocated amount (${maxQuantityAllocated})`, 'warning');
             } else {
-                this.style.borderColor = 'var(--success)';
-            }
-        });
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
-            // Ctrl/Cmd + S to save
-            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-                e.preventDefault();
-                updateForm.dispatchEvent(new Event('submit'));
-            }
-
-            // Escape to go back
-            if (e.key === 'Escape') {
-                window.location.href = 'distribution_main.php';
+                this.style.borderColor = '#27ae60';
             }
         });
 
@@ -966,13 +1542,14 @@ switch ($current_status_mapped) {
             // Focus on status select
             statusSelect.focus();
 
-            // Show welcome notification
-            setTimeout(() => {
-                showNotification('Ready to Update', 'Select a new status to begin updating this distribution', 'info');
-            }, 500);
-
             // Initialize progress based on current status
             updateProgress('<?php echo $current_status; ?>');
+            
+            // Initialize quantity field visibility
+            if (statusSelect.value === 'Completed') {
+                quantityGroup.style.display = 'block';
+                quantityInput.required = true;
+            }
         });
     </script>
 </body>

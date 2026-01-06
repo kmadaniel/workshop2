@@ -1,0 +1,175 @@
+
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Notification Preview - Ali bin Ahmad</title>
+            <style>
+                body { font-family: "Segoe UI", Arial, sans-serif; line-height: 1.6; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); margin: 0; padding: 20px; min-height: 100vh; }
+                .container { max-width: 900px; margin: 20px auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+                .header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 30px; text-align: center; }
+                .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+                .header p { margin: 10px 0 0; opacity: 0.9; font-size: 16px; }
+                .content { padding: 30px; }
+                .volunteer-info { background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 30px; display: flex; align-items: center; gap: 20px; }
+                .volunteer-avatar { width: 80px; height: 80px; background: #3498db; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; }
+                .volunteer-details { flex: 1; }
+                .channel-section { margin: 25px 0; }
+                .channel-card { background: #f8f9fa; border-radius: 10px; padding: 20px; margin: 15px 0; border-left: 5px solid; transition: transform 0.3s; }
+                .channel-card:hover { transform: translateX(5px); }
+                .email-card { border-left-color: #e74c3c; }
+                .sms-card { border-left-color: #f39c12; }
+                .whatsapp-card { border-left-color: #25d366; }
+                .message-box { background: #2c3e50; color: white; padding: 25px; border-radius: 10px; margin: 25px 0; font-family: "Courier New", monospace; white-space: pre-wrap; line-height: 1.8; font-size: 14px; }
+                .confirmation-box { background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border: 2px solid #4caf50; padding: 20px; border-radius: 10px; margin: 25px 0; }
+                .btn-group { display: flex; gap: 15px; margin-top: 30px; flex-wrap: wrap; }
+                .btn { padding: 12px 25px; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; transition: all 0.3s; }
+                .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+                .btn-confirm { background: linear-gradient(135deg, #27ae60, #219653); }
+                .btn-whatsapp { background: linear-gradient(135deg, #25d366, #128C7E); }
+                .btn-email { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+                .btn-back { background: linear-gradient(135deg, #3498db, #2980b9); }
+                .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-left: 10px; }
+                .status-success { background: #d4edda; color: #155724; }
+                .status-simulated { background: #fff3cd; color: #856404; }
+                .icon { font-size: 20px; }
+                .watermark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 100px; color: rgba(0,0,0,0.05); z-index: -1; font-weight: bold; }
+                .login-link { background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; margin: 15px 0; font-family: monospace; font-size: 14px; word-break: break-all; }
+            </style>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        </head>
+        <body>
+            <div class="watermark">XAMPP PREVIEW</div>
+            <div class="container">
+                <div class="header">
+                    <h1><i class="fas fa-bell"></i> Notification Preview</h1>
+                    <p>Multi-Channel Delivery with Volunteer Confirmation</p>
+                </div>
+                <div class="content">
+                    <div class="volunteer-info">
+                        <div class="volunteer-avatar">A</div>
+                        <div class="volunteer-details">
+                            <h2 style="margin: 0 0 10px 0;">Ali bin Ahmad</h2>
+                            <p style="margin: 0; color: #666;">
+                                <strong>Volunteer ID:</strong> VOL0006 | 
+                                <strong>Distribution:</strong> DIST0000051 | 
+                                <strong>Role:</strong> Distributor
+                            </p>
+                            <p style="margin: 10px 0 0 0; color: #666;">
+                                <i class="fas fa-phone"></i> 012-3456789 | 
+                                <i class="fas fa-envelope"></i> N/A
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="message-box">
+                        Assalamualaikum/Hello Ali bin Ahmad,<br />
+<br />
+✨ *TUGASAN AGIHAN BANTUAN BENCANA* ✨<br />
+=================================<br />
+<br />
+📋 *Maklumat Tugasan:*<br />
+🏢 Program: Agihan Bantuan Banjir Monsun Timur Laut 2025<br />
+📅 Tarikh: 27/12/2025<br />
+⏰ Masa: 4:00 PM<br />
+📍 Lokasi: Sekolah Kebangsaan Alor Gajah<br />
+👤 Peranan: *Distributor*<br />
+👥 Jumlah Mangsa: 50 keluarga<br />
+🆔 Rujukan: DIST0000051<br />
+<br />
+📝 *Arahan Penting:*<br />
+✓ Hadir 15 minit lebih awal untuk pendaftaran<br />
+✓ Bawa kad pengenalan untuk pendaftaran<br />
+✓ Pakaian sesuai: Kasut tertutup, seluar panjang<br />
+✓ Bawa air minuman sendiri<br />
+✓ *Vest sukarelawan* akan disediakan di lokasi<br />
+<br />
+🤝 *Koordinasi:*<br />
+👨‍💼 Encik Ahmad<br />
+📞 06-231 9999<br />
+<br />
+✅ *Sila Sahkan Kehadiran Anda:*<br />
+Untuk mengesahkan penerimaan tugasan ini, sila:<br />
+1. Log masuk ke Sistem Pengurusan Sukarelawan<br />
+2. Pergi ke Dashboard Sukarelawan<br />
+3. Klik &#039;Sahkan Tugasan&#039; untuk pengesahan<br />
+<br />
+🔗 *Sistem Pengurusan Sukarelawan:*<br />
+http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php<br />
+<br />
+📢 *Nota Penting:*<br />
+- Sila beritahu sekurang-kurangnya 24 jam awal jika tidak dapat hadir<br />
+- Makanan dan minuman akan disediakan<br />
+- Sila pastikan anda sihat dan bersedia<br />
+- Tugas sukarela ini tidak dibayar<br />
+<br />
+Terima kasih atas komitmen dan kesudian anda untuk membantu komuniti yang memerlukan. Sumbangan anda sangat dihargai!<br />
+<br />
+Salam hormat,<br />
+— *Jabatan Kebajikan Masyarakat (JKM) Melaka* —<br />
+📞 Hotline: 06-231 9999<br />
+📧 Email: jkm-melaka@melaka.gov.my
+                    </div>
+                    
+                    <div class="confirmation-box">
+                        <h3 style="color: #2e7d32; margin-top: 0;">
+                            <i class="fas fa-check-circle"></i> Volunteer Confirmation Required
+                        </h3>
+                        <p>Volunteer needs to login to the system and confirm the task:</p>
+                        <div class="login-link">
+                            🔗 http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php
+                        </div>
+                        <p><strong>Instructions for volunteer:</strong></p>
+                        <ol>
+                            <li>Login to Volunteer Dashboard</li>
+                            <li>Find assigned task with ID: DIST0000051</li>
+                            <li>Click "Confirm Task" button</li>
+                            <li>Status will update to "Confirmed"</li>
+                        </ol>
+                    </div>
+                    
+                    <h3><i class="fas fa-satellite-dish"></i> Delivery Channels (Simulated in XAMPP)</h3>
+                    
+                    <div class="channel-section">
+                        <div class="channel-card email-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fas fa-envelope icon"></i> Email Delivery</h4>
+                            <p><span class="status-badge" style="background: #e0e0e0; color: #666;">Not Attempted</span></p>
+                        </div>
+                        
+                        <div class="channel-card sms-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fas fa-sms icon"></i> SMS Delivery</h4>
+                            <p><span class="status-badge status-success">SIMULATED</span></p><p><strong>Method:</strong> simulated_sms</p><p><i class="fas fa-info-circle"></i> SMS simulated (XAMPP has no SMTP). Carrier: digi</p>
+                        </div>
+                        
+                        <div class="channel-card whatsapp-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fab fa-whatsapp icon"></i> WhatsApp Link</h4>
+                            <p><span class="status-badge status-success">SIMULATED</span></p><p><strong>Method:</strong> whatsapp_web_link</p><p><i class="fas fa-info-circle"></i> Open WhatsApp Web to send manually</p><p><a href="https://wa.me/60123456789?text=Assalamualaikum%2FHello+Ali+bin+Ahmad%2C%0A%0A%E2%9C%A8+%2ATUGASAN+AGIHAN+BANTUAN+BENCANA%2A+%E2%9C%A8%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%8B+%2AMaklumat+Tugasan%3A%2A%0A%F0%9F%8F%A2+Program%3A+Agihan+Bantuan+Banjir+Monsun+Timur+Laut+2025%0A%F0%9F%93%85+Tarikh%3A+27%2F12%2F2025%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A4+Peranan%3A+%2ADistributor%2A%0A%F0%9F%91%A5+Jumlah+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+Rujukan%3A+DIST0000051%0A%0A%F0%9F%93%9D+%2AArahan+Penting%3A%2A%0A%E2%9C%93+Hadir+15+minit+lebih+awal+untuk+pendaftaran%0A%E2%9C%93+Bawa+kad+pengenalan+untuk+pendaftaran%0A%E2%9C%93+Pakaian+sesuai%3A+Kasut+tertutup%2C+seluar+panjang%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%E2%9C%93+%2AVest+sukarelawan%2A+akan+disediakan+di+lokasi%0A%0A%F0%9F%A4%9D+%2AKoordinasi%3A%2A%0A%F0%9F%91%A8%E2%80%8D%F0%9F%92%BC+Encik+Ahmad%0A%F0%9F%93%9E+06-231+9999%0A%0A%E2%9C%85+%2ASila+Sahkan+Kehadiran+Anda%3A%2A%0AUntuk+mengesahkan+penerimaan+tugasan+ini%2C+sila%3A%0A1.+Log+masuk+ke+Sistem+Pengurusan+Sukarelawan%0A2.+Pergi+ke+Dashboard+Sukarelawan%0A3.+Klik+%27Sahkan+Tugasan%27+untuk+pengesahan%0A%0A%F0%9F%94%97+%2ASistem+Pengurusan+Sukarelawan%3A%2A%0Ahttp%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%0A%0A%F0%9F%93%A2+%2ANota+Penting%3A%2A%0A-+Sila+beritahu+sekurang-kurangnya+24+jam+awal+jika+tidak+dapat+hadir%0A-+Makanan+dan+minuman+akan+disediakan%0A-+Sila+pastikan+anda+sihat+dan+bersedia%0A-+Tugas+sukarela+ini+tidak+dibayar%0A%0ATerima+kasih+atas+komitmen+dan+kesudian+anda+untuk+membantu+komuniti+yang+memerlukan.+Sumbangan+anda+sangat+dihargai%21%0A%0ASalam+hormat%2C%0A%E2%80%94+%2AJabatan+Kebajikan+Masyarakat+%28JKM%29+Melaka%2A+%E2%80%94%0A%F0%9F%93%9E+Hotline%3A+06-231+9999%0A%F0%9F%93%A7+Email%3A+jkm-melaka%40melaka.gov.my" target="_blank" style="color: #3498db; text-decoration: none;">
+                <i class="fas fa-external-link-alt"></i> Open Link
+            </a></p>
+                        </div>
+                    </div>
+                    
+                    <div class="btn-group">
+                        <a href="http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php" target="_blank" class="btn btn-confirm">
+                            <i class="fas fa-sign-in-alt"></i> Go to Volunteer Dashboard
+                        </a>
+                        <a href="https://wa.me/60123456789?text=Assalamualaikum%2FHello+Ali+bin+Ahmad%2C%0A%0A%E2%9C%A8+%2ATUGASAN+AGIHAN+BANTUAN+BENCANA%2A+%E2%9C%A8%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%8B+%2AMaklumat+Tugasan%3A%2A%0A%F0%9F%8F%A2+Program%3A+Agihan+Bantuan+Banjir+Monsun+Timur+Laut+2025%0A%F0%9F%93%85+Tarikh%3A+27%2F12%2F2025%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A4+Peranan%3A+%2ADistributor%2A%0A%F0%9F%91%A5+Jumlah+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+Rujukan%3A+DIST0000051%0A%0A%F0%9F%93%9D+%2AArahan+Penting%3A%2A%0A%E2%9C%93+Hadir+15+minit+lebih+awal+untuk+pendaftaran%0A%E2%9C%93+Bawa+kad+pengenalan+untuk+pendaftaran%0A%E2%9C%93+Pakaian+sesuai%3A+Kasut+tertutup%2C+seluar+panjang%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%E2%9C%93+%2AVest+sukarelawan%2A+akan+disediakan+di+lokasi%0A%0A%F0%9F%A4%9D+%2AKoordinasi%3A%2A%0A%F0%9F%91%A8%E2%80%8D%F0%9F%92%BC+Encik+Ahmad%0A%F0%9F%93%9E+06-231+9999%0A%0A%E2%9C%85+%2ASila+Sahkan+Kehadiran+Anda%3A%2A%0AUntuk+mengesahkan+penerimaan+tugasan+ini%2C+sila%3A%0A1.+Log+masuk+ke+Sistem+Pengurusan+Sukarelawan%0A2.+Pergi+ke+Dashboard+Sukarelawan%0A3.+Klik+%27Sahkan+Tugasan%27+untuk+pengesahan%0A%0A%F0%9F%94%97+%2ASistem+Pengurusan+Sukarelawan%3A%2A%0Ahttp%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%0A%0A%F0%9F%93%A2+%2ANota+Penting%3A%2A%0A-+Sila+beritahu+sekurang-kurangnya+24+jam+awal+jika+tidak+dapat+hadir%0A-+Makanan+dan+minuman+akan+disediakan%0A-+Sila+pastikan+anda+sihat+dan+bersedia%0A-+Tugas+sukarela+ini+tidak+dibayar%0A%0ATerima+kasih+atas+komitmen+dan+kesudian+anda+untuk+membantu+komuniti+yang+memerlukan.+Sumbangan+anda+sangat+dihargai%21%0A%0ASalam+hormat%2C%0A%E2%80%94+%2AJabatan+Kebajikan+Masyarakat+%28JKM%29+Melaka%2A+%E2%80%94%0A%F0%9F%93%9E+Hotline%3A+06-231+9999%0A%F0%9F%93%A7+Email%3A+jkm-melaka%40melaka.gov.my" target="_blank" class="btn btn-whatsapp">
+                            <i class="fab fa-whatsapp"></i> Open WhatsApp Web
+                        </a>
+                        
+                        <a href="assign_volunteer.php?distribution_id=51" class="btn btn-back">
+                            <i class="fas fa-arrow-left"></i> Back to Assignment
+                        </a>
+                    </div>
+                    
+                    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 14px;">
+                        <p><strong>Timestamp:</strong> 2025-12-30 11:26:07</p>
+                        <p><strong>Preview ID:</strong> N/A</p>
+                        <p><strong>Confirmation Required:</strong> Yes - Volunteer must login to confirm</p>
+                        <p><em>This is a system-generated simulation for XAMPP development environment.</em></p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>

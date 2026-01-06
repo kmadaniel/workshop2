@@ -1,0 +1,154 @@
+
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Notification Preview - Ahmad Firdaus</title>
+            <style>
+                body { font-family: "Segoe UI", Arial, sans-serif; line-height: 1.6; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); margin: 0; padding: 20px; min-height: 100vh; }
+                .container { max-width: 900px; margin: 20px auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+                .header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 30px; text-align: center; }
+                .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+                .header p { margin: 10px 0 0; opacity: 0.9; font-size: 16px; }
+                .content { padding: 30px; }
+                .volunteer-info { background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 30px; display: flex; align-items: center; gap: 20px; }
+                .volunteer-avatar { width: 80px; height: 80px; background: #3498db; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; }
+                .volunteer-details { flex: 1; }
+                .channel-section { margin: 25px 0; }
+                .channel-card { background: #f8f9fa; border-radius: 10px; padding: 20px; margin: 15px 0; border-left: 5px solid; transition: transform 0.3s; }
+                .channel-card:hover { transform: translateX(5px); }
+                .email-card { border-left-color: #e74c3c; }
+                .sms-card { border-left-color: #f39c12; }
+                .whatsapp-card { border-left-color: #25d366; }
+                .message-box { background: #2c3e50; color: white; padding: 25px; border-radius: 10px; margin: 25px 0; font-family: "Courier New", monospace; white-space: pre-wrap; line-height: 1.8; font-size: 14px; }
+                .btn-group { display: flex; gap: 15px; margin-top: 30px; flex-wrap: wrap; }
+                .btn { padding: 12px 25px; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; transition: all 0.3s; }
+                .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+                .btn-whatsapp { background: linear-gradient(135deg, #25d366, #128C7E); }
+                .btn-email { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+                .btn-back { background: linear-gradient(135deg, #3498db, #2980b9); }
+                .btn-confirm { background: linear-gradient(135deg, #3498db, #2980b9); }
+                .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-left: 10px; }
+                .status-success { background: #d4edda; color: #155724; }
+                .status-simulated { background: #fff3cd; color: #856404; }
+                .icon { font-size: 20px; }
+                .watermark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 100px; color: rgba(0,0,0,0.05); z-index: -1; font-weight: bold; }
+                .confirmation-box { background: #e8f4fc; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 5px solid #3498db; }
+                .confirmation-link { background: white; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 13px; margin: 10px 0; word-break: break-all; border: 1px solid #ddd; }
+            </style>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        </head>
+        <body>
+            <div class="watermark">XAMPP PREVIEW</div>
+            <div class="container">
+                <div class="header">
+                    <h1><i class="fas fa-bell"></i> Notification Preview</h1>
+                    <p>Multi-Channel Delivery Simulation (XAMPP)</p>
+                </div>
+                <div class="content">
+                    <div class="volunteer-info">
+                        <div class="volunteer-avatar">A</div>
+                        <div class="volunteer-details">
+                            <h2 style="margin: 0 0 10px 0;">Ahmad Firdaus</h2>
+                            <p style="margin: 0; color: #666;">
+                                <strong>Volunteer ID:</strong> VOL0005 | 
+                                <strong>Distribution:</strong> DIST0000051 | 
+                                <strong>Role:</strong> Packer
+                            </p>
+                            <p style="margin: 10px 0 0 0; color: #666;">
+                                <i class="fas fa-phone"></i> 016-5566778 | 
+                                <i class="fas fa-envelope"></i> N/A
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="confirmation-box">
+                        <h3 style="margin-top: 0; color: #2c3e50;">
+                            <i class="fas fa-check-circle"></i> Konfirmasi Kehadiran Link
+                        </h3>
+                        <p>Volunteers can click this link to confirm their attendance:</p>
+                        <div class="confirmation-link">
+                            <a href="http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php?distribution_id=51" target="_blank">http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php?distribution_id=51</a>
+                        </div>
+                        <p style="margin-top: 10px; font-size: 14px; color: #666;">
+                            <i class="fas fa-info-circle"></i> This link is included in all WhatsApp messages and emails.
+                        </p>
+                    </div>
+                    
+                    <div class="message-box">
+                        Assalamualaikum Ahmad Firdaus,<br />
+<br />
+TUGASAN AGIHAN BANTUAN BENCANA<br />
+===============================<br />
+<br />
+📅 Tarikh: 27/12/2025<br />
+⏰ Masa: 4:00 PM<br />
+📍 Lokasi: Sekolah Kebangsaan Alor Gajah<br />
+👥 Peranan: Packer<br />
+📦 Mangsa: 50 keluarga<br />
+🆔 ID Distribusi: DIST0000051<br />
+<br />
+PERINTAH:<br />
+✓ Hadir 15 minit awal<br />
+✓ Bawa vest sukarelawan<br />
+✓ Bawa sarung tangan &amp; topeng muka<br />
+✓ Bawa air minuman sendiri<br />
+<br />
+📋 **SILA KONFIRMASI KEHADIRAN ANDA:**<br />
+👉 http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php?distribution_id=51<br />
+<br />
+Koordinasi:<br />
+Encik Ahmad<br />
+📞 06-XXX XXXX<br />
+<br />
+Terima kasih atas sumbangan masa dan tenaga!<br />
+— JKM Melaka Disaster Relief Team —<br />
+<br />
+📋 **SILA KONFIRMASI KEHADIRAN ANDA:**<br />
+👉 http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php?distribution_id=51
+                    </div>
+                    
+                    <h3><i class="fas fa-satellite-dish"></i> Delivery Channels (Simulated in XAMPP)</h3>
+                    
+                    <div class="channel-section">
+                        <div class="channel-card email-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fas fa-envelope icon"></i> Email Delivery</h4>
+                            <p><span class="status-badge" style="background: #e0e0e0; color: #666;">Not Attempted</span></p>
+                        </div>
+                        
+                        <div class="channel-card sms-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fas fa-sms icon"></i> SMS Delivery</h4>
+                            <p><span class="status-badge status-success">SIMULATED</span></p><p><strong>Method:</strong> simulated_sms</p><p><i class="fas fa-info-circle"></i> SMS simulated (XAMPP has no SMTP). Carrier: digi</p>
+                        </div>
+                        
+                        <div class="channel-card whatsapp-card">
+                            <h4 style="margin: 0 0 15px 0;"><i class="fab fa-whatsapp icon"></i> WhatsApp Link</h4>
+                            <p><span class="status-badge status-success">SIMULATED</span></p><p><strong>Method:</strong> whatsapp_web_link</p><p><i class="fas fa-info-circle"></i> Open WhatsApp Web to send manually</p><p><a href="https://wa.me/60165566778?text=Assalamualaikum+Ahmad+Firdaus%2C%0A%0ATUGASAN+AGIHAN+BANTUAN+BENCANA%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%85+Tarikh%3A+27%2F12%2F2025%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A5+Peranan%3A+Packer%0A%F0%9F%93%A6+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+ID+Distribusi%3A+DIST0000051%0A%0APERINTAH%3A%0A%E2%9C%93+Hadir+15+minit+awal%0A%E2%9C%93+Bawa+vest+sukarelawan%0A%E2%9C%93+Bawa+sarung+tangan+%26+topeng+muka%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%0A%F0%9F%93%8B+%2A%2ASILA+KONFIRMASI+KEHADIRAN+ANDA%3A%2A%2A%0A%F0%9F%91%89+http%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%3Fdistribution_id%3D51%0A%0AKoordinasi%3A%0AEncik+Ahmad%0A%F0%9F%93%9E+06-XXX+XXXX%0A%0ATerima+kasih+atas+sumbangan+masa+dan+tenaga%21%0A%E2%80%94+JKM+Melaka+Disaster+Relief+Team+%E2%80%94" target="_blank" style="color: #3498db; text-decoration: none;">
+                <i class="fas fa-external-link-alt"></i> Open Link
+            </a></p>
+                        </div>
+                    </div>
+                    
+                    <div class="btn-group">
+                        <a href="https://wa.me/60165566778?text=Assalamualaikum+Ahmad+Firdaus%2C%0A%0ATUGASAN+AGIHAN+BANTUAN+BENCANA%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%85+Tarikh%3A+27%2F12%2F2025%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A5+Peranan%3A+Packer%0A%F0%9F%93%A6+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+ID+Distribusi%3A+DIST0000051%0A%0APERINTAH%3A%0A%E2%9C%93+Hadir+15+minit+awal%0A%E2%9C%93+Bawa+vest+sukarelawan%0A%E2%9C%93+Bawa+sarung+tangan+%26+topeng+muka%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%0A%F0%9F%93%8B+%2A%2ASILA+KONFIRMASI+KEHADIRAN+ANDA%3A%2A%2A%0A%F0%9F%91%89+http%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%3Fdistribution_id%3D51%0A%0AKoordinasi%3A%0AEncik+Ahmad%0A%F0%9F%93%9E+06-XXX+XXXX%0A%0ATerima+kasih+atas+sumbangan+masa+dan+tenaga%21%0A%E2%80%94+JKM+Melaka+Disaster+Relief+Team+%E2%80%94" target="_blank" class="btn btn-whatsapp">
+                            <i class="fab fa-whatsapp"></i> Open WhatsApp Web
+                        </a>
+                        <a href="http://10.147.17.154:8000/distribution_module/volunteer_dashboard.php?distribution_id=51" target="_blank" class="btn btn-confirm">
+                            <i class="fas fa-check-circle"></i> Open Confirmation Link
+                        </a>
+                        
+                        <a href="assign_volunteer.php?distribution_id=51" class="btn btn-back">
+                            <i class="fas fa-arrow-left"></i> Back to Assignment
+                        </a>
+                    </div>
+                    
+                    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 14px;">
+                        <p><strong>Timestamp:</strong> 2025-12-30 12:29:39</p>
+                        <p><strong>Preview ID:</strong> N/A</p>
+                        <p><em>This is a system-generated simulation for XAMPP development environment.</em></p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>

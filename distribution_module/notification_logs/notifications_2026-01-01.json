@@ -1,0 +1,52 @@
+{
+    "timestamp": "2026-01-01 15:00:40",
+    "volunteer_id": 1,
+    "volunteer_name": "Muhammad Farhan",
+    "distribution_id": 69,
+    "role": "Distributor",
+    "channels": {
+        "sms": {
+            "success": true,
+            "method": "simulated_sms",
+            "carrier": "digi",
+            "sms_email": "60123456789@digimobile.my",
+            "note": "SMS simulated (XAMPP has no SMTP). Carrier: digi"
+        },
+        "whatsapp": {
+            "success": true,
+            "method": "whatsapp_web_link",
+            "url": "https:\/\/wa.me\/60123456789?text=Assalamualaikum+Muhammad+Farhan%2C%0A%0ATUGASAN+AGIHAN+BANTUAN+BENCANA%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%85+Tarikh%3A+01%2F01%2F2026%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A5+Peranan%3A+Distributor%0A%F0%9F%93%A6+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+ID+Distribusi%3A+DIST0000069%0A%0APERINTAH%3A%0A%E2%9C%93+Hadir+15+minit+awal%0A%E2%9C%93+Bawa+vest+sukarelawan%0A%E2%9C%93+Bawa+sarung+tangan+%26+topeng+muka%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%0A%F0%9F%93%8B+%2A%2ASILA+KONFIRMASI+KEHADIRAN+ANDA%3A%2A%2A%0A%F0%9F%91%89+http%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%3Fdistribution_id%3D69%0A%0AKoordinasi%3A%0AIkmal%0A%F0%9F%93%9E+01117845504%0A%0ATerima+kasih+atas+sumbangan+masa+dan+tenaga%21%0A%E2%80%94+JKM+Melaka+Disaster+Relief+Team+%E2%80%94",
+            "phone": "60123456789",
+            "note": "Open WhatsApp Web to send manually"
+        }
+    }
+},
+{
+    "timestamp": "2026-01-01 17:03:53",
+    "volunteer_id": 23,
+    "volunteer_name": "Ikmal Daniel",
+    "distribution_id": 70,
+    "role": "Distributor",
+    "channels": {
+        "email": {
+            "success": true,
+            "method": "simulated_email",
+            "preview": "email_previews\/email_1767287033_3ca0e85d.html",
+            "note": "Email simulated (XAMPP has no SMTP). View preview: email_previews\/email_1767287033_3ca0e85d.html"
+        },
+        "sms": {
+            "success": true,
+            "method": "simulated_sms",
+            "carrier": "digi",
+            "sms_email": "601117845504@digimobile.my",
+            "note": "SMS simulated (XAMPP has no SMTP). Carrier: digi"
+        },
+        "whatsapp": {
+            "success": true,
+            "method": "whatsapp_web_link",
+            "url": "https:\/\/wa.me\/601117845504?text=Assalamualaikum+Ikmal+Daniel%2C%0A%0ATUGASAN+AGIHAN+BANTUAN+BENCANA%0A%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%0A%0A%F0%9F%93%85+Tarikh%3A+03%2F01%2F2026%0A%E2%8F%B0+Masa%3A+4%3A00+PM%0A%F0%9F%93%8D+Lokasi%3A+Sekolah+Kebangsaan+Alor+Gajah%0A%F0%9F%91%A5+Peranan%3A+Distributor%0A%F0%9F%93%A6+Mangsa%3A+50+keluarga%0A%F0%9F%86%94+ID+Distribusi%3A+DIST0000070%0A%0APERINTAH%3A%0A%E2%9C%93+Hadir+15+minit+awal%0A%E2%9C%93+Bawa+vest+sukarelawan%0A%E2%9C%93+Bawa+sarung+tangan+%26+topeng+muka%0A%E2%9C%93+Bawa+air+minuman+sendiri%0A%0A%F0%9F%93%8B+%2A%2ASILA+KONFIRMASI+KEHADIRAN+ANDA%3A%2A%2A%0A%F0%9F%91%89+http%3A%2F%2F10.147.17.154%3A8000%2Fdistribution_module%2Fvolunteer_dashboard.php%3Fdistribution_id%3D70%0A%0AKoordinasi%3A%0AIkmal%0A%F0%9F%93%9E+01117845504%0A%0ATerima+kasih+atas+sumbangan+masa+dan+tenaga%21%0A%E2%80%94+JKM+Melaka+Disaster+Relief+Team+%E2%80%94",
+            "phone": "601117845504",
+            "note": "Open WhatsApp Web to send manually"
+        }
+    }
+},

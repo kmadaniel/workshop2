@@ -2,35 +2,390 @@
 session_start();
 require_once 'config.php';
 
+// Check if user is logged in
+if (!isset($_SESSION['volunteer_id']) || !isset($_SESSION['volunteer_name'])) {
+    header("Location: volunteer_distribution.php");
+    exit;
+}
+
+$volunteer_id = $_SESSION['volunteer_id'];
+$volunteer_name = $_SESSION['volunteer_name'];
+
 $database = new Database();
 $db = $database->getConnection();
 
-// In real system, volunteer_id would come from login/session
-$volunteer_id = 1; // Default for demo
-$distribution_id = $_GET['distribution_id'] ?? null;
+// Input validation
+$distribution_id = filter_var($_GET['distribution_id'] ?? null, FILTER_VALIDATE_INT);
+if (!$distribution_id || $distribution_id <= 0) {
+    header("Location: volunteer_distribution.php?error=invalid_distribution");
+    exit;
+}
+
 $error = '';
 $success = '';
 $victim_data = null;
 $needs_data = [];
+$distribution_stats = null;
+$personal_stats = null;
+$tracking_updates = [];
 
-/* ----------------------------------------
-   CHECK VOLUNTEER ASSIGNMENT
----------------------------------------- */
-if (!$distribution_id) {
-    header("Location: volunteer_dashboard.php");
-    exit;
+// Define upload directory
+$upload_dir = 'uploads/signatures/';
+if (!file_exists($upload_dir)) {
+    mkdir($upload_dir, 0777, true);
 }
 
-// First, check if volunteer is assigned to this distribution
+// API URLs
+$VOLUNTEER_API_URL = 'http://10.147.17.30:8000/api_volunteer.php';
+$DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
+$VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
+$NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
+
+/* ========================================
+   API FETCH FUNCTIONS
+======================================== */
+function fetchFromAPI($url, $id = null) {
+    try {
+        $full_url = $id ? $url . '?id=' . $id : $url;
+        
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $full_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_FAILONERROR => false
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        
+        // FIX: Properly close cURL resource
+        if (is_resource($ch)) {
+            curl_close($ch);
+        }
+        
+        if ($response === false) {
+            error_log("cURL Error for $full_url: $error");
+            return null;
+        }
+        
+        if ($httpCode !== 200) {
+            error_log("HTTP Error $httpCode for $full_url");
+            return null;
+        }
+        
+        $data = json_decode($response, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("JSON decode error for $full_url: " . json_last_error_msg());
+            return null;
+        }
+        
+        return $data;
+    } catch (Exception $e) {
+        error_log("Exception fetching from API $url: " . $e->getMessage());
+        return null;
+    }
+}
+
+function fetchAllFromAPI($url) {
+    try {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_FAILONERROR => false
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        
+        // FIX: Properly close cURL resource
+        if (is_resource($ch)) {
+            curl_close($ch);
+        }
+        
+        if ($response === false) {
+            error_log("cURL Error for $url: $error");
+            return ['success' => false, 'data' => [], 'error' => $error];
+        }
+        
+        if ($httpCode !== 200) {
+            error_log("HTTP Error $httpCode for $url");
+            return ['success' => false, 'data' => [], 'error' => "HTTP $httpCode"];
+        }
+        
+        $data = json_decode($response, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("JSON decode error for $url: " . json_last_error_msg());
+            return ['success' => false, 'data' => [], 'error' => 'Invalid JSON'];
+        }
+        
+        if (isset($data['data'])) {
+            $items = $data['data'];
+        } elseif (isset($data['needs'])) {
+            $items = $data['needs'];
+        } elseif (isset($data['victims'])) {
+            $items = $data['victims'];
+        } elseif (isset($data['volunteers'])) {
+            $items = $data['volunteers'];
+        } elseif (isset($data['disasters'])) {
+            $items = $data['disasters'];
+        } else {
+            $items = is_array($data) ? $data : [];
+        }
+        
+        return ['success' => true, 'data' => $items, 'count' => count($items)];
+    } catch (Exception $e) {
+        error_log("Exception fetching all from API $url: " . $e->getMessage());
+        return ['success' => false, 'data' => [], 'error' => $e->getMessage()];
+    }
+}
+
+/* ========================================
+   FORM SUBMISSION HANDLERS
+======================================== */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['update_tracking'])) {
+        $current_location = trim($_POST['current_location'] ?? '');
+        $tracking_notes = trim($_POST['tracking_notes'] ?? '');
+        $estimated_arrival = trim($_POST['estimated_arrival'] ?? '');
+        $status_update = trim($_POST['status_update'] ?? 'in_transit');
+        
+        if (!empty($current_location)) {
+            try {
+                $victim_id_for_tracking = $_POST['victim_id'] ?? 0;
+                
+                $tracking_query = "INSERT INTO distribution_tracking (distribution_id, volunteer_id, victim_id, current_location, tracking_notes, estimated_arrival, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
+                $stmt = $db->prepare($tracking_query);
+                $stmt->bind_param("iiissss", $distribution_id, $volunteer_id, $victim_id_for_tracking, $current_location, $tracking_notes, $estimated_arrival, $status_update);
+                $stmt->execute();
+                $stmt->close();
+                
+                $distribution_volunteer_status = 'Active';
+                if ($status_update == 'departed') {
+                    $distribution_volunteer_status = 'In Progress';
+                } elseif ($status_update == 'arrived') {
+                    $distribution_volunteer_status = 'Arrived';
+                } elseif ($status_update == 'delayed') {
+                    $distribution_volunteer_status = 'Delayed';
+                }
+                
+                $update_volunteer_status_query = "UPDATE distribution_volunteer SET status = ? WHERE distribution_id = ? AND volunteer_id = ?";
+                $stmt = $db->prepare($update_volunteer_status_query);
+                $stmt->bind_param("sii", $distribution_volunteer_status, $distribution_id, $volunteer_id);
+                $stmt->execute();
+                $stmt->close();
+                
+                $success = "Tracking status updated successfully!";
+                
+                header("Location: execute_distribution.php?distribution_id=$distribution_id&victim_id=$victim_id_for_tracking&success=tracking_updated");
+                exit;
+                
+            } catch (Exception $e) {
+                $error = "Error updating tracking: " . $e->getMessage();
+            }
+        } else {
+            $error = "Please enter your current location.";
+        }
+    }
+    
+    if (isset($_POST['prepare_distribution'])) {
+        $selected_items = $_POST['distributed_items'] ?? [];
+        $victim_id = $_POST['victim_id'] ?? 0;
+        
+        if (!empty($selected_items) && $victim_id) {
+            try {
+                $db->begin_transaction();
+                
+                foreach ($selected_items as $need_id) {
+                    $check_query = "SELECT id FROM distribution_log WHERE need_id = ? AND victim_id = ? AND distribution_id = ? AND volunteer_id = ?";
+                    $stmt = $db->prepare($check_query);
+                    $stmt->bind_param("siii", $need_id, $victim_id, $distribution_id, $volunteer_id);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    $exists = $result->num_rows > 0;
+                    $stmt->close();
+                    
+                    if ($exists) {
+                        $update_query = "UPDATE distribution_log SET status = 'in_transit' WHERE need_id = ? AND victim_id = ? AND distribution_id = ? AND volunteer_id = ?";
+                        $stmt = $db->prepare($update_query);
+                        $stmt->bind_param("siii", $need_id, $victim_id, $distribution_id, $volunteer_id);
+                    } else {
+                        $insert_query = "INSERT INTO distribution_log (distribution_id, volunteer_id, victim_id, need_id, status, quantity_distributed, created_at) VALUES (?, ?, ?, ?, 'in_transit', 1, NOW())";
+                        $stmt = $db->prepare($insert_query);
+                        $stmt->bind_param("iiis", $distribution_id, $volunteer_id, $victim_id, $need_id);
+                    }
+                    
+                    $stmt->execute();
+                    $stmt->close();
+                }
+                
+                $db->commit();
+                
+                $update_items_query = "UPDATE distribution_items SET status = 'Dispatched' WHERE distribution_id = ? AND victim_id = ?";
+                $stmt = $db->prepare($update_items_query);
+                $stmt->bind_param("ii", $distribution_id, $victim_id);
+                $stmt->execute();
+                $stmt->close();
+                
+                $initial_tracking_query = "INSERT INTO distribution_tracking (distribution_id, volunteer_id, victim_id, current_location, tracking_notes, status, created_at) VALUES (?, ?, ?, 'Distribution Center', 'Items loaded and ready for delivery', 'departed', NOW())";
+                $stmt = $db->prepare($initial_tracking_query);
+                $stmt->bind_param("iii", $distribution_id, $volunteer_id, $victim_id);
+                $stmt->execute();
+                $stmt->close();
+                
+                header("Location: execute_distribution.php?distribution_id=$distribution_id&victim_id=$victim_id&success=prepared");
+                exit;
+                
+            } catch (Exception $e) {
+                if (isset($db) && method_exists($db, 'rollback')) {
+                    $db->rollback();
+                }
+                $error = "Error preparing items: " . $e->getMessage();
+            }
+        } else {
+            $error = "Please select at least one item to prepare for delivery.";
+        }
+    }
+    
+    if (isset($_POST['complete_delivery'])) {
+        $selected_items = $_POST['delivered_items'] ?? [];
+        $victim_id = $_POST['victim_id'] ?? 0;
+        $delivery_remarks = $_POST['delivery_remarks'] ?? '';
+        
+        $signature_image_path = null;
+        $upload_errors = [];
+        
+        if (isset($_FILES['signature_image']) && $_FILES['signature_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+            $file = $_FILES['signature_image'];
+            
+            if ($file['error'] !== UPLOAD_ERR_OK) {
+                $upload_errors[] = getUploadErrorMessage($file['error']);
+            } else {
+                $allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+                $file_type = mime_content_type($file['tmp_name']);
+                
+                if (!in_array($file_type, $allowed_types)) {
+                    $upload_errors[] = "Only JPG, PNG, GIF, and WebP images are allowed.";
+                }
+                
+                $max_size = 5 * 1024 * 1024;
+                if ($file['size'] > $max_size) {
+                    $upload_errors[] = "File size must be less than 5MB.";
+                }
+                
+                if (empty($upload_errors)) {
+                    $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+                    $filename = 'signature_' . $distribution_id . '_' . $victim_id . '_' . time() . '.' . $file_extension;
+                    $target_path = $upload_dir . $filename;
+                    
+                    if (move_uploaded_file($file['tmp_name'], $target_path)) {
+                        $signature_image_path = $target_path;
+                    } else {
+                        $upload_errors[] = "Failed to upload image. Please try again.";
+                    }
+                }
+            }
+        }
+        
+        if (empty($selected_items)) {
+            $error = "Please select at least one item to mark as delivered.";
+        } elseif (!$signature_image_path) {
+            if (empty($upload_errors)) {
+                $error = "Please upload a recipient signature/image as confirmation.";
+            } else {
+                $error = implode(" ", $upload_errors);
+            }
+        } else {
+            try {
+                $db->begin_transaction();
+                
+                foreach ($selected_items as $need_id) {
+                    $check_query = "SELECT id FROM distribution_log WHERE need_id = ? AND victim_id = ? AND distribution_id = ? AND volunteer_id = ?";
+                    $stmt = $db->prepare($check_query);
+                    $stmt->bind_param("siii", $need_id, $victim_id, $distribution_id, $volunteer_id);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    $exists = $result->num_rows > 0;
+                    $stmt->close();
+                    
+                    if ($exists) {
+                        $update_query = "UPDATE distribution_log SET status = 'completed', remarks = ?, signature_url = ? WHERE need_id = ? AND victim_id = ? AND distribution_id = ? AND volunteer_id = ?";
+                        $stmt = $db->prepare($update_query);
+                        $stmt->bind_param("sssiii", $delivery_remarks, $signature_image_path, $need_id, $victim_id, $distribution_id, $volunteer_id);
+                    } else {
+                        $insert_query = "INSERT INTO distribution_log (distribution_id, volunteer_id, victim_id, need_id, status, quantity_distributed, remarks, signature_url, created_at) VALUES (?, ?, ?, ?, 'completed', 1, ?, ?, NOW())";
+                        $stmt = $db->prepare($insert_query);
+                        $stmt->bind_param("iiisss", $distribution_id, $volunteer_id, $victim_id, $need_id, $delivery_remarks, $signature_image_path);
+                    }
+                    
+                    $stmt->execute();
+                    $stmt->close();
+                }
+                
+                $db->commit();
+                
+                $update_items_query = "UPDATE distribution_items SET status = 'Delivered' WHERE distribution_id = ? AND victim_id = ?";
+                $stmt = $db->prepare($update_items_query);
+                $stmt->bind_param("ii", $distribution_id, $victim_id);
+                $stmt->execute();
+                $stmt->close();
+                
+                header("Location: execute_distribution.php?distribution_id=$distribution_id&victim_id=$victim_id&success=delivered");
+                exit;
+                
+            } catch (Exception $e) {
+                if (isset($db) && method_exists($db, 'rollback')) {
+                    $db->rollback();
+                }
+                if ($signature_image_path && file_exists($signature_image_path)) {
+                    unlink($signature_image_path);
+                }
+                $error = "Error completing delivery: " . $e->getMessage();
+            }
+        }
+    }
+}
+
+function getUploadErrorMessage($error_code) {
+    switch ($error_code) {
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'The uploaded file exceeds the maximum file size.';
+        case UPLOAD_ERR_PARTIAL:
+            return 'The file was only partially uploaded.';
+        case UPLOAD_ERR_NO_FILE:
+            return 'No file was uploaded.';
+        case UPLOAD_ERR_NO_TMP_DIR:
+            return 'Missing temporary folder.';
+        case UPLOAD_ERR_CANT_WRITE:
+            return 'Failed to write file to disk.';
+        case UPLOAD_ERR_EXTENSION:
+            return 'A PHP extension stopped the file upload.';
+        default:
+            return 'Unknown upload error.';
+    }
+}
+
+/* ========================================
+   CHECK VOLUNTEER ASSIGNMENT
+======================================== */
 $check_assignment = "
-    SELECT dv.*, v.name as volunteer_name, d.*, dis.Disaster_Name 
+    SELECT dv.*, d.* 
     FROM distribution_volunteer dv
-    JOIN volunteer v ON dv.volunteer_id = v.volunteer_id
     JOIN distribution d ON dv.distribution_id = d.distribution_id
-    JOIN disaster dis ON d.disaster_id = dis.disaster_id
     WHERE dv.distribution_id = ? 
     AND dv.volunteer_id = ?
-    AND dv.status IN ('Assigned', 'Active')
+    AND dv.status IN ('Assigned', 'Active', 'In Progress', 'Arrived', 'Delayed', 'Completed')
     LIMIT 1
 ";
 
@@ -42,1616 +397,1731 @@ $assignment = $result->fetch_assoc();
 $stmt->close();
 
 if (!$assignment) {
-    header("Location: volunteer_dashboard.php?error=not_assigned");
-    exit;
+    die("Error: You are not assigned to this distribution or assignment not found.");
 }
 
-/* ----------------------------------------
-   GET VICTIMS FOR THIS DISTRIBUTION
-   Since there's no victim_id in distribution_volunteer, 
-   show all victims with approved needs for this distribution
----------------------------------------- */
-// Get all victims with approved needs for this distribution
-$victims_query = "
-    SELECT DISTINCT v.*, 
-           COUNT(n.need_id) as total_needs
-    FROM victim v
-    JOIN needs n ON v.victim_id = n.victim_id
-    WHERE n.distribution_id = ?
-    AND n.status IN ('Approved', 'Scheduled')
-    GROUP BY v.victim_id
-    ORDER BY v.name
+/* ========================================
+   FETCH DATA FROM APIS
+======================================== */
+// Get disaster details
+$disaster_details = null;
+if (isset($assignment['disaster_id']) && $assignment['disaster_id']) {
+    $all_disasters = fetchAllFromAPI($DISASTER_API_URL);
+    if ($all_disasters['success'] && !empty($all_disasters['data'])) {
+        foreach ($all_disasters['data'] as $disaster) {
+            $disaster_id_from_api = $disaster['disaster_id'] ?? 
+                                   $disaster['Disaster_ID'] ?? 
+                                   $disaster['id'] ?? 0;
+            if (intval($disaster_id_from_api) == $assignment['disaster_id']) {
+                $disaster_details = $disaster;
+                break;
+            }
+        }
+    }
+}
+
+// Get volunteer details
+$volunteer_details = null;
+$all_volunteers = fetchAllFromAPI($VOLUNTEER_API_URL);
+if ($all_volunteers['success'] && !empty($all_volunteers['data'])) {
+    foreach ($all_volunteers['data'] as $volunteer) {
+        $volunteer_id_from_api = $volunteer['volunteer_id'] ?? 
+                                $volunteer['Volunteer_ID'] ?? 
+                                $volunteer['VolunteerID'] ?? 
+                                $volunteer['id'] ?? 0;
+        if (intval($volunteer_id_from_api) == $volunteer_id) {
+            $volunteer_details = $volunteer;
+            break;
+        }
+    }
+}
+
+// Update volunteer status to 'Active' if 'Assigned'
+if ($assignment['status'] == 'Assigned') {
+    $update_status = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
+    $stmt = $db->prepare($update_status);
+    $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+    $stmt->execute();
+    $stmt->close();
+    
+    $update_distribution_status = "UPDATE distribution SET status = 'In Transit' WHERE distribution_id = ?";
+    $stmt = $db->prepare($update_distribution_status);
+    $stmt->bind_param("i", $distribution_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/* ========================================
+   HANDLE VICTIM SELECTION
+======================================== */
+$victim_id = filter_var($_GET['victim_id'] ?? null, FILTER_VALIDATE_INT);
+
+if ($victim_id) {
+    $victim_details = null;
+    
+    $all_victims = fetchAllFromAPI($VICTIM_API_URL);
+    if ($all_victims['success'] && !empty($all_victims['data'])) {
+        foreach ($all_victims['data'] as $victim) {
+            $victim_id_from_api = $victim['victim_id'] ?? 
+                                 $victim['Victim_ID'] ?? 
+                                 $victim['VictimID'] ?? 
+                                 $victim['id'] ?? 0;
+            if (intval($victim_id_from_api) == $victim_id) {
+                $victim_details = $victim;
+                break;
+            }
+        }
+    }
+    
+    if (!$victim_details) {
+        $victim_details = fetchFromAPI($VICTIM_API_URL, $victim_id);
+    }
+    
+    if ($victim_details) {
+        $victim_data = [
+            'victim_id' => $victim_id,
+            'name' => $victim_details['FullName'] ?? 
+                     $victim_details['full_name'] ?? 
+                     $victim_details['name'] ?? 
+                     $victim_details['victim_name'] ?? 'Unknown Victim',
+            'address' => $victim_details['Address'] ?? 
+                        $victim_details['address'] ?? 
+                        $victim_details['location'] ?? 'N/A',
+            'family_size' => $victim_details['FamilyMembers'] ?? 
+                            $victim_details['family_members'] ?? 
+                            $victim_details['family_size'] ?? 1,
+            'contact_number' => $victim_details['ContactNumber'] ?? 
+                               $victim_details['contact_number'] ?? 
+                               $victim_details['phone'] ?? 
+                               $victim_details['Phone'] ?? 'N/A'
+        ];
+        
+        $needs_result = fetchAllFromAPI($NEEDS_API_URL);
+        $api_needs = $needs_result['data'] ?? [];
+        
+        $victim_needs = [];
+        foreach ($api_needs as $api_need) {
+            $need_victim_id = $api_need['victim_id'] ?? 
+                             $api_need['Victim_ID'] ?? 
+                             $api_need['VictimID'] ?? 0;
+            
+            if (intval($need_victim_id) == $victim_id) {
+                $victim_needs[] = $api_need;
+            }
+        }
+        
+        $needs_data = [];
+        foreach ($victim_needs as $api_need) {
+            $resource_name = $api_need['ResourceName'] ?? 
+                            $api_need['resource_name'] ?? 
+                            $api_need['item_name'] ?? 
+                            $api_need['ItemName'] ?? 'Resource';
+            
+            $quantity = $api_need['QuantityNeeded'] ?? 
+                       $api_need['quantity_needed'] ?? 
+                       $api_need['quantity'] ?? 1;
+            
+            $unit = $api_need['Unit'] ?? 
+                   $api_need['unit'] ?? 'units';
+            
+            $type = $api_need['Type'] ?? 
+                   $api_need['type'] ?? 
+                   $api_need['Category'] ?? 
+                   $api_need['category'] ?? 'Other';
+            
+            $need_id_value = $api_need['NeedID'] ?? 
+                            $api_need['need_id'] ?? 
+                            $api_need['id'] ?? 
+                            'need_' . $victim_id . '_' . uniqid();
+            
+            $check_log_query = "
+                SELECT status 
+                FROM distribution_log 
+                WHERE need_id = ? 
+                AND victim_id = ?
+                AND distribution_id = ?
+                AND volunteer_id = ?
+                ORDER BY created_at DESC 
+                LIMIT 1
+            ";
+            
+            $log_status = null;
+            $stmt = $db->prepare($check_log_query);
+            $stmt->bind_param("siii", $need_id_value, $victim_id, $distribution_id, $volunteer_id);
+            $stmt->execute();
+            $log_result = $stmt->get_result();
+            if ($log_row = $log_result->fetch_assoc()) {
+                $log_status = $log_row['status'];
+            }
+            $stmt->close();
+            
+            $need_status = 'pending';
+            if ($log_status == 'completed') {
+                $need_status = 'fulfilled';
+            } elseif ($log_status == 'in_transit') {
+                $need_status = 'in_transit';
+            }
+            
+            $needs_data[] = [
+                'need_id' => $need_id_value,
+                'resource_name' => $resource_name,
+                'quantity_needed' => $quantity,
+                'unit' => $unit,
+                'type' => $type,
+                'need_status' => $need_status,
+                'api_status' => $api_need['Status'] ?? $api_need['status'] ?? 'Pending',
+                'raw_api_data' => $api_need
+            ];
+        }
+        
+        $total_needs = count($needs_data);
+        $fulfilled_needs = 0;
+        $in_transit_needs = 0;
+        
+        foreach ($needs_data as $need) {
+            if ($need['need_status'] == 'fulfilled') {
+                $fulfilled_needs++;
+            } elseif ($need['need_status'] == 'in_transit') {
+                $in_transit_needs++;
+            }
+        }
+        
+        $victim_data['total_needs'] = $total_needs;
+        $victim_data['fulfilled_needs'] = $fulfilled_needs;
+        $victim_data['in_transit_needs'] = $in_transit_needs;
+        
+        $grouped_needs = [];
+        foreach ($needs_data as $need) {
+            $type = $need['type'] ?? 'Other';
+            if (!isset($grouped_needs[$type])) {
+                $grouped_needs[$type] = [];
+            }
+            $grouped_needs[$type][] = $need;
+        }
+        
+    } else {
+        $error = "Unable to load victim details from API. Please check connectivity.";
+    }
+} else {
+    $victims_from_items = [];
+    
+    $items_query = "
+        SELECT DISTINCT victim_id
+        FROM distribution_items 
+        WHERE distribution_id = ? 
+        AND status IN ('Scheduled', 'Dispatched')
+        ORDER BY victim_id ASC
+        LIMIT 10
+    ";
+    
+    $stmt = $db->prepare($items_query);
+    if ($stmt) {
+        $stmt->bind_param("i", $distribution_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $victims_from_items[] = $row['victim_id'];
+        }
+        $stmt->close();
+    }
+    
+    if (!empty($victims_from_items)) {
+        $victim_id = $victims_from_items[0];
+        header("Location: execute_distribution.php?distribution_id=$distribution_id&victim_id=$victim_id");
+        exit;
+    } else {
+        $error = "No victims assigned to this distribution yet.";
+    }
+}
+
+/* ========================================
+   GET TRACKING UPDATES
+======================================== */
+$tracking_query = "
+    SELECT * FROM distribution_tracking 
+    WHERE distribution_id = ? 
+    AND volunteer_id = ?
+    AND (victim_id = ? OR victim_id = 0 OR victim_id IS NULL)
+    ORDER BY created_at DESC
     LIMIT 10
 ";
 
-$stmt = $db->prepare($victims_query);
-$stmt->bind_param("i", $distribution_id);
+$stmt = $db->prepare($tracking_query);
+$stmt->bind_param("iii", $distribution_id, $volunteer_id, $victim_id);
 $stmt->execute();
-$victims_result = $stmt->get_result();
-$all_victims = $victims_result->fetch_all(MYSQLI_ASSOC);
-$stmt->close();
-
-// If there's only one victim, auto-select them
-if (count($all_victims) === 1) {
-    $victim_data = $all_victims[0];
-    $victim_id = $victim_data['victim_id'];
-    
-    // Get detailed needs for this victim
-    $needs_query = "
-        SELECT n.*, r.name as resource_name, r.unit, r.type
-        FROM needs n
-        JOIN resource r ON n.resource_id = r.resource_id
-        WHERE n.victim_id = ? 
-        AND n.distribution_id = ?
-        AND n.status IN ('Approved', 'Scheduled')
-    ";
-    
-    $stmt = $db->prepare($needs_query);
-$stmt->bind_param("ii", $victim_id, $distribution_id);
-$stmt->execute();
-$needs_result = $stmt->get_result();
-$needs_data = $needs_result->fetch_all(MYSQLI_ASSOC);
-$stmt->close();
+$result = $stmt->get_result();
+while ($row = $result->fetch_assoc()) {
+    $tracking_updates[] = $row;
 }
+$stmt->close();
 
-/* ----------------------------------------
-   HANDLE VICTIM SELECTION (FROM LIST)
----------------------------------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['select_victim'])) {
-        // Victim selected from list
-        $victim_id = $_POST['victim_id'];
-        
-        try {
-            // Get victim details
-            $victim_query = "
-                SELECT v.*, 
-                       COUNT(n.need_id) as total_needs
-                FROM victim v
-                LEFT JOIN needs n ON v.victim_id = n.victim_id 
-                    AND n.distribution_id = ?
-                    AND n.status = 'Approved'
-                WHERE v.victim_id = ?
-                GROUP BY v.victim_id
-            ";
-            
-            $stmt = $db->prepare($victim_query);
-            $stmt->bind_param("ii", $distribution_id, $victim_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $victim_data = $result->fetch_assoc();
-            $stmt->close();
-            
-            if (!$victim_data) {
-                throw new Exception("Victim not found");
-            }
-            
-            // Get detailed needs for this victim
-            $needs_query = "
-                SELECT n.*, r.name as resource_name, r.unit, r.type, r.category
-                FROM needs n
-                JOIN resource r ON n.resource_id = r.resource_id
-                WHERE n.victim_id = ? 
-                AND n.distribution_id = ?
-                AND n.status = 'Approved'
-            ";
-            
-            $stmt = $db->prepare($needs_query);
-            $stmt->bind_param("ii", $victim_id, $distribution_id);
-            $stmt->execute();
-            $needs_result = $stmt->get_result();
-            $needs_data = $needs_result->fetch_all(MYSQLI_ASSOC);
-            $stmt->close();
-            
-            if (empty($needs_data)) {
-                throw new Exception("No approved needs found for this victim");
-            }
-            
-        } catch (Exception $e) {
-            $error = $e->getMessage();
-        }
-    }
-    
-    /* ----------------------------------------
-       HANDLE DISTRIBUTION EXECUTION
-    ---------------------------------------- */
-    elseif (isset($_POST['distribute_items'])) {
-        $victim_id = $_POST['victim_id'];
-        $distributed_items = $_POST['distributed_items'] ?? [];
-        $signature_data = $_POST['signature_data'] ?? '';
-        $remarks = $_POST['remarks'] ?? '';
-        
-        try {
-            if (empty($distributed_items)) {
-                throw new Exception("Please select at least one item to distribute");
-            }
-            
-            $db->begin_transaction();
-            
-            $total_distributed = 0;
-            foreach ($distributed_items as $need_id) {
-                // Update need status to Fulfilled
-                $update_need = "UPDATE needs SET status = 'Fulfilled' WHERE need_id = ?";
-                $stmt = $db->prepare($update_need);
-                $stmt->bind_param("i", $need_id);
-                $stmt->execute();
-                $stmt->close();
-                
-                // Get need details for inventory update
-                $need_query = "SELECT resource_id, quantity_needed FROM needs WHERE need_id = ?";
-                $stmt = $db->prepare($need_query);
-                $stmt->bind_param("i", $need_id);
-                $stmt->execute();
-                $need_result = $stmt->get_result();
-                $need = $need_result->fetch_assoc();
-                $stmt->close();
-                
-                if ($need) {
-                    // Update inventory (deduct from quantity_reserved)
-                    $update_inventory = "
-                        UPDATE resource 
-                        SET quantity_reserved = quantity_reserved - ?,
-                            quantity_available = quantity_available - ?
-                        WHERE resource_id = ?
-                    ";
-                    $stmt = $db->prepare($update_inventory);
-                    $stmt->bind_param("iii", $need['quantity_needed'], $need['quantity_needed'], $need['resource_id']);
-                    $stmt->execute();
-                    $stmt->close();
-                    
-                    $total_distributed += $need['quantity_needed'];
-                }
-                
-                // Create distribution_log table if not exists
-                $check_table = $db->query("SHOW TABLES LIKE 'distribution_log'");
-                if ($check_table->num_rows == 0) {
-                    $create_table = "
-                        CREATE TABLE distribution_log (
-                            log_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-                            distribution_id BIGINT UNSIGNED,
-                            volunteer_id BIGINT UNSIGNED,
-                            victim_id BIGINT UNSIGNED,
-                            need_id BIGINT UNSIGNED,
-                            quantity_distributed INT,
-                            distributed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            signature_url VARCHAR(500),
-                            photo_url VARCHAR(500),
-                            remarks TEXT,
-                            FOREIGN KEY (distribution_id) REFERENCES distribution(distribution_id),
-                            FOREIGN KEY (volunteer_id) REFERENCES volunteer(volunteer_id),
-                            FOREIGN KEY (victim_id) REFERENCES victim(victim_id),
-                            FOREIGN KEY (need_id) REFERENCES needs(need_id)
-                        )
-                    ";
-                    $db->query($create_table);
-                }
-                
-                // Record distribution log
-                $log_query = "
-                    INSERT INTO distribution_log 
-                    (distribution_id, volunteer_id, victim_id, need_id, quantity_distributed, distributed_at, remarks)
-                    VALUES (?, ?, ?, ?, ?, NOW(), ?)
-                ";
-                
-                $stmt = $db->prepare($log_query);
-                $stmt->bind_param("iiiiis", 
-                    $distribution_id, 
-                    $volunteer_id, 
-                    $victim_id,
-                    $need_id,
-                    $need['quantity_needed'],
-                    $remarks
-                );
-                $stmt->execute();
-                $log_id = $stmt->insert_id;
-                $stmt->close();
-                
-                // Handle signature (in real system, save as image file)
-                if (!empty($signature_data) && $log_id) {
-                    // Create signatures directory if not exists
-                    if (!file_exists('../signatures')) {
-                        mkdir('../signatures', 0777, true);
-                    }
-                    
-                    // Save signature as image
-                    $signature_data = str_replace('data:image/png;base64,', '', $signature_data);
-                    $signature_data = str_replace(' ', '+', $signature_data);
-                    $signature_filename = "signature_{$log_id}.png";
-                    $signature_path = "../signatures/{$signature_filename}";
-                    
-                    if (file_put_contents($signature_path, base64_decode($signature_data))) {
-                        $update_signature = "UPDATE distribution_log SET signature_url = ? WHERE log_id = ?";
-                        $stmt = $db->prepare($update_signature);
-                        $stmt->bind_param("si", $signature_filename, $log_id);
-                        $stmt->execute();
-                        $stmt->close();
-                    }
-                }
-            }
-            
-            // Send SMS to victim (simulation) - CORRECTED: Removed phone field
-            $victim_info = $db->query("SELECT name FROM victim WHERE victim_id = {$victim_id}")->fetch_assoc();
-            if ($victim_info) {
-                $sms_message = "Bantuan telah diterima. Terima kasih. - JKM Melaka";
-                // In real system, integrate with SMS gateway like Twilio
-                error_log("SMS to victim {$victim_info['name']}: {$sms_message}");
-                
-                // Simulate SMS sending
-                $sms_sent = true;
-            }
-            
-            // Update volunteer assignment status to Completed - REMOVED completed_at since column doesn't exist
-            $update_volunteer = "
-                UPDATE distribution_volunteer 
-                SET status = 'Completed'
-                WHERE distribution_id = ? 
-                AND volunteer_id = ?
-            ";
-            $stmt = $db->prepare($update_volunteer);
-            $stmt->bind_param("ii", $distribution_id, $volunteer_id);
-            $stmt->execute();
-            $stmt->close();
-            
-            $db->commit();
-            
-            $success = "✅ Distribution recorded successfully!";
-            if (isset($sms_sent) && $sms_sent) {
-                $success .= "<br>📱 SMS sent to victim.";
-            }
-            $success .= "<br><br><strong>Distribution Summary:</strong>";
-            $success .= "<br>• Items Distributed: " . count($distributed_items);
-            $success .= "<br>• Total Quantity: {$total_distributed} units";
-            $success .= "<br>• Date: " . date('d/m/Y H:i:s');
-            $success .= "<br><br><strong>Your distribution task is now completed!</strong>";
-            
-            // Clear victim data
-            $victim_data = null;
-            $needs_data = [];
-            
-        } catch (Exception $e) {
-            $db->rollback();
-            $error = "Error: " . $e->getMessage();
+// Check if current victim has items in transit
+$has_in_transit_items = false;
+if (!empty($needs_data)) {
+    foreach ($needs_data as $need) {
+        if ($need['need_status'] == 'in_transit') {
+            $has_in_transit_items = true;
+            break;
         }
     }
 }
 
-/* ----------------------------------------
-   GET DISTRIBUTION STATISTICS
----------------------------------------- */
+/* ========================================
+   GET STATISTICS
+======================================== */
 $stats_query = "
-    SELECT 
-        COUNT(DISTINCT n.victim_id) as total_families,
-        COUNT(DISTINCT CASE WHEN n.status = 'Fulfilled' THEN n.need_id END) as fulfilled_needs,
-        COUNT(DISTINCT n.need_id) as total_needs
-    FROM needs n
-    WHERE n.distribution_id = ?
+SELECT 
+    COUNT(DISTINCT victim_id) as total_families,
+    COUNT(DISTINCT CASE WHEN status = 'completed' THEN victim_id END) as completed_families,
+    COUNT(DISTINCT CASE WHEN status = 'in_transit' THEN victim_id END) as in_transit_families,
+    COUNT(DISTINCT need_id) as total_needs,
+    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as fulfilled_needs,
+    SUM(CASE WHEN status = 'in_transit' THEN 1 ELSE 0 END) as in_transit_needs,
+    SUM(quantity_distributed) as distributed_quantity
+FROM distribution_log
+WHERE distribution_id = ?
 ";
 
 $stmt = $db->prepare($stats_query);
 $stmt->bind_param("i", $distribution_id);
 $stmt->execute();
 $stats_result = $stmt->get_result();
-$stats = $stats_result->fetch_assoc();
+$distribution_stats = $stats_result->fetch_assoc();
 $stmt->close();
+
+$progress = 0;
+if ($distribution_stats && $distribution_stats['total_families'] > 0) {
+    $completed_weight = $distribution_stats['completed_families'] * 1.0;
+    $in_transit_weight = $distribution_stats['in_transit_families'] * 0.7;
+    $total_weight = $completed_weight + $in_transit_weight;
+    $max_possible = $distribution_stats['total_families'] * 1.0;
+    $progress = ($total_weight / $max_possible) * 100;
+}
+
+$personal_stats_query = "
+SELECT 
+    COUNT(DISTINCT CASE WHEN status = 'completed' THEN victim_id END) as my_completed_victims,
+    COUNT(DISTINCT CASE WHEN status = 'in_transit' THEN victim_id END) as my_in_transit_victims,
+    COUNT(DISTINCT need_id) as my_fulfilled_needs,
+    SUM(quantity_distributed) as my_distributed_quantity
+FROM distribution_log
+WHERE distribution_id = ?
+AND volunteer_id = ?
+";
+
+$stmt = $db->prepare($personal_stats_query);
+$stmt->bind_param("ii", $distribution_id, $volunteer_id);
+$stmt->execute();
+$result = $stmt->get_result();
+$personal_stats = $result->fetch_assoc();
+$stmt->close();
+
+$has_pending_items = false;
+$has_in_transit_items = false;
+if (!empty($needs_data)) {
+    foreach ($needs_data as $need) {
+        if ($need['need_status'] == 'pending') {
+            $has_pending_items = true;
+        }
+        if ($need['need_status'] == 'in_transit') {
+            $has_in_transit_items = true;
+        }
+    }
+}
+
+$progress = min(max($progress, 0), 100);
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Execute Distribution - User Story 4.4</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Execute Distribution - Disaster Relief System</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Reset & Base */
+        :root {
+            --primary: #4361ee;
+            --primary-light: #6c8eff;
+            --secondary: #7209b7;
+            --success: #2ecc71;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --info: #3498db;
+            --light: #f8f9fa;
+            --dark: #2c3e50;
+            --gray: #6c757d;
+            --border-radius: 12px;
+            --shadow: 0 10px 30px rgba(0,0,0,0.08);
+            --transition: all 0.3s ease;
+        }
+        
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         }
         
         body {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             min-height: 100vh;
-            padding: 0;
+            padding: 20px;
             color: #333;
         }
         
-        .mobile-container {
-            max-width: 100%;
-            min-height: 100vh;
-            background: white;
-            border-radius: 20px 20px 0 0;
-            margin-top: 0;
-            padding: 0;
-            box-shadow: 0 -5px 30px rgba(0,0,0,0.1);
-            position: relative;
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
         }
         
         /* Header */
-        .app-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px 15px;
-            border-radius: 0 0 25px 25px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        .header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: var(--border-radius);
+            margin-bottom: 25px;
+            box-shadow: var(--shadow);
+            border-left: 5px solid var(--primary);
         }
         
-        .header-content {
+        .header-top {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 20px;
         }
         
-        .header-left h1 {
-            font-size: 1.4rem;
-            margin-bottom: 5px;
+        .page-title {
+            color: var(--dark);
+            font-size: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .page-title i {
+            color: var(--primary);
+        }
+        
+        .btn-back {
+            background: var(--light);
+            color: var(--dark);
+            padding: 12px 25px;
+            border-radius: 50px;
+            text-decoration: none;
             font-weight: 600;
-        }
-        
-        .header-left p {
-            font-size: 0.85rem;
-            opacity: 0.9;
-        }
-        
-        .header-right {
-            text-align: right;
-        }
-        
-        .dist-id {
-            background: rgba(255,255,255,0.2);
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            font-weight: 600;
-            display: inline-block;
-            margin-bottom: 5px;
-        }
-        
-        /* Assignment Info */
-        .assignment-info {
-            background: #e8f5e9;
-            margin: 15px;
-            padding: 15px;
-            border-radius: 15px;
-            border-left: 5px solid #2ecc71;
-        }
-        
-        .assignment-title {
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 10px;
             display: flex;
             align-items: center;
             gap: 10px;
+            transition: var(--transition);
+            border: 2px solid transparent;
         }
         
-        .assignment-details {
-            color: #666;
-            line-height: 1.5;
-        }
-        
-        /* Stats Cards */
-        .stats-container {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-            padding: 15px;
+        .btn-back:hover {
             background: white;
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
         
-        .stat-card {
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
-            padding: 15px 10px;
-            border-radius: 12px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        
-        .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #2c3e50;
-            line-height: 1;
-        }
-        
-        .stat-label {
-            font-size: 0.75rem;
-            color: #7f8c8d;
-            margin-top: 5px;
-            font-weight: 500;
-        }
-        
-        /* Progress Bar */
+        /* Progress Section */
         .progress-section {
-            padding: 0 15px 15px;
+            background: white;
+            padding: 25px;
+            border-radius: var(--border-radius);
+            margin-bottom: 25px;
+            box-shadow: var(--shadow);
         }
         
         .progress-header {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 0.9rem;
-            color: #2c3e50;
-            font-weight: 500;
-        }
-        
-        .progress-bar {
-            height: 10px;
-            background: #e0e6ed;
-            border-radius: 5px;
-            overflow: hidden;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #2ecc71, #27ae60);
-            border-radius: 5px;
-            transition: width 0.5s ease;
-        }
-        
-        /* Show either Victims List OR Selected Victim */
-        <?php if (!$victim_data || empty($all_victims)): ?>
-        /* No Victims Message */
-        .no-victims {
-            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
-            color: #856404;
-            margin: 15px;
-            padding: 40px 25px;
-            border-radius: 20px;
-            text-align: center;
-            border-left: 5px solid #ffc107;
-        }
-        
-        .no-victims-icon {
-            font-size: 3rem;
-            margin-bottom: 20px;
-            color: #ffc107;
-        }
-        
-        <?php elseif (!$victim_data && !empty($all_victims)): ?>
-        /* Victims List Section */
-        .victims-section {
-            background: white;
-            margin: 15px;
-            padding: 20px;
-            border-radius: 20px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-        }
-        
-        .section-title {
-            font-size: 1.2rem;
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-weight: 600;
-            display: flex;
             align-items: center;
-            gap: 10px;
-        }
-        
-        .victims-list {
-            max-height: 400px;
-            overflow-y: auto;
             margin-bottom: 20px;
         }
         
-        .victim-select-card {
-            background: #f8fafc;
-            border: 2px solid #e0e6ed;
-            border-radius: 15px;
-            padding: 15px;
-            margin-bottom: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
+        .progress-bar-container {
+            height: 12px;
+            background: #e0e0e0;
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 15px 0;
         }
         
-        .victim-select-card:hover {
-            border-color: #3498db;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.1);
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--info), var(--success));
+            border-radius: 6px;
+            transition: width 0.8s ease;
         }
         
-        .victim-select-card.selected {
-            background: #e8f5e9;
-            border-color: #2ecc71;
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
         }
         
-        .victim-select-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 10px;
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            text-align: center;
+            border-top: 4px solid var(--primary);
+            transition: var(--transition);
         }
         
-        .victim-select-name {
-            font-size: 1.1rem;
-            color: #2c3e50;
-            font-weight: 600;
+        .stat-card:hover {
+            transform: translateY(-5px);
         }
         
-        .victim-select-id {
-            background: #e3f2fd;
-            color: #1976d2;
-            padding: 3px 10px;
-            border-radius: 15px;
-            font-size: 0.8rem;
-            font-weight: 600;
+        .stat-card.total {
+            border-top-color: var(--primary);
         }
         
-        .victim-select-details {
-            color: #666;
-            font-size: 0.9rem;
-            line-height: 1.5;
+        .stat-card.transit {
+            border-top-color: var(--info);
         }
         
-        .victim-select-details p {
-            margin-bottom: 5px;
+        .stat-card.delivered {
+            border-top-color: var(--success);
         }
         
-        .victim-select-needs {
-            background: #17a2b8;
+        .stat-card.your {
+            border-top-color: var(--warning);
+        }
+        
+        .stat-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: white;
-            padding: 3px 10px;
-            border-radius: 15px;
-            font-size: 0.8rem;
-            display: inline-block;
-            margin-top: 8px;
-        }
-        
-        /* Select Button */
-        .select-button {
-            width: 100%;
-            padding: 16px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 15px;
-            font-size: 1rem;
-            font-weight: 600;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
+            font-size: 24px;
+            margin: 0 auto 15px;
         }
         
-        .select-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--dark);
+            margin: 10px 0;
         }
         
-        <?php else: ?>
-        /* Victim Card */
-        .victim-card {
+        .stat-label {
+            color: var(--gray);
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        /* Victim Profile */
+        .victim-profile-card {
             background: white;
-            margin: 15px;
-            padding: 20px;
-            border-radius: 20px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            border-left: 5px solid #3498db;
+            padding: 30px;
+            border-radius: var(--border-radius);
+            margin: 30px 0;
+            box-shadow: var(--shadow);
+            border-left: 5px solid var(--success);
         }
         
         .victim-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 15px;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 20px;
         }
         
-        .victim-name {
-            font-size: 1.3rem;
-            color: #2c3e50;
+        .victim-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .info-label {
+            color: var(--gray);
+            font-size: 0.9rem;
             font-weight: 600;
         }
         
-        .victim-id {
-            background: #e3f2fd;
-            color: #1976d2;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.85rem;
+        .info-value {
+            color: var(--dark);
+            font-size: 1.1rem;
             font-weight: 600;
         }
         
-        .victim-details {
-            color: #666;
-            line-height: 1.6;
-        }
-        
-        .victim-details strong {
-            color: #2c3e50;
-        }
-        
-        /* Needs List */
-        .needs-section {
-            background: white;
-            margin: 15px;
-            padding: 20px;
-            border-radius: 20px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-        }
-        
-        .section-title {
+        .info-icon {
+            color: var(--primary);
             font-size: 1.2rem;
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-weight: 600;
+        }
+        
+        /* Tracking Section */
+        .tracking-section {
+            background: white;
+            padding: 30px;
+            border-radius: var(--border-radius);
+            margin: 30px 0;
+            box-shadow: var(--shadow);
+        }
+        
+        .tracking-header {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
         }
         
-        .needs-list {
-            max-height: 300px;
-            overflow-y: auto;
+        .tracking-timeline {
+            margin: 25px 0;
+            position: relative;
+            padding-left: 40px;
         }
         
-        .need-item {
+        .tracking-timeline::before {
+            content: '';
+            position: absolute;
+            left: 15px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: linear-gradient(to bottom, var(--primary), var(--success));
+        }
+        
+        .tracking-update {
+            display: flex;
+            margin-bottom: 25px;
+            position: relative;
+        }
+        
+        .tracking-dot {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: white;
+            border: 3px solid var(--primary);
+            position: absolute;
+            left: -37px;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .tracking-dot i {
+            color: var(--primary);
+            font-size: 12px;
+        }
+        
+        .tracking-content {
+            flex: 1;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .tracking-location {
+            font-weight: 600;
+            color: var(--dark);
+            margin-bottom: 8px;
+            font-size: 1.1rem;
+        }
+        
+        .tracking-time {
+            font-size: 0.85rem;
+            color: var(--gray);
+            margin-top: 10px;
+        }
+        
+        /* Items Management */
+        .items-section {
+            background: white;
+            padding: 30px;
+            border-radius: var(--border-radius);
+            margin: 30px 0;
+            box-shadow: var(--shadow);
+        }
+        
+        .section-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 15px;
-            margin-bottom: 10px;
-            background: #f8fafc;
-            border-radius: 12px;
-            border: 2px solid #e0e6ed;
-            transition: all 0.3s;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
         }
         
-        .need-item.selected {
-            background: #e8f5e9;
-            border-color: #2ecc71;
+        .section-title {
+            color: var(--dark);
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
         
-        .need-info {
-            flex: 1;
-        }
-        
-        .need-name {
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 5px;
-        }
-        
-        .need-details {
-            font-size: 0.9rem;
-            color: #7f8c8d;
-        }
-        
-        .need-quantity {
-            background: #3498db;
-            color: white;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-        
-        .checkbox-container {
-            position: relative;
-            width: 24px;
-            height: 24px;
-            margin-right: 15px;
-        }
-        
-        .checkbox-custom {
-            width: 100%;
-            height: 100%;
-            border: 2px solid #bdc3c7;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .checkbox-custom.checked {
-            background: #2ecc71;
-            border-color: #2ecc71;
-        }
-        
-        .checkbox-custom.checked::after {
-            content: '✓';
-            color: white;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-weight: bold;
-            font-size: 14px;
-        }
-        
-        /* Action Buttons */
-        .action-buttons {
+        .items-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            padding: 15px;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
         }
         
-        .action-button {
-            padding: 18px;
-            border: none;
-            border-radius: 15px;
-            font-size: 1rem;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
+        .item-card {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
         }
         
-        .btn-camera {
-            background: linear-gradient(135deg, #9b59b6, #8e44ad);
-            color: white;
+        .item-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
         }
         
-        .btn-signature {
-            background: linear-gradient(135deg, #3498db, #2980b9);
-            color: white;
+        .item-card.selected {
+            border-color: var(--primary);
+            background: linear-gradient(135deg, rgba(67, 97, 238, 0.05), rgba(114, 9, 183, 0.05));
         }
         
-        .btn-distribute {
-            grid-column: 1 / -1;
-            background: linear-gradient(135deg, #2ecc71, #27ae60);
-            color: white;
+        .item-card.in-transit {
+            border-color: var(--info);
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.05), rgba(41, 128, 185, 0.05));
+        }
+        
+        .item-card.fulfilled {
+            border-color: var(--success);
+            background: linear-gradient(135deg, rgba(46, 204, 113, 0.05), rgba(39, 174, 96, 0.05));
+        }
+        
+        .item-checkbox {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            transform: scale(1.3);
+            accent-color: var(--primary);
+        }
+        
+        .item-name {
+            font-weight: 600;
+            color: var(--dark);
             font-size: 1.1rem;
-            padding: 20px;
+            margin-bottom: 10px;
         }
         
-        .action-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        
-        /* Signature Section */
-        .signature-section {
-            background: white;
-            margin: 15px;
-            padding: 20px;
-            border-radius: 20px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-        }
-        
-        .signature-canvas {
-            width: 100%;
-            height: 200px;
-            border: 2px dashed #bdc3c7;
-            border-radius: 15px;
-            background: #f8fafc;
-            touch-action: none;
-            margin: 15px 0;
-        }
-        
-        .signature-actions {
+        .item-details {
             display: flex;
-            gap: 10px;
-            margin-top: 15px;
+            gap: 15px;
+            margin: 10px 0;
+            font-size: 0.9rem;
         }
         
-        .btn-clear {
-            flex: 1;
-            padding: 12px;
-            background: #e74c3c;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-weight: 600;
+        .item-detail {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--gray);
         }
         
-        .btn-save {
-            flex: 2;
-            padding: 12px;
-            background: #2ecc71;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-weight: 600;
-        }
-        
-        /* Remarks */
-        .remarks-section {
+        /* Forms */
+        .form-container {
             background: white;
-            margin: 15px;
-            padding: 20px;
-            border-radius: 20px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            padding: 30px;
+            border-radius: var(--border-radius);
+            margin: 30px 0;
+            box-shadow: var(--shadow);
         }
         
-        .remarks-box {
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--dark);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .form-control {
             width: 100%;
-            padding: 15px;
-            border: 2px solid #e0e6ed;
-            border-radius: 12px;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
             font-size: 1rem;
-            min-height: 100px;
-            resize: vertical;
-            margin-top: 10px;
+            transition: var(--transition);
         }
         
-        .remarks-box:focus {
+        .form-control:focus {
+            border-color: var(--primary);
             outline: none;
-            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
         }
         
-        /* Back Button */
-        .back-button {
-            width: 100%;
-            padding: 16px;
-            background: #95a5a6;
-            color: white;
+        /* Buttons */
+        .btn {
+            padding: 14px 28px;
             border: none;
-            border-radius: 15px;
-            font-size: 1rem;
+            border-radius: 50px;
             font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
+            font-size: 1rem;
             cursor: pointer;
-            transition: all 0.3s;
-            margin-top: 10px;
-        }
-        
-        .back-button:hover {
-            background: #7f8c8d;
-            transform: translateY(-2px);
-        }
-        <?php endif; ?>
-        
-        /* Success Message */
-        .success-message {
-            background: linear-gradient(135deg, #d4edda, #c3e6cb);
-            color: #155724;
-            margin: 15px;
-            padding: 25px;
-            border-radius: 20px;
-            text-align: center;
-            border-left: 5px solid #2ecc71;
-        }
-        
-        .success-icon {
-            font-size: 3rem;
-            margin-bottom: 15px;
-            color: #2ecc71;
-        }
-        
-        /* Loading Overlay */
-        .loading-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.9);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 9999;
-            flex-direction: column;
-        }
-        
-        .loading-spinner {
-            width: 60px;
-            height: 60px;
-            border: 5px solid #f3f3f3;
-            border-top: 5px solid #3498db;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        .loading-text {
-            color: white;
-            margin-top: 20px;
-            font-size: 1.2rem;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        /* Footer */
-        .app-footer {
-            padding: 20px 15px 30px;
-            text-align: center;
-            background: white;
-        }
-        
-        .btn-back {
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            padding: 15px 30px;
-            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
-            color: white;
-            border: none;
-            border-radius: 15px;
-            font-size: 1rem;
-            font-weight: 600;
+            transition: var(--transition);
             text-decoration: none;
-            transition: all 0.3s;
         }
         
-        .btn-back:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        
-        /* Emergency Button */
-        .emergency-button {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        .btn-primary {
+            background: var(--primary);
             color: white;
-            border-radius: 50%;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-light);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(67, 97, 238, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #27ae60;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(46, 204, 113, 0.3);
+        }
+        
+        .btn-warning {
+            background: var(--warning);
+            color: white;
+        }
+        
+        .btn-info {
+            background: var(--info);
+            color: white;
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
+        }
+        
+        .btn-outline:hover {
+            background: var(--primary);
+            color: white;
+        }
+        
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed var(--primary);
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: var(--transition);
+            margin: 20px 0;
+        }
+        
+        .upload-area:hover {
+            background: #f8f9fa;
+            border-color: var(--success);
+        }
+        
+        .upload-area i {
+            font-size: 2.5rem;
+            color: var(--primary);
+            margin-bottom: 15px;
+        }
+        
+        .image-preview {
+            width: 200px;
+            height: 150px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            margin: 15px auto;
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5rem;
-            box-shadow: 0 4px 20px rgba(231, 76, 60, 0.4);
-            z-index: 1000;
-            text-decoration: none;
-            transition: all 0.3s;
         }
         
-        .emergency-button:hover {
-            transform: scale(1.1);
+        .image-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        
+        /* Navigation */
+        .victim-nav {
+            display: flex;
+            justify-content: space-between;
+            margin: 30px 0;
+            gap: 15px;
+        }
+        
+        .nav-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 24px;
+        }
+        
+        /* Status Badges */
+        .status-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .badge-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .badge-in-transit {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .badge-delivered {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        /* Messages */
+        .alert {
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #e74c3c;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #2ecc71;
+        }
+        
+        .alert-icon {
+            font-size: 1.5rem;
+        }
+        
+        /* Empty States */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--gray);
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            color: #ddd;
         }
         
         /* Responsive */
-        @media (max-width: 480px) {
-            .stats-container {
-                grid-template-columns: repeat(2, 1fr);
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
             }
             
-            .stat-card:nth-child(3) {
-                grid-column: 1 / -1;
+            .header-top {
+                flex-direction: column;
+                align-items: flex-start;
             }
             
-            .action-buttons {
+            .page-title {
+                font-size: 1.6rem;
+            }
+            
+            .items-grid {
                 grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .victim-nav {
+                flex-direction: column;
+            }
+            
+            .tracking-timeline {
+                padding-left: 30px;
+            }
+            
+            .tracking-timeline::before {
+                left: 10px;
+            }
+            
+            .tracking-dot {
+                left: -32px;
             }
         }
     </style>
 </head>
 <body>
-    <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-spinner"></div>
-        <div class="loading-text" id="loadingText">Processing...</div>
-    </div>
-
-    <div class="mobile-container">
-        <!-- App Header -->
-        <header class="app-header">
-            <div class="header-content">
-                <div class="header-left">
-                    <h1>📦 Execute Distribution</h1>
-                    <p><?php echo htmlspecialchars($assignment['volunteer_name']); ?> • <?php echo htmlspecialchars($assignment['role'] ?? 'Volunteer'); ?></p>
-                </div>
-                <div class="header-right">
-                    <div class="dist-id">DIST<?php echo str_pad($distribution_id, 6, '0', STR_PAD_LEFT); ?></div>
-                    <div style="font-size: 0.9rem; opacity: 0.9;">
-                        <?php echo htmlspecialchars($assignment['Disaster_Name']); ?>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-top">
+                <h1 class="page-title">
+                    <i class="fas fa-truck-loading"></i>
+                    Execute Distribution #DIST<?php echo str_pad($distribution_id, 7, '0', STR_PAD_LEFT); ?>
+                </h1>
+                <a href="http://10.147.17.30:8000/volunteer_dashboard.php" class="btn btn-back">
+                    <i class="fas fa-arrow-left"></i>
+                    Back to Dashboard
+                </a>
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+                <div>
+                    <h3 style="color: var(--dark); margin-bottom: 8px;">
+                        <i class="fas fa-user-circle"></i>
+                        <?php echo htmlspecialchars($volunteer_details['FullName'] ?? $volunteer_details['fullName'] ?? $volunteer_name); ?>
+                    </h3>
+                    <?php if ($disaster_details): ?>
+                    <div style="color: var(--gray);">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <?php echo htmlspecialchars($disaster_details['Disaster_Name'] ?? $disaster_details['name'] ?? 'Disaster'); ?>
                     </div>
+                    <?php endif; ?>
                 </div>
             </div>
-        </header>
-
-        <?php if ($success): ?>
-            <!-- Success Message -->
-            <div class="success-message">
-                <div class="success-icon">✅</div>
-                <h3 style="margin-bottom: 15px;">Distribution Successful!</h3>
-                <div style="text-align: left; margin-bottom: 20px;">
-                    <?php echo $success; ?>
+        </div>
+        
+        <!-- Progress Section -->
+        <div class="progress-section">
+            <div class="progress-header">
+                <h2 style="color: var(--dark);">
+                    <i class="fas fa-chart-line"></i>
+                    Distribution Progress
+                </h2>
+                <div style="font-size: 1.2rem; font-weight: 600; color: var(--primary);">
+                    <?php echo round($progress, 1); ?>% Complete
                 </div>
-                <a href="volunteer_dashboard.php" class="btn-distribute" style="display: block; text-decoration: none; margin-top: 10px;">
-                    <i class="fas fa-home"></i> Back to Dashboard
-                </a>
+            </div>
+            
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: <?php echo $progress; ?>%;"></div>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--gray);">
+                <span>Start</span>
+                <span>In Progress</span>
+                <span>Complete</span>
+            </div>
+        </div>
+        
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-icon">
+                    <i class="fas fa-users"></i>
+                </div>
+                <div class="stat-value"><?php echo $distribution_stats['total_families'] ?? 0; ?></div>
+                <div class="stat-label">Total Families</div>
+            </div>
+            
+            <div class="stat-card transit">
+                <div class="stat-icon">
+                    <i class="fas fa-truck-moving"></i>
+                </div>
+                <div class="stat-value"><?php echo $distribution_stats['in_transit_families'] ?? 0; ?></div>
+                <div class="stat-label">In Transit</div>
+            </div>
+            
+            <div class="stat-card delivered">
+                <div class="stat-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="stat-value"><?php echo $distribution_stats['completed_families'] ?? 0; ?></div>
+                <div class="stat-label">Delivered</div>
+            </div>
+            
+            <div class="stat-card your">
+                <div class="stat-icon">
+                    <i class="fas fa-user-check"></i>
+                </div>
+                <div class="stat-value">
+                    <?php echo $personal_stats['my_completed_victims'] ?? 0; ?>/<?php echo ($personal_stats['my_completed_victims'] ?? 0) + ($personal_stats['my_in_transit_victims'] ?? 0); ?>
+                </div>
+                <div class="stat-label">Your Progress</div>
+            </div>
+        </div>
+        
+        <!-- Messages -->
+        <?php if ($error): ?>
+            <div class="alert alert-error">
+                <div class="alert-icon">
+                    <i class="fas fa-exclamation-circle"></i>
+                </div>
+                <div>
+                    <strong>Error</strong>
+                    <p><?php echo $error; ?></p>
+                </div>
             </div>
         <?php endif; ?>
         
-        <?php if ($error): ?>
-            <div style="background: #fde8e8; color: #c53030; margin: 15px; padding: 20px; border-radius: 15px; border-left: 5px solid #e74c3c;">
-                <strong>Error:</strong> <?php echo htmlspecialchars($error); ?>
+        <?php if (isset($_GET['success'])): ?>
+            <div class="alert alert-success">
+                <div class="alert-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div>
+                    <strong>Success!</strong>
+                    <p>
+                        <?php if ($_GET['success'] == 'prepared'): ?>
+                            Items prepared for delivery! Status: Dispatched (70%)
+                        <?php elseif ($_GET['success'] == 'delivered'): ?>
+                            Delivery completed successfully! Status: Delivered (100%)
+                        <?php elseif ($_GET['success'] == 'tracking_updated'): ?>
+                            Tracking status updated successfully!
+                        <?php endif; ?>
+                    </p>
+                </div>
             </div>
         <?php endif; ?>
-
-        <!-- Assignment Info -->
-        <div class="assignment-info">
-            <div class="assignment-title">
-                <i class="fas fa-user-check" style="color: #2ecc71;"></i>
-                Your Assignment
-            </div>
-            <div class="assignment-details">
-                <?php if (!empty($all_victims)): ?>
-                    <strong>Task:</strong> Distribute aid to victims<br>
-                    <strong>Victims to serve:</strong> <?php echo count($all_victims); ?> victims<br>
-                    <strong>Status:</strong> 
-                    <span style="color: <?php echo $assignment['status'] === 'Completed' ? '#27ae60' : '#f39c12'; ?>; font-weight: 600;">
-                        <?php echo $assignment['status']; ?>
-                    </span>
-                <?php else: ?>
-                    <strong>No victims assigned.</strong><br>
-                    Please check with your coordinator for assignment details.
-                <?php endif; ?>
-            </div>
+        
+        <!-- Victim Navigation -->
+        <?php if ($victim_data): ?>
+        <div class="victim-nav">
+            <a href="execute_distribution.php?distribution_id=<?php echo $distribution_id; ?>&victim_id=<?php echo max(1, $victim_id - 1); ?>" class="btn btn-outline nav-btn">
+                <i class="fas fa-arrow-left"></i>
+                Previous Victim
+            </a>
+            <a href="execute_distribution.php?distribution_id=<?php echo $distribution_id; ?>&victim_id=<?php echo $victim_id + 1; ?>" class="btn btn-outline nav-btn">
+                Next Victim
+                <i class="fas fa-arrow-right"></i>
+            </a>
         </div>
-
-        <!-- Stats Cards -->
-        <div class="stats-container">
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['fulfilled_needs'] ?? 0; ?></div>
-                <div class="stat-label">Fulfilled Needs</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['total_needs'] ?? 0; ?></div>
-                <div class="stat-label">Total Needs</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['total_families'] ?? 0; ?></div>
-                <div class="stat-label">Families Helped</div>
-            </div>
-        </div>
-
-        <!-- Progress Bar -->
-        <div class="progress-section">
-            <div class="progress-header">
-                <span>Distribution Progress</span>
-                <span>
-                    <?php 
-                    $progress = ($stats['total_needs'] > 0) ? ($stats['fulfilled_needs'] / $stats['total_needs']) * 100 : 0;
-                    echo round($progress, 1) . '%';
-                    ?>
-                </span>
-            </div>
-            <div class="progress-bar">
-                <div class="progress-fill" style="width: <?php echo $progress; ?>%"></div>
-            </div>
-        </div>
-
-        <!-- Show appropriate content based on state -->
-        <?php if (empty($all_victims)): ?>
-            <!-- No Victims Message -->
-            <div class="no-victims">
-                <div class="no-victims-icon">
-                    <i class="fas fa-user-slash"></i>
+        <?php endif; ?>
+        
+        <!-- Victim Profile -->
+        <?php if ($victim_data): ?>
+        <div class="victim-profile-card">
+            <div class="victim-header">
+                <div>
+                    <h2 style="color: var(--dark); margin-bottom: 10px;">
+                        <i class="fas fa-home"></i>
+                        <?php echo htmlspecialchars($victim_data['name']); ?>
+                    </h2>
+                    <div style="color: var(--gray);">
+                        Victim ID: V<?php echo str_pad($victim_data['victim_id'], 6, '0', STR_PAD_LEFT); ?>
+                    </div>
                 </div>
-                <h3 style="margin-bottom: 10px;">No Victims Found</h3>
-                <p style="margin-bottom: 20px;">
-                    No victims with approved needs found for this distribution.<br>
-                    Please check with your coordinator or wait for victims to be assigned.
-                </p>
-                <a href="volunteer_dashboard.php" class="btn-back" style="display: inline-flex;">
-                    <i class="fas fa-arrow-left"></i> Back to Dashboard
-                </a>
-            </div>
-        <?php elseif (!$victim_data): ?>
-            <!-- Victims List Section -->
-            <div class="victims-section">
-                <h3 class="section-title">
-                    <i class="fas fa-users"></i> Select Victim
-                    <span style="font-size: 0.9rem; color: #7f8c8d; margin-left: auto;">
-                        <?php echo count($all_victims); ?> victims
-                    </span>
-                </h3>
                 
-                <form method="POST" id="select-victim-form">
-                    <input type="hidden" name="select_victim" value="1">
-                    
-                    <div class="victims-list">
-                        <?php foreach ($all_victims as $index => $victim): ?>
-                        <div class="victim-select-card" onclick="selectVictimCard(<?php echo $victim['victim_id']; ?>)">
-                            <div class="victim-select-header">
-                                <div class="victim-select-name">
-                                    <?php echo ($index + 1) . '. ' . htmlspecialchars($victim['name']); ?>
-                                </div>
-                                <div class="victim-select-id">
-                                    V<?php echo str_pad($victim['victim_id'], 6, '0', STR_PAD_LEFT); ?>
-                                </div>
-                            </div>
-                            
-                            <div class="victim-select-details">
-                                <p><strong>📍:</strong> <?php echo substr(htmlspecialchars($victim['address']), 0, 50); ?>...</p>
-                                
-                                <?php if ($victim['total_needs'] > 0): ?>
-                                    <div class="victim-select-needs">
-                                        <i class="fas fa-box"></i> <?php echo $victim['total_needs']; ?> approved needs
-                                    </div>
-                                <?php else: ?>
-                                    <div style="color: #dc3545; font-size: 0.85rem;">
-                                        <i class="fas fa-exclamation-triangle"></i> No approved needs
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                            
-                            <input type="radio" 
-                                   name="victim_id" 
-                                   value="<?php echo $victim['victim_id']; ?>" 
-                                   id="victim_<?php echo $victim['victim_id']; ?>"
-                                   style="display: none;">
+                <div style="display: flex; gap: 10px;">
+                    <span class="status-badge badge-pending">
+                        <?php echo $victim_data['total_needs'] - $victim_data['fulfilled_needs'] - $victim_data['in_transit_needs']; ?> Pending
+                    </span>
+                    <span class="status-badge badge-in-transit">
+                        <?php echo $victim_data['in_transit_needs']; ?> In Transit
+                    </span>
+                    <span class="status-badge badge-delivered">
+                        <?php echo $victim_data['fulfilled_needs']; ?> Delivered
+                    </span>
+                </div>
+            </div>
+            
+            <div class="victim-info-grid">
+                <div class="info-item">
+                    <div class="info-label">
+                        <i class="fas fa-map-marker-alt info-icon"></i>
+                        Address
+                    </div>
+                    <div class="info-value"><?php echo htmlspecialchars($victim_data['address']); ?></div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">
+                        <i class="fas fa-users info-icon"></i>
+                        Family Size
+                    </div>
+                    <div class="info-value"><?php echo $victim_data['family_size']; ?> people</div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">
+                        <i class="fas fa-phone info-icon"></i>
+                        Contact Number
+                    </div>
+                    <div class="info-value"><?php echo htmlspecialchars($victim_data['contact_number']); ?></div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">
+                        <i class="fas fa-boxes info-icon"></i>
+                        Total Needs
+                    </div>
+                    <div class="info-value"><?php echo $victim_data['total_needs']; ?> items</div>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+        
+        <!-- Tracking Section -->
+        <div class="tracking-section">
+            <div class="tracking-header">
+                <div style="font-size: 2rem; color: var(--primary);">
+                    <i class="fas fa-map-marked-alt"></i>
+                </div>
+                <div>
+                    <h2 style="color: var(--dark); margin-bottom: 5px;">Live Tracking</h2>
+                    <p style="color: var(--gray);">Update your location during delivery</p>
+                </div>
+            </div>
+            
+            <?php if (!empty($tracking_updates)): ?>
+            <div class="tracking-timeline">
+                <?php foreach ($tracking_updates as $update): ?>
+                <div class="tracking-update">
+                    <div class="tracking-dot">
+                        <?php 
+                        $icon = 'fa-truck';
+                        if ($update['status'] == 'departed') $icon = 'fa-flag-checkered';
+                        if ($update['status'] == 'arrived') $icon = 'fa-check-circle';
+                        if ($update['status'] == 'delayed') $icon = 'fa-exclamation-triangle';
+                        ?>
+                        <i class="fas <?php echo $icon; ?>"></i>
+                    </div>
+                    <div class="tracking-content">
+                        <div class="tracking-location">
+                            <?php echo htmlspecialchars($update['current_location']); ?>
                         </div>
+                        <?php if (!empty($update['tracking_notes'])): ?>
+                        <p style="margin: 10px 0; color: var(--gray);">
+                            <?php echo htmlspecialchars($update['tracking_notes']); ?>
+                        </p>
+                        <?php endif; ?>
+                        <?php if (!empty($update['estimated_arrival'])): ?>
+                        <div style="color: var(--info); margin: 8px 0;">
+                            <i class="fas fa-clock"></i>
+                            ETA: <?php echo htmlspecialchars($update['estimated_arrival']); ?>
+                        </div>
+                        <?php endif; ?>
+                        <div class="tracking-time">
+                            <i class="far fa-clock"></i>
+                            <?php echo date('M j, g:i A', strtotime($update['created_at'])); ?>
+                        </div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-map-marked-alt"></i>
+                <h3 style="color: var(--dark); margin-bottom: 15px;">No tracking updates yet</h3>
+                <p style="color: var(--gray);">Start by preparing items for delivery to begin tracking.</p>
+            </div>
+            <?php endif; ?>
+            
+            <?php if ($has_in_transit_items || !empty($tracking_updates)): ?>
+            <div class="form-container" style="margin-top: 30px;">
+                <h3 style="color: var(--dark); margin-bottom: 25px;">
+                    <i class="fas fa-edit"></i>
+                    Update Your Location
+                </h3>
+                <form method="POST">
+                    <input type="hidden" name="update_tracking" value="1">
+                    <input type="hidden" name="victim_id" value="<?php echo $victim_id; ?>">
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="current_location">
+                            <i class="fas fa-map-marker-alt"></i>
+                            Current Location
+                        </label>
+                        <input type="text" id="current_location" name="current_location" class="form-control" 
+                               placeholder="e.g., Main Street, Highway 101, Near Central Market" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="status_update">
+                            <i class="fas fa-flag"></i>
+                            Status Update
+                        </label>
+                        <select id="status_update" name="status_update" class="form-control">
+                            <option value="departed">Departed</option>
+                            <option value="in_transit" selected>In Transit</option>
+                            <option value="arrived">Arrived at Location</option>
+                            <option value="delayed">Delayed</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="estimated_arrival">
+                            <i class="fas fa-clock"></i>
+                            Estimated Arrival (Optional)
+                        </label>
+                        <input type="text" id="estimated_arrival" name="estimated_arrival" class="form-control" 
+                               placeholder="e.g., 30 minutes, 2:30 PM, Tomorrow morning">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="tracking_notes">
+                            <i class="fas fa-sticky-note"></i>
+                            Notes (Optional)
+                        </label>
+                        <textarea id="tracking_notes" name="tracking_notes" class="form-control" rows="3" 
+                                  placeholder="e.g., Traffic is heavy, Taking alternative route..."></textarea>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-info">
+                        <i class="fas fa-save"></i>
+                        Update Tracking
+                    </button>
+                </form>
+            </div>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Items Management -->
+        <?php if ($victim_data): ?>
+        <div class="items-section">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <i class="fas fa-box-open"></i>
+                    Items Management
+                </h2>
+                <div style="color: var(--gray);">
+                    <?php echo $victim_data['total_needs']; ?> total items
+                </div>
+            </div>
+            
+            <?php if ($has_pending_items): ?>
+            <!-- Prepare Items Form -->
+            <div class="form-container">
+                <h3 style="color: var(--dark); margin-bottom: 25px;">
+                    <i class="fas fa-truck-loading"></i>
+                    Prepare Items for Delivery
+                </h3>
+                <form method="POST" id="prepareForm">
+                    <input type="hidden" name="prepare_distribution" value="1">
+                    <input type="hidden" name="victim_id" value="<?php echo $victim_id; ?>">
+                    
+                    <p style="color: var(--gray); margin-bottom: 25px;">
+                        Select items to mark as dispatched (70% complete)
+                    </p>
+                    
+                    <div class="items-grid">
+                        <?php foreach ($needs_data as $need): 
+                            if ($need['need_status'] == 'pending'):
+                        ?>
+                        <div class="item-card" 
+                             onclick="toggleNeed('prepare', '<?php echo addslashes($need['need_id']); ?>')"
+                             id="card-<?php echo addslashes($need['need_id']); ?>">
+                            
+                            <input type="checkbox" 
+                                   name="distributed_items[]" 
+                                   value="<?php echo htmlspecialchars($need['need_id']); ?>"
+                                   class="item-checkbox"
+                                   id="checkbox-<?php echo addslashes($need['need_id']); ?>">
+                            
+                            <div class="item-name"><?php echo htmlspecialchars($need['resource_name']); ?></div>
+                            
+                            <div class="item-details">
+                                <div class="item-detail">
+                                    <i class="fas fa-balance-scale"></i>
+                                    <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
+                                </div>
+                                <div class="item-detail">
+                                    <i class="fas fa-tag"></i>
+                                    <?php echo htmlspecialchars($need['type']); ?>
+                                </div>
+                            </div>
+                            
+                            <div style="margin-top: 15px;">
+                                <span class="status-badge badge-pending">Pending</span>
+                            </div>
+                        </div>
+                        <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
                     
-                    <div style="display: flex; gap: 10px; margin-top: 20px;">
-                        <button type="submit" class="select-button" id="selectButton" disabled>
-                            <i class="fas fa-check-circle"></i> Select Victim
+                    <div style="display: flex; gap: 15px; margin-top: 30px;">
+                        <button type="button" class="btn btn-outline" onclick="selectAll('prepare')">
+                            <i class="fas fa-check-double"></i>
+                            Select All
+                        </button>
+                        <button type="submit" class="btn btn-warning">
+                            <i class="fas fa-truck-loading"></i>
+                            Mark as Dispatched (70%)
                         </button>
                     </div>
                 </form>
             </div>
-        <?php else: ?>
-            <!-- Selected Victim Details and Distribution Form -->
-            <form method="POST" id="distribution-form" onsubmit="return validateDistribution()">
-                <input type="hidden" name="distribute_items" value="1">
-                <input type="hidden" name="victim_id" value="<?php echo $victim_data['victim_id']; ?>">
-                <input type="hidden" name="signature_data" id="signatureData" value="">
-                
-                <!-- Victim Card -->
-                <div class="victim-card">
-                    <div class="victim-header">
-                        <div class="victim-name">
-                            <i class="fas fa-user-check" style="color: #2ecc71; margin-right: 8px;"></i>
-                            <?php echo htmlspecialchars($victim_data['name']); ?>
-                        </div>
-                        <div class="victim-id">
-                            V<?php echo str_pad($victim_data['victim_id'], 6, '0', STR_PAD_LEFT); ?>
-                        </div>
-                    </div>
-                    <div class="victim-details">
-                        <p><strong>📍 Address:</strong> <?php echo htmlspecialchars($victim_data['address']); ?></p>
-                        <p><strong>📋 Needs:</strong> <?php echo count($needs_data); ?> approved items</p>
-                    </div>
-                </div>
-
-                <!-- Approved Needs List -->
-                <div class="needs-section">
-                    <h3 class="section-title">
-                        <i class="fas fa-list-check"></i> Approved Needs
-                    </h3>
+            <?php endif; ?>
+            
+            <?php if ($has_in_transit_items): ?>
+            <!-- Complete Delivery Form -->
+            <div class="form-container" style="border-left: 5px solid var(--info);">
+                <h3 style="color: var(--dark); margin-bottom: 25px;">
+                    <i class="fas fa-check-circle"></i>
+                    Complete Delivery
+                </h3>
+                <form method="POST" id="completeForm" enctype="multipart/form-data">
+                    <input type="hidden" name="complete_delivery" value="1">
+                    <input type="hidden" name="victim_id" value="<?php echo $victim_id; ?>">
                     
-                    <div class="needs-list">
-                        <?php foreach ($needs_data as $need): ?>
-                        <div class="need-item" onclick="toggleNeed(<?php echo $need['need_id']; ?>, this)">
-                            <div class="checkbox-container">
-                                <div class="checkbox-custom checked" id="checkbox-<?php echo $need['need_id']; ?>"></div>
-                            </div>
-                            <div class="need-info">
-                                <div class="need-name"><?php echo htmlspecialchars($need['resource_name']); ?></div>
-                                <div class="need-details">
-                                    <?php if (isset($need['category'])): ?>
-                                    <span style="background: #e3f2fd; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; margin-right: 8px;">
-                                        <?php echo htmlspecialchars($need['category']); ?>
-                                    </span>
-                                    <?php endif; ?>
+                    <p style="color: var(--gray); margin-bottom: 25px;">
+                        Select items to mark as delivered (100% complete)
+                    </p>
+                    
+                    <div class="items-grid">
+                        <?php foreach ($needs_data as $need): 
+                            if ($need['need_status'] == 'in_transit'):
+                        ?>
+                        <div class="item-card in-transit"
+                             onclick="toggleNeed('deliver', '<?php echo addslashes($need['need_id']); ?>')"
+                             id="deliver-card-<?php echo addslashes($need['need_id']); ?>">
+                            
+                            <input type="checkbox" 
+                                   name="delivered_items[]" 
+                                   value="<?php echo htmlspecialchars($need['need_id']); ?>"
+                                   class="item-checkbox"
+                                   id="checkbox-deliver-<?php echo addslashes($need['need_id']); ?>">
+                            
+                            <div class="item-name"><?php echo htmlspecialchars($need['resource_name']); ?></div>
+                            
+                            <div class="item-details">
+                                <div class="item-detail">
+                                    <i class="fas fa-balance-scale"></i>
+                                    <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
+                                </div>
+                                <div class="item-detail">
+                                    <i class="fas fa-tag"></i>
                                     <?php echo htmlspecialchars($need['type']); ?>
                                 </div>
                             </div>
-                            <div class="need-quantity">
-                                <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
+                            
+                            <div style="margin-top: 15px;">
+                                <span class="status-badge badge-in-transit">In Transit</span>
                             </div>
-                            <input type="checkbox" 
-                                   name="distributed_items[]" 
-                                   value="<?php echo $need['need_id']; ?>" 
-                                   style="display: none;"
-                                   class="need-checkbox"
-                                   checked
-                                   id="need-<?php echo $need['need_id']; ?>">
                         </div>
+                        <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
                     
-                    <div style="display: flex; gap: 10px; margin-top: 20px;">
-                        <button type="button" class="btn-clear" onclick="checkAllNeeds()">
-                            <i class="fas fa-check-double"></i> Check All
+                    <div class="form-group" style="margin-top: 30px;">
+                        <label class="form-label" for="delivery_remarks">
+                            <i class="fas fa-comment-alt"></i>
+                            Delivery Remarks (Optional)
+                        </label>
+                        <textarea id="delivery_remarks" name="delivery_remarks" class="form-control" rows="3" 
+                                  placeholder="Any notes about the delivery..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="fas fa-file-signature"></i>
+                            Recipient Confirmation
+                        </label>
+                        <p style="color: var(--gray); margin-bottom: 15px; font-size: 0.9rem;">
+                            Upload a photo of the delivered items or recipient's signature for confirmation.
+                            Max size: 5MB. Allowed formats: JPG, PNG, GIF, WebP.
+                        </p>
+                        
+                        <div class="upload-area" onclick="document.getElementById('signature_image').click()">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <p>Click to upload image or drag and drop</p>
+                            <p style="font-size: 0.8rem; color: var(--gray); margin-top: 10px;">
+                                Max 5MB • JPG, PNG, GIF, WebP
+                            </p>
+                        </div>
+                        
+                        <input type="file" 
+                               name="signature_image" 
+                               id="signature_image" 
+                               accept="image/*"
+                               style="display: none;"
+                               onchange="previewImage(this)">
+                        
+                        <div class="image-preview" id="imagePreview">
+                            <span style="color: var(--gray);">No image selected</span>
+                        </div>
+                        
+                        <div id="uploadError" style="color: var(--danger); font-size: 0.9rem; margin-top: 10px;"></div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 15px; margin-top: 30px;">
+                        <button type="button" class="btn btn-outline" onclick="selectAll('deliver')">
+                            <i class="fas fa-check-double"></i>
+                            Select All
                         </button>
-                        <button type="button" class="btn-save" onclick="uncheckAllNeeds()">
-                            <i class="fas fa-times"></i> Uncheck All
+                        <button type="submit" class="btn btn-success" onclick="return validateCompleteForm()">
+                            <i class="fas fa-check-circle"></i>
+                            Mark as Delivered (100%)
                         </button>
                     </div>
-                </div>
-
-                <!-- Action Buttons -->
-                <div class="action-buttons">
-                    <button type="button" class="action-button btn-camera" onclick="takePhoto()">
-                        <i class="fas fa-camera"></i> Take Photo
-                    </button>
-                    
-                    <button type="button" class="action-button btn-signature" onclick="openSignatureSection()">
-                        <i class="fas fa-signature"></i> Signature
-                    </button>
-                </div>
-
-                <!-- Signature Section (Initially Hidden) -->
-                <div class="signature-section" id="signatureSection" style="display: none;">
-                    <h3 class="section-title">
-                        <i class="fas fa-signature"></i> Victim Signature
-                    </h3>
-                    <canvas class="signature-canvas" id="signatureCanvas"></canvas>
-                    <p style="color: #7f8c8d; font-size: 0.9rem; margin-bottom: 15px;">
-                        Please sign in the box above to confirm receipt
-                    </p>
-                    <div class="signature-actions">
-                        <button type="button" class="btn-clear" onclick="clearSignature()">
-                            <i class="fas fa-eraser"></i> Clear
-                        </button>
-                        <button type="button" class="btn-save" onclick="saveSignature()">
-                            <i class="fas fa-save"></i> Save Signature
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Remarks -->
-                <div class="remarks-section">
-                    <h3 class="section-title">
-                        <i class="fas fa-edit"></i> Remarks
-                    </h3>
-                    <textarea name="remarks" 
-                              class="remarks-box" 
-                              placeholder="Enter any remarks (optional)... 
-Example: 
-• Special instructions
-• Condition of items
-• Additional notes"></textarea>
-                </div>
-
-                <!-- Submit and Back Buttons -->
-                <div style="padding: 15px;">
-                    <button type="submit" class="action-button btn-distribute" id="submitButton">
-                        <i class="fas fa-check-circle"></i> Mark as Distributed
-                    </button>
-                    
-                    <button type="button" class="back-button" onclick="goBackToList()">
-                        <i class="fas fa-arrow-left"></i> Back to Victims List
-                    </button>
-                </div>
-            </form>
+                </form>
+            </div>
+            <?php endif; ?>
+            
+            <?php if (!$has_pending_items && !$has_in_transit_items): ?>
+            <!-- All Items Completed -->
+            <div class="empty-state">
+                <i class="fas fa-check-circle" style="color: var(--success); font-size: 4rem;"></i>
+                <h3 style="color: var(--dark); margin: 20px 0;">All Items Delivered</h3>
+                <p style="color: var(--gray); margin-bottom: 30px;">
+                    All items for this victim have been delivered successfully.
+                </p>
+                <a href="execute_distribution.php?distribution_id=<?php echo $distribution_id; ?>" class="btn btn-primary">
+                    <i class="fas fa-arrow-right"></i>
+                    Next Victim
+                </a>
+            </div>
+            <?php endif; ?>
+        </div>
         <?php endif; ?>
-
-        <!-- Footer -->
-        <footer class="app-footer">
-            <a href="volunteer_dashboard.php" class="btn-back">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
+        
+        <?php if (!$victim_data): ?>
+        <!-- No Victim Selected -->
+        <div class="empty-state">
+            <i class="fas fa-user-plus"></i>
+            <h3 style="color: var(--dark); margin: 20px 0;">No Victim Selected</h3>
+            <p style="color: var(--gray); margin-bottom: 30px;">
+                No victims have been assigned to this distribution yet.
+            </p>
+            <a href="http://10.147.17.30:8000/volunteer_dashboard.php" class="btn btn-primary">
+                <i class="fas fa-arrow-left"></i>
+                Back to Dashboard
             </a>
-        </footer>
+        </div>
+        <?php endif; ?>
     </div>
 
-    <!-- Emergency Button -->
-    <a href="emergency.php?distribution_id=<?php echo $distribution_id; ?>" class="emergency-button" title="Emergency">
-        🆘
-    </a>
-
     <script>
-        // Victim Selection
-        let selectedVictimId = null;
-        
-        function selectVictimCard(victimId) {
-            selectedVictimId = victimId;
+        // Toggle need selection
+        function toggleNeed(type, needId) {
+            const card = document.getElementById((type === 'prepare' ? 'card-' : 'deliver-card-') + needId);
+            const checkbox = document.getElementById((type === 'prepare' ? 'checkbox-' : 'checkbox-deliver-') + needId);
             
-            // Update radio button
-            document.getElementById(`victim_${victimId}`).checked = true;
-            
-            // Visual feedback
-            document.querySelectorAll('.victim-select-card').forEach(card => {
-                card.classList.remove('selected');
-            });
-            event.currentTarget.classList.add('selected');
-            
-            // Enable select button
-            document.getElementById('selectButton').disabled = false;
-            
-            // Auto-submit after 3 seconds if only one victim
-            const victimCount = <?php echo count($all_victims); ?>;
-            if (victimCount === 1) {
-                setTimeout(() => {
-                    document.getElementById('select-victim-form').submit();
-                }, 3000);
-            }
-        }
-        
-        // Auto-select first victim if only one
-        document.addEventListener('DOMContentLoaded', function() {
-            const victimCount = <?php echo count($all_victims); ?>;
-            if (victimCount === 1 && document.getElementById('select-victim-form')) {
-                const firstVictimId = <?php echo $all_victims[0]['victim_id'] ?? 0; ?>;
-                selectVictimCard(firstVictimId);
-            }
-        });
-        
-        function goBackToList() {
-            window.location.reload();
-        }
-        
-        // Signature Canvas
-        let canvas = null;
-        let ctx = null;
-        let drawing = false;
-        let lastX = 0;
-        let lastY = 0;
-        let signatureSaved = false;
-        
-        // Initialize canvas when signature section is opened
-        function openSignatureSection() {
-            const section = document.getElementById('signatureSection');
-            section.style.display = 'block';
-            
-            // Scroll to signature section
-            section.scrollIntoView({ behavior: 'smooth' });
-            
-            // Initialize canvas after a short delay
-            setTimeout(() => {
-                if (!canvas) {
-                    canvas = document.getElementById('signatureCanvas');
-                    ctx = canvas.getContext('2d');
-                    
-                    // Set canvas size
-                    canvas.width = canvas.offsetWidth;
-                    canvas.height = canvas.offsetHeight;
-                    
-                    // Clear canvas
-                    clearCanvas();
-                    
-                    // Add event listeners
-                    canvas.addEventListener('mousedown', startDrawing);
-                    canvas.addEventListener('touchstart', startDrawingTouch);
-                    canvas.addEventListener('mousemove', draw);
-                    canvas.addEventListener('touchmove', drawTouch);
-                    canvas.addEventListener('mouseup', stopDrawing);
-                    canvas.addEventListener('touchend', stopDrawing);
-                    canvas.addEventListener('mouseleave', stopDrawing);
+            if (card && checkbox) {
+                checkbox.checked = !checkbox.checked;
+                card.classList.toggle('selected', checkbox.checked);
+                
+                // Update UI feedback
+                if (checkbox.checked) {
+                    card.style.transform = 'translateY(-3px)';
+                } else {
+                    card.style.transform = 'translateY(0)';
                 }
-            }, 100);
-        }
-        
-        function startDrawing(e) {
-            drawing = true;
-            [lastX, lastY] = [e.offsetX, e.offsetY];
-        }
-        
-        function startDrawingTouch(e) {
-            e.preventDefault();
-            drawing = true;
-            const rect = canvas.getBoundingClientRect();
-            const touch = e.touches[0];
-            lastX = touch.clientX - rect.left;
-            lastY = touch.clientY - rect.top;
-        }
-        
-        function draw(e) {
-            if (!drawing) return;
-            e.preventDefault();
-            
-            ctx.beginPath();
-            ctx.lineWidth = 3;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.strokeStyle = '#2c3e50';
-            
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX ? e.clientX - rect.left : e.touches[0].clientX - rect.left;
-            const y = e.clientY ? e.clientY - rect.top : e.touches[0].clientY - rect.top;
-            
-            ctx.moveTo(lastX, lastY);
-            ctx.lineTo(x, y);
-            ctx.stroke();
-            
-            [lastX, lastY] = [x, y];
-        }
-        
-        function drawTouch(e) {
-            if (!drawing) return;
-            e.preventDefault();
-            draw(e);
-        }
-        
-        function stopDrawing() {
-            drawing = false;
-        }
-        
-        function clearCanvas() {
-            if (ctx) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                // Draw a light background
-                ctx.fillStyle = '#f8fafc';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-            }
-            signatureSaved = false;
-        }
-        
-        function clearSignature() {
-            clearCanvas();
-            document.getElementById('signatureData').value = '';
-        }
-        
-        function saveSignature() {
-            if (!canvas) {
-                alert('Please open signature section first');
-                return;
-            }
-            
-            const dataURL = canvas.toDataURL();
-            document.getElementById('signatureData').value = dataURL;
-            signatureSaved = true;
-            
-            // Show success message
-            showToast('Signature saved successfully!', 'success');
-        }
-        
-        // Need selection
-        function toggleNeed(needId, element) {
-            const checkbox = document.getElementById(`need-${needId}`);
-            const customCheckbox = document.getElementById(`checkbox-${needId}`);
-            
-            checkbox.checked = !checkbox.checked;
-            
-            if (checkbox.checked) {
-                customCheckbox.classList.add('checked');
-                element.classList.add('selected');
-            } else {
-                customCheckbox.classList.remove('checked');
-                element.classList.remove('selected');
             }
         }
         
-        function checkAllNeeds() {
-            document.querySelectorAll('.need-checkbox').forEach(checkbox => {
-                checkbox.checked = true;
-                const customCheckbox = document.getElementById(`checkbox-${checkbox.value}`);
-                if (customCheckbox) customCheckbox.classList.add('checked');
-                
-                const needItem = checkbox.closest('.need-item');
-                if (needItem) needItem.classList.add('selected');
+        // Select all items
+        function selectAll(type) {
+            const checkboxes = document.querySelectorAll('input[name="' + (type === 'prepare' ? 'distributed_items[]' : 'delivered_items[]') + '"]');
+            let selectedCount = 0;
+            
+            checkboxes.forEach(cb => {
+                if (!cb.checked) {
+                    cb.checked = true;
+                    selectedCount++;
+                    const card = document.getElementById((type === 'prepare' ? 'card-' : 'deliver-card-') + cb.value.replace(/[^\w\s]/gi, ''));
+                    if (card) {
+                        card.classList.add('selected');
+                        card.style.transform = 'translateY(-3px)';
+                    }
+                }
             });
-            showToast('All items selected', 'success');
-        }
-        
-        function uncheckAllNeeds() {
-            document.querySelectorAll('.need-checkbox').forEach(checkbox => {
-                checkbox.checked = false;
-                const customCheckbox = document.getElementById(`checkbox-${checkbox.value}`);
-                if (customCheckbox) customCheckbox.classList.remove('checked');
-                
-                const needItem = checkbox.closest('.need-item');
-                if (needItem) needItem.classList.remove('selected');
-            });
-            showToast('All items unselected', 'info');
-        }
-        
-        // Photo capture simulation
-        function takePhoto() {
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                showLoading('Opening camera...');
-                
-                navigator.mediaDevices.getUserMedia({ video: true })
-                    .then(function(stream) {
-                        hideLoading();
-                        
-                        // In real app, capture photo here
-                        // For demo, show success message
-                        showToast('Camera ready! Photo saved to distribution record.', 'success');
-                        
-                        // Stop camera
-                        stream.getTracks().forEach(track => track.stop());
-                    })
-                    .catch(function(err) {
-                        hideLoading();
-                        showToast('Camera not available. Please take photo manually.', 'error');
-                    });
+            
+            if (selectedCount > 0) {
+                alert(`Selected ${selectedCount} items`);
             } else {
-                showToast('Camera not supported on this device.', 'error');
+                alert('All items are already selected');
+            }
+        }
+        
+        // Image preview function
+        function previewImage(input) {
+            const preview = document.getElementById('imagePreview');
+            const errorDiv = document.getElementById('uploadError');
+            
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                
+                // Validate file size
+                if (file.size > 5 * 1024 * 1024) {
+                    errorDiv.textContent = 'File size must be less than 5MB.';
+                    input.value = '';
+                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                    return;
+                }
+                
+                // Validate file type
+                const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+                if (!allowedTypes.includes(file.type)) {
+                    errorDiv.textContent = 'Only JPG, PNG, GIF, and WebP images are allowed.';
+                    input.value = '';
+                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                    return;
+                }
+                
+                errorDiv.textContent = '';
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.innerHTML = '<img src="' + e.target.result + '" alt="Preview">';
+                }
+                reader.readAsDataURL(file);
+            } else {
+                preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                errorDiv.textContent = '';
             }
         }
         
         // Form validation
-        function validateDistribution() {
-            const checkedItems = document.querySelectorAll('.need-checkbox:checked').length;
-            if (checkedItems === 0) {
-                showToast('Please select at least one item to distribute.', 'error');
+        function validateCompleteForm() {
+            const checkboxes = document.querySelectorAll('input[name="delivered_items[]"]:checked');
+            const fileInput = document.getElementById('signature_image');
+            
+            if (checkboxes.length === 0) {
+                alert('Please select at least one item to mark as delivered.');
                 return false;
             }
             
-            // Check signature
-            if (!signatureSaved) {
-                if (!confirm('No signature saved. Continue without signature?')) {
-                    return false;
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Please upload a recipient signature/image as confirmation.');
+                return false;
+            }
+            
+            const file = fileInput.files[0];
+            
+            if (file.size > 5 * 1024 * 1024) {
+                alert('File size must be less than 5MB.');
+                return false;
+            }
+            
+            const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+            if (!allowedTypes.includes(file.type)) {
+                alert('Only JPG, PNG, GIF, and WebP images are allowed.');
+                return false;
+            }
+            
+            return confirm(`Mark ${checkboxes.length} items as Delivered (100% complete)?`);
+        }
+        
+        // Form submission handlers
+        document.getElementById('prepareForm')?.addEventListener('submit', function(e) {
+            const checked = document.querySelectorAll('input[name="distributed_items[]"]:checked');
+            if (checked.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one item to prepare for delivery');
+                return false;
+            }
+            return confirm(`Mark ${checked.length} items as Dispatched (70% complete)?`);
+        });
+        
+        // Drag and drop functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const uploadArea = document.querySelector('.upload-area');
+            const fileInput = document.getElementById('signature_image');
+            
+            if (uploadArea && fileInput) {
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, preventDefaults, false);
+                });
+                
+                function preventDefaults(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, highlight, false);
+                });
+                
+                ['dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, unhighlight, false);
+                });
+                
+                function highlight() {
+                    uploadArea.style.background = '#e8f4fc';
+                    uploadArea.style.borderColor = 'var(--success)';
+                }
+                
+                function unhighlight() {
+                    uploadArea.style.background = '';
+                    uploadArea.style.borderColor = 'var(--primary)';
+                }
+                
+                uploadArea.addEventListener('drop', handleDrop, false);
+                
+                function handleDrop(e) {
+                    const dt = e.dataTransfer;
+                    const files = dt.files;
+                    
+                    if (files.length > 0) {
+                        fileInput.files = files;
+                        previewImage(fileInput);
+                    }
                 }
             }
             
-            showLoading('Processing distribution...');
-            return true;
-        }
-        
-        // Loading overlay
-        function showLoading(message = 'Processing...') {
-            document.getElementById('loadingOverlay').style.display = 'flex';
-            document.getElementById('loadingText').textContent = message;
-        }
-        
-        function hideLoading() {
-            document.getElementById('loadingOverlay').style.display = 'none';
-        }
-        
-        // Toast notification
-        function showToast(message, type = 'info') {
-            // Remove existing toast
-            const existingToast = document.querySelector('.toast');
-            if (existingToast) existingToast.remove();
-            
-            // Create toast
-            const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
-            toast.innerHTML = `
-                <div style="
-                    position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    background: ${type === 'success' ? '#2ecc71' : type === 'error' ? '#e74c3c' : '#3498db'};
-                    color: white;
-                    padding: 15px 20px;
-                    border-radius: 10px;
-                    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-                    z-index: 10000;
-                    animation: slideIn 0.3s ease;
-                    max-width: 300px;
-                ">
-                    <strong>${type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ'}</strong> ${message}
-                </div>
-            `;
-            
-            document.body.appendChild(toast);
-            
-            // Remove after 3 seconds
-            setTimeout(() => {
-                toast.style.animation = 'slideOut 0.3s ease';
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-        
-        // Auto-check all needs when victim selected
-        document.addEventListener('DOMContentLoaded', function() {
-            if (document.querySelector('.need-checkbox')) {
-                setTimeout(checkAllNeeds, 500);
-            }
+            // Auto-refresh every 30 seconds if on victim page with items in transit
+            setInterval(() => {
+                if (window.location.href.indexOf('victim_id=') > -1 && <?php echo $has_in_transit_items ? 'true' : 'false'; ?>) {
+                    console.log('Auto-refresh at ' + new Date().toLocaleTimeString());
+                }
+            }, 30000);
         });
         
-        // Prevent accidental page leave during distribution
-        let formChanged = false;
-        document.getElementById('distribution-form')?.addEventListener('change', () => {
-            formChanged = true;
+        // Add click effects to cards
+        document.querySelectorAll('.item-card').forEach(card => {
+            card.addEventListener('click', function(e) {
+                if (!e.target.classList.contains('item-checkbox')) {
+                    this.style.transform = 'translateY(-3px)';
+                    setTimeout(() => {
+                        if (!this.classList.contains('selected')) {
+                            this.style.transform = 'translateY(0)';
+                        }
+                    }, 300);
+                }
+            });
         });
-        
-        window.addEventListener('beforeunload', function(e) {
-            if (formChanged) {
-                e.preventDefault();
-                e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
-                return e.returnValue;
-            }
-        });
-        
-        // Add CSS animations
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        `;
-        document.head.appendChild(style);
     </script>
 </body>
 </html>

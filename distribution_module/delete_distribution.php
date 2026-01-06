@@ -58,13 +58,15 @@ try {
     try {
         $total_deleted = 0;
         
-        // 1. Delete from distribution_volunteer table (if exists)
-        $tables_to_check = ['distribution_volunteer', 'Needs', 'distribution_items'];
+        // 1. Delete from related tables first (in correct order to avoid foreign key constraints)
+        // Start with the deepest child tables and work up to parent
+        $tables_to_check = ['distribution_log', 'distribution_volunteer', 'Needs', 'distribution_items'];
         
         foreach ($tables_to_check as $table) {
             // Check if table exists
             $table_check = $db->query("SHOW TABLES LIKE '$table'");
             if ($table_check && $table_check->num_rows > 0) {
+                // Use DELETE for foreign key constraints
                 $sql = "DELETE FROM $table WHERE distribution_id = ?";
                 $stmt = $db->prepare($sql);
                 if ($stmt) {
@@ -74,13 +76,15 @@ try {
                     $stmt->close();
                     $total_deleted += $affected;
                     error_log("Deleted {$affected} records from {$table} for distribution #{$distribution_id}");
+                } else {
+                    error_log("Prepare failed for table '{$table}': " . $db->error);
                 }
             } else {
                 error_log("Table '{$table}' does not exist or cannot be accessed");
             }
         }
         
-        // 2. Delete the distribution itself
+        // 2. Now delete the distribution itself (parent table)
         $sql_final = "DELETE FROM distribution WHERE distribution_id = ?";
         $stmt_final = $db->prepare($sql_final);
         if (!$stmt_final) {
