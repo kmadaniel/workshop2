@@ -2,12 +2,17 @@
 include "../db.php";
 $message = "";
 
+// Handle Clear Filter
+if (isset($_GET['clear'])) {
+    $selected_disaster_id = null;
+    $filter_type = null;
+}
+
 // -------------------------
-// Handle Disaster Addition / Update / Victim Update
+// Handle Disaster Addition / Update / Delete
 // -------------------------
 if (isset($_POST['add_disaster'])) {
-
-    // 1️⃣ Insert into disaster_reports (admin report)
+    // Insert into disaster_reports
     $stmt = $conn->prepare("
         INSERT INTO disaster_reports 
         (reported_by_email, disaster_type, description, district, severity, status, reported_at)
@@ -23,67 +28,216 @@ if (isset($_POST['add_disaster'])) {
         ':status' => $_POST['status']
     ]);
 
-    // 2️⃣ ALSO insert into disaster table (used by victim & admin management)
+    // Insert into disaster table
     $stmt2 = $conn->prepare("
-        INSERT INTO disaster (disaster_name, district, severity, status)
-        VALUES (:name, :district, :severity, :status)
+        INSERT INTO disaster (disaster_name, description, district, severity, status, start_date, alert_message)
+        VALUES (:name, :description, :district, :severity, :status, NOW(), :alert)
     ");
     $stmt2->execute([
         ':name' => $_POST['disaster_type'],
+        ':description' => $_POST['description'],
         ':district' => $_POST['district'],
         ':severity' => $_POST['severity'],
-        ':status' => $_POST['status']
+        ':status' => $_POST['status'],
+        ':alert' => "New disaster reported: " . $_POST['disaster_type'] . " in " . $_POST['district']
     ]);
 
-    $message = "✅ Disaster added and activated successfully!";
+    $message = "✅ Disaster added successfully!";
 }
 
+// Update Disaster Status
+if (isset($_POST['update_disaster'])) {
+    $stmt = $conn->prepare("UPDATE disaster SET status = :status WHERE disaster_id = :id");
+    $stmt->execute([
+        ':status' => $_POST['status'],
+        ':id' => $_POST['disaster_id']
+    ]);
+    $message = "✅ Disaster status updated!";
+}
 
-
-    if (isset($_POST['update_disaster'])) {
-        $stmt = $conn->prepare("UPDATE disaster SET status = :status WHERE disaster_id = :id");
-        $stmt->execute([
-            ':status' => $_POST['status'],
-            ':id' => $_POST['disaster_id']
-        ]);
-        $message = "✅ Disaster status updated!";
+// Delete Disaster
+if (isset($_POST['delete_disaster'])) {
+    $disaster_id = $_POST['disaster_id'];
+    
+    // Check if there are victims associated
+    $check_victims = $conn->prepare("SELECT COUNT(*) as count FROM victim WHERE disaster_id = ?");
+    $check_victims->execute([$disaster_id]);
+    $result = $check_victims->fetch(PDO::FETCH_ASSOC);
+    
+    if ($result['count'] > 0) {
+        $message = "❌ Cannot delete disaster. There are " . $result['count'] . " victims associated with it.";
+    } else {
+        $stmt = $conn->prepare("DELETE FROM disaster WHERE disaster_id = ?");
+        $stmt->execute([$disaster_id]);
+        $message = "✅ Disaster deleted successfully!";
     }
+}
 
-    if (isset($_POST['update_victim'])) {
-        $stmt = $conn->prepare("
-            UPDATE needs
-            SET status = :approval_status,
-                distribution_id = :distribution_status
-            WHERE victim_id = :victim_id
-              AND disaster_id = :disaster_id
-        ");
-        $stmt->execute([
-            ':approval_status' => $_POST['approval_status'],
-            ':distribution_status' => $_POST['distribution_status'],
-            ':victim_id' => $_POST['victim_id'],
-            ':disaster_id' => $_POST['disaster_id']
-        ]);
-        $message = "✅ Victim status updated!";
+// Update Victim Status
+if (isset($_POST['update_victim'])) {
+    $stmt = $conn->prepare("
+        UPDATE needs 
+        SET status = :status, 
+            distribution_id = :distribution_id,
+            priority = :priority
+        WHERE victim_id = :victim_id 
+        AND disaster_id = :disaster_id
+    ");
+    $stmt->execute([
+        ':status' => $_POST['status'],
+        ':distribution_id' => $_POST['distribution_id'],
+        ':priority' => $_POST['priority'],
+        ':victim_id' => $_POST['victim_id'],
+        ':disaster_id' => $_POST['disaster_id']
+    ]);
+    $message = "✅ Victim status updated!";
+}
+
+// Handle Emergency Alert
+if (isset($_POST['send_alert'])) {
+    $alert_message = htmlspecialchars($_POST['alert_message']);
+    $disaster_id = $_POST['disaster_id'];
+    
+    $stmt = $conn->prepare("UPDATE disaster SET alert_message = :alert WHERE disaster_id = :id");
+    $stmt->execute([
+        ':alert' => $alert_message,
+        ':id' => $disaster_id
+    ]);
+    $message = "🚨 Alert message updated for the disaster!";
+}
+
+// Function to get victim details for modal
+function getVictimDetails($conn, $victim_id) {
+    $stmt = $conn->prepare("
+        SELECT 
+            v.*,
+            d.disaster_name,
+            d.district as disaster_district,
+            n.status as need_status,
+            n.priority,
+            n.created_at as need_created
+        FROM victim v
+        LEFT JOIN disaster d ON v.disaster_id = d.disaster_id
+        LEFT JOIN needs n ON v.victim_id = n.victim_id AND v.disaster_id = n.disaster_id
+        WHERE v.victim_id = ?
+    ");
+    $stmt->execute([$victim_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// Check if we're requesting victim details via AJAX
+if (isset($_GET['get_victim_details'])) {
+    $victim_id = $_GET['victim_id'];
+    $victim_details = getVictimDetails($conn, $victim_id);
+    
+    if ($victim_details) {
+        echo json_encode($victim_details);
+    } else {
+        echo json_encode(['error' => 'Victim not found']);
     }
+    exit();
+}
 
+// Fetch basic statistics
+$stats = $conn->query("
+    SELECT 
+        COUNT(*) as total_disasters,
+        SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) as active_disasters,
+        SUM(CASE WHEN status = 'Under Control' THEN 1 ELSE 0 END) as controlled_disasters,
+        SUM(CASE WHEN status = 'Ended' THEN 1 ELSE 0 END) as ended_disasters,
+        COALESCE(SUM(affected_people), 0) as total_victims
+    FROM disaster
+")->fetch(PDO::FETCH_ASSOC);
 
-// Fetch disasters
+// Fetch all disasters
 $disasters = $conn->query("SELECT * FROM disaster ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
 
-// Fetch victims if a disaster is selected
+// Fetch victims for selected disaster with optional filter
 $selected_disaster_id = $_GET['disaster_id'] ?? null;
+$filter_type = $_GET['filter'] ?? null; // 'baby', 'elderly', 'disabled', or null for all
 $victims = [];
+$disaster_details = null;
+
 if ($selected_disaster_id) {
-    $stmt = $conn->prepare("
-        SELECT v.victim_id, v.full_name, v.phone,
-               n.status AS approval_status,
-               n.distribution_id AS distribution_status
+    // Get disaster details
+    $stmt = $conn->prepare("SELECT * FROM disaster WHERE disaster_id = ?");
+    $stmt->execute([$selected_disaster_id]);
+    $disaster_details = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Build query based on filter
+    $sql = "
+        SELECT v.*, 
+               n.status as need_status, 
+               n.priority as need_priority,
+               n.distribution_id,
+               n.created_at as need_created
         FROM victim v
-        JOIN needs n ON v.victim_id = n.victim_id
-        WHERE n.disaster_id = :id
-    ");
-    $stmt->execute([':id' => $selected_disaster_id]);
+        LEFT JOIN needs n ON v.victim_id = n.victim_id AND v.disaster_id = n.disaster_id
+        WHERE v.disaster_id = ?
+    ";
+    
+    $params = [$selected_disaster_id];
+    
+    // Add filter condition if specified
+    if ($filter_type === 'baby') {
+        $sql .= " AND v.has_baby = true";
+    } elseif ($filter_type === 'elderly') {
+        $sql .= " AND v.has_elderly = true";
+    } elseif ($filter_type === 'disabled') {
+        $sql .= " AND v.has_disabled = true";
+    }
+    
+    $sql .= " ORDER BY 
+            CASE WHEN n.priority = 'High' THEN 1
+                 WHEN n.priority = 'Medium' THEN 2
+                 WHEN n.priority = 'Low' THEN 3
+                 ELSE 4 END,
+            v.created_at DESC";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->execute($params);
     $victims = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Get pending needs count
+$pending_needs = $conn->query("SELECT COUNT(*) as count FROM needs WHERE status = 'Pending'")->fetch(PDO::FETCH_ASSOC);
+
+// Get special needs counts for the selected disaster
+$special_needs_counts = [
+    'total' => 0,
+    'baby' => 0,
+    'elderly' => 0,
+    'disabled' => 0,
+    'pending' => 0,
+    'approved' => 0
+];
+
+if ($selected_disaster_id) {
+    $counts_query = $conn->prepare("
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN has_baby = true THEN 1 ELSE 0 END) as baby_count,
+            SUM(CASE WHEN has_elderly = true THEN 1 ELSE 0 END) as elderly_count,
+            SUM(CASE WHEN has_disabled = true THEN 1 ELSE 0 END) as disabled_count,
+            SUM(CASE WHEN n.status = 'Pending' THEN 1 ELSE 0 END) as pending_count,
+            SUM(CASE WHEN n.status = 'Approved' THEN 1 ELSE 0 END) as approved_count
+        FROM victim v
+        LEFT JOIN needs n ON v.victim_id = n.victim_id AND v.disaster_id = n.disaster_id
+        WHERE v.disaster_id = ?
+    ");
+    $counts_query->execute([$selected_disaster_id]);
+    $counts = $counts_query->fetch(PDO::FETCH_ASSOC);
+    
+    if ($counts) {
+        $special_needs_counts = [
+            'total' => $counts['total'] ?? 0,
+            'baby' => $counts['baby_count'] ?? 0,
+            'elderly' => $counts['elderly_count'] ?? 0,
+            'disabled' => $counts['disabled_count'] ?? 0,
+            'pending' => $counts['pending_count'] ?? 0,
+            'approved' => $counts['approved_count'] ?? 0
+        ];
+    }
 }
 ?>
 
@@ -91,238 +245,1926 @@ if ($selected_disaster_id) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Admin Dashboard</title>
-<link rel="stylesheet" href="../header.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard - Disaster Management</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
-body { margin:0; font-family:Arial,sans-serif; background:#f4f6f9; }
+:root {
+    --primary: #1a237e;
+    --primary-dark: #283593;
+    --primary-light: #4fc3f7;
+    --secondary: #4CAF50;
+    --danger: #f44336;
+    --warning: #ff9800;
+    --info: #2196F3;
+    --light: #f8f9fa;
+    --dark: #343a40;
+    --border: #e0e0e0;
+}
 
-/* Header */
-.system-header { text-align:center; padding:15px 0; }
-.logo-icon { color:#6c63ff; margin-right:10px; }
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
 
-/* Container */
-.container { display:flex; min-height:100vh; }
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #f8f9fa;
+    min-height: 100vh;
+}
 
-/* Sidebar */
+/* System Header - FROM ADMIN DASHBOARD */
+.system-header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    padding: 0 20px;
+    box-shadow: 0 2px 15px rgba(0,0,0,0.1);
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+.header-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 70px;
+}
+
+.logo-section {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.logo-icon {
+    font-size: 28px;
+    color: var(--primary-light);
+}
+
+.logo-text h1 {
+    font-size: 22px;
+    margin: 0;
+    font-weight: 600;
+    color: white;
+}
+
+.logo-text small {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #bbdefb;
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.search-box {
+    position: relative;
+    width: 300px;
+}
+
+.search-box input {
+    width: 100%;
+    padding: 10px 15px 10px 40px;
+    border: none;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 14px;
+    transition: all 0.3s ease;
+}
+
+.search-box input:focus {
+    outline: none;
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.3);
+}
+
+.search-box i {
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #bbdefb;
+}
+
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 5px 15px;
+    border-radius: 25px;
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.user-profile:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.user-avatar {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(135deg, var(--primary-light) 0%, #0288d1 100%);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: white;
+    font-size: 16px;
+}
+
+.user-info {
+    line-height: 1.3;
+}
+
+.user-name {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.user-role {
+    font-size: 12px;
+    opacity: 0.8;
+    color: #bbdefb;
+}
+
+.notifications {
+    position: relative;
+    cursor: pointer;
+    padding: 10px;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+}
+
+.notifications:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.notification-badge {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: var(--danger);
+    color: white;
+    font-size: 10px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Mobile Toggle */
+.mobile-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 10px;
+    border-radius: 5px;
+    transition: background 0.3s ease;
+}
+
+.mobile-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* Sidebar Navigation - FROM ADMIN DASHBOARD */
 .sidebar {
-    width:220px;
-    background:#fff;
-    border-right:1px solid #ddd;
-    padding:20px;
+    position: fixed;
+    left: 0;
+    top: 70px;
+    width: 250px;
+    height: calc(100vh - 70px);
+    background: linear-gradient(180deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    z-index: 999;
+    transition: transform 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
-.nav-menu { list-style:none; padding:0; margin:0; }
-.nav-item { margin-bottom:10px; }
+
+.sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 0;
+}
+
+.sidebar-collapsed {
+    transform: translateX(-250px);
+}
+
+/* Custom scrollbar for sidebar */
+.sidebar-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb {
+    background: rgba(79, 195, 247, 0.5);
+    border-radius: 3px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(79, 195, 247, 0.8);
+}
+
+.nav-menu {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.nav-item {
+    margin: 5px 15px;
+}
+
 .nav-link {
-    display:flex; align-items:center;
-    text-decoration:none; color:#333;
-    padding:8px 10px; border-radius:6px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px;
+    color: #bbdefb;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.nav-link i { margin-right:10px; }
-.nav-link.active, .nav-link:hover { background:#f0f0ff; }
 
-/* Main content */
-.main-content { flex:1; padding:30px; }
-
-/* Messages */
-.message { padding:12px 20px; border-radius:8px; margin-bottom:20px; text-align:center; }
-.message.success { background:#d4edda; color:#155724; }
-.message.error { background:#f8d7da; color:#721c24; }
-
-/* Cards */
-.admin-card {
-    background:white; border-radius:12px;
-    padding:20px; margin-bottom:30px;
-    border:1px solid #ccc; box-shadow:0 4px 10px rgba(0,0,0,0.05);
+.nav-link:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
 }
-.admin-card h3 { margin-top:0; margin-bottom:15px; }
+
+.nav-link.active {
+    background: rgba(79, 195, 247, 0.2);
+    color: white;
+    border-left: 4px solid var(--primary-light);
+}
+
+.nav-link i {
+    width: 20px;
+    text-align: center;
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.nav-text {
+    font-size: 14px;
+    font-weight: 500;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 20px 15px;
+}
+
+.nav-label {
+    padding: 10px 20px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #90caf9;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Sidebar Footer */
+.sidebar-footer {
+    padding: 15px 20px;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.sidebar-footer a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #bbdefb;
+    text-decoration: none;
+    padding: 10px;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+}
+
+.sidebar-footer a:hover {
+    background: rgba(231, 76, 60, 0.2);
+    color: #ff6b6b;
+}
+
+/* Main Content Area */
+.main-content {
+    margin-left: 250px;
+    padding: 30px;
+    transition: margin-left 0.3s ease;
+    min-height: calc(100vh - 70px);
+    background: #f8f9fa;
+}
+
+.main-content-expanded {
+    margin-left: 0;
+}
+
+/* YOUR EXISTING STYLES (keeping all your functionality styles) */
+.quick-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 30px;
+}
+
+.action-btn {
+    background: white;
+    border: none;
+    padding: 20px;
+    border-radius: 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+    color: var(--dark);
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.action-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 20px rgba(0,0,0,0.12);
+}
+
+.action-btn i {
+    font-size: 24px;
+    color: var(--primary);
+    margin-bottom: 10px;
+    display: block;
+}
+
+/* Dashboard Sections */
+.dashboard-section {
+    background: white;
+    border-radius: 15px;
+    padding: 30px;
+    margin-bottom: 30px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 25px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid var(--border);
+}
+
+.section-header h3 {
+    color: var(--primary);
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Badges */
+.badge {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    display: inline-block;
+}
+
+.badge-primary { background: #e3f2fd; color: var(--info); }
+.badge-success { background: #e8f5e9; color: var(--secondary); }
+.badge-danger { background: #ffebee; color: var(--danger); }
+.badge-warning { background: #fff3e0; color: var(--warning); }
+.badge-info { background: #e0f2f1; color: #00796b; }
+.badge-high { background: #ffebee; color: var(--danger); }
+.badge-medium { background: #fff3e0; color: var(--warning); }
+.badge-low { background: #e8f5e9; color: var(--secondary); }
+
+/* Special Needs Filter */
+.filter-tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.filter-tab {
+    padding: 10px 20px;
+    border-radius: 25px;
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 14px;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.filter-tab.all {
+    background: #e3f2fd;
+    color: var(--info);
+    border: 2px solid transparent;
+}
+
+.filter-tab.baby {
+    background: #e1f5fe;
+    color: #0288d1;
+    border: 2px solid transparent;
+}
+
+.filter-tab.elderly {
+    background: #f3e5f5;
+    color: #7b1fa2;
+    border: 2px solid transparent;
+}
+
+.filter-tab.disabled {
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: 2px solid transparent;
+}
+
+.filter-tab:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.filter-tab.active {
+    border: 2px solid var(--primary);
+    font-weight: 600;
+}
+
+/* Tables */
+.table-responsive {
+    overflow-x: auto;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+}
+
+table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 800px;
+}
+
+table th {
+    background: var(--light);
+    padding: 16px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--dark);
+    border-bottom: 2px solid var(--border);
+}
+
+table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+table tr:last-child td {
+    border-bottom: none;
+}
+
+table tr:hover {
+    background: rgba(108, 99, 255, 0.05);
+}
 
 /* Forms */
-.admin-form input, .admin-form select, .admin-form button {
-    width:100%; padding:8px 10px; margin-bottom:10px; border-radius:6px; border:1px solid #ccc;
-    box-sizing:border-box;
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
 }
-.admin-form button {
-    background:#6c63ff; color:white; border:none; cursor:pointer; transition:0.3s;
-}
-.admin-form button:hover { background:#574fd6; }
 
-/* Table */
-.table-container { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-table th, table td { border:1px solid #ccc; padding:10px; text-align:center; }
-table th { background:#6c63ff; color:white; }
-table tr:nth-child(even) { background:#f9f9f9; }
-.table-select { width:120px; padding:5px; border-radius:6px; border:1px solid #ccc; }
-.table-btn { padding:6px 12px; border:none; border-radius:6px; background:#6c63ff; color:white; cursor:pointer; }
-.table-btn:hover { background:#574fd6; }
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-control {
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    font-size: 16px;
+    transition: all 0.3s;
+    font-family: inherit;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.1);
+}
+
+textarea.form-control {
+    min-height: 120px;
+    resize: vertical;
+}
+
+/* Buttons */
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: inherit;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-dark);
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(108, 99, 255, 0.3);
+}
+
+.btn-danger {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #d32f2f;
+    transform: translateY(-2px);
+}
+
+.btn-sm {
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+.btn-xs {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+/* Messages */
+.message {
+    padding: 15px 20px;
+    border-radius: 10px;
+    margin-bottom: 25px;
+    text-align: center;
+    font-weight: 500;
+    animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message.success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message.error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Alert Section */
+.alert-section {
+    background: linear-gradient(135deg, #ff6b6b, #ff8e8e);
+    color: white;
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 30px;
+}
+
+.alert-section h3 {
+    color: white;
+    margin-bottom: 15px;
+}
+
+.alert-section textarea {
+    background: rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.3);
+    color: white;
+}
+
+.alert-section textarea::placeholder {
+    color: rgba(255,255,255,0.7);
+}
+
+/* Status Indicators */
+.status-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-active { background: var(--secondary); }
+.status-pending { background: var(--warning); }
+.status-ended { background: #999; }
+
+/* Victim Special Needs Tags */
+.needs-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.tag {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    display: inline-block;
+}
+
+.tag-baby { background: #e1f5fe; color: #0288d1; }
+.tag-elderly { background: #f3e5f5; color: #7b1fa2; }
+.tag-disabled { background: #e8f5e9; color: #2e7d32; }
+
+/* Disaster Status Colors */
+.status-active-bg { background: #ffebee !important; }
+.status-control-bg { background: #e8f5e9 !important; }
+.status-ended-bg { background: #f5f5f5 !important; }
+
+/* Special Needs Stats */
+.special-needs-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 15px;
+    margin-bottom: 25px;
+}
+
+.stat-card {
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+    border-left: 4px solid;
+    transition: transform 0.3s;
+    cursor: pointer;
+}
+
+.stat-card:hover {
+    transform: translateY(-3px);
+}
+
+.stat-card.baby { border-left-color: #0288d1; }
+.stat-card.elderly { border-left-color: #7b1fa2; }
+.stat-card.disabled { border-left-color: #2e7d32; }
+.stat-card.pending { border-left-color: #ff9800; }
+.stat-card.approved { border-left-color: #4CAF50; }
+
+.stat-card .stat-number {
+    font-size: 32px;
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.stat-card.baby .stat-number { color: #0288d1; }
+.stat-card.elderly .stat-number { color: #7b1fa2; }
+.stat-card.disabled .stat-number { color: #2e7d32; }
+.stat-card.pending .stat-number { color: #ff9800; }
+.stat-card.approved .stat-number { color: #4CAF50; }
+
+.stat-card .stat-label {
+    font-size: 14px;
+    color: #666;
+}
+
+/* Modal Styles */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.modal-content {
+    background: white;
+    border-radius: 15px;
+    width: 100%;
+    max-width: 700px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-header {
+    position: sticky;
+    top: 0;
+    background: white;
+    border-bottom: 2px solid var(--border);
+    padding: 20px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 1;
+}
+
+.modal-header h3 {
+    color: var(--primary);
+    margin: 0;
+    font-size: 20px;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: #666;
+    cursor: pointer;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.3s;
+}
+
+.modal-close:hover {
+    background: #f5f5f5;
+    color: #333;
+}
+
+.modal-body {
+    padding: 30px;
+}
+
+.victim-details-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.detail-card {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 20px;
+    border-left: 4px solid var(--primary);
+}
+
+.detail-card h4 {
+    color: var(--primary);
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.detail-row {
+    display: flex;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.detail-row:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.detail-label {
+    flex: 0 0 150px;
+    font-weight: 600;
+    color: #666;
+    font-size: 14px;
+}
+
+.detail-value {
+    flex: 1;
+    color: #333;
+    font-size: 15px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 2px solid var(--border);
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.action-btn-circle {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 20px;
+}
+
+.action-btn-circle:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+}
+
+.action-btn-circle.call { background: #e3f2fd; color: #2196F3; }
+.action-btn-circle.email { background: #f3e5f5; color: #9C27B0; }
+.action-btn-circle.whatsapp { background: #e8f5e9; color: #4CAF50; }
+.action-btn-circle.report { background: #fff3e0; color: #ff9800; }
+.action-btn-circle.edit { background: #e0f2f1; color: #00796b; }
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .main-content {
+        margin-left: 0;
+    }
+    
+    .sidebar {
+        transform: translateX(-250px);
+    }
+    
+    .sidebar.active {
+        transform: translateX(0);
+    }
+    
+    .mobile-toggle {
+        display: block;
+    }
+}
+
+@media (max-width: 768px) {
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .quick-actions {
+        grid-template-columns: 1fr;
+    }
+    
+    .table-responsive {
+        font-size: 14px;
+    }
+    
+    .special-needs-stats {
+        grid-template-columns: 1fr 1fr;
+    }
+    
+    .filter-tabs {
+        justify-content: center;
+    }
+    
+    .victim-details-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .detail-row {
+        flex-direction: column;
+        gap: 5px;
+    }
+    
+    .detail-label {
+        flex: none;
+    }
+    
+    .search-box {
+        width: 200px;
+    }
+}
+
+@media (max-width: 576px) {
+    .header-container {
+        flex-wrap: wrap;
+        height: auto;
+        padding: 15px 0;
+    }
+    
+    .logo-text h1 {
+        font-size: 18px;
+    }
+    
+    .search-box {
+        width: 100%;
+        order: 3;
+        margin-top: 15px;
+    }
+    
+    .stats-container {
+        grid-template-columns: 1fr;
+    }
+}
 </style>
 </head>
 <body>
+    <!-- System Header (From Admin Dashboard) -->
+    <header class="system-header">
+        <div class="header-container">
+            <div class="logo-section">
+                <button class="mobile-toggle" id="mobileToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="logo-icon">
+                    <i class="fas fa-shield-alt"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>Admin Panel</h1>
+                    <small>Disaster Management System</small>
+                </div>
+            </div>
+            
+            <div class="header-controls">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search...">
+                </div>
+                
+                <div class="notifications" id="notificationsBtn">
+                    <i class="fas fa-bell"></i>
+                    <span class="notification-badge"><?= $pending_needs['count'] ?? 0 ?></span>
+                </div>
+                
+                <div class="user-profile" id="userProfileBtn">
+                    <div class="user-avatar">
+                        <i class="fas fa-user-shield"></i>
+                    </div>
+                    <div class="user-info">
+                        <div class="user-name">Administrator</div>
+                        <div class="user-role">Disaster Management</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
 
-<header class="system-header">
-    <i class="fas fa-shield-heart logo-icon" style="font-size:36px;"></i>
-    <h1>Melaka Disaster Assistance</h1>
-    <small>Admin Dashboard</small>
-</header>
-
-<div class="container">
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <ul class="nav-menu">
-            <li class="nav-item">
-                <a class="nav-link active"><i class="fas fa-house"></i> Dashboard</a>
-            </li>
-            <!-- Removed Victim Registration & Report Disaster -->
-        </ul>
-    </div>
+    <!-- Sidebar Navigation (From Admin Dashboard) -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-content">
+            <ul class="nav-menu">
+                <li class="nav-label">MAIN NAVIGATION</li>
+                
+                <li class="nav-item">
+                    <a href="admin_dashboard.php" class="nav-link active">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span class="nav-text">Dashboard</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">DISASTER MANAGEMENT</li>
+                
+                <li class="nav-item">
+                    <a href="#disaster-management" class="nav-link">
+                        <i class="fas fa-fire"></i>
+                        <span class="nav-text">Manage Disasters</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="#victim-management" class="nav-link">
+                        <i class="fas fa-users"></i>
+                        <span class="nav-text">Manage Victims</span>
+                    </a>
+                </li>
+                
+                <li class="nav-divider"></li>
+                
+                <li class="nav-label">QUICK ACTIONS</li>
+                
+                <li class="nav-item">
+                    <a href="#addDisaster" class="nav-link">
+                        <i class="fas fa-plus-circle"></i>
+                        <span class="nav-text">Add Disaster</span>
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="#sendAlert" class="nav-link">
+                        <i class="fas fa-bullhorn"></i>
+                        <span class="nav-text">Emergency Alert</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+        
+        <!-- Sidebar Footer -->
+        <div class="sidebar-footer">
+            <a href="main_page.php">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>Logout</span>
+            </a>
+        </div>
+    </nav>
 
     <!-- Main Content -->
-    <div class="main-content">
-
+    <main class="main-content" id="mainContent">
         <?php if($message): ?>
-        <div class="message <?= strpos($message,'✅')!==false ? 'success':'error' ?>">
+        <div class="message <?= strpos($message,'✅')!==false || strpos($message,'🚨')!==false ? 'success':'error' ?>">
             <?= $message ?>
         </div>
         <?php endif; ?>
 
-       
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <button class="action-btn" onclick="document.getElementById('addDisaster').scrollIntoView({behavior: 'smooth'})">
+                <i class="fas fa-plus-circle"></i>
+                <span>Add New Disaster</span>
+            </button>
+            <button class="action-btn" onclick="document.getElementById('sendAlert').scrollIntoView({behavior: 'smooth'})">
+                <i class="fas fa-bullhorn"></i>
+                <span>Send Emergency Alert</span>
+            </button>
+            <button class="action-btn" onclick="printReport()">
+                <i class="fas fa-print"></i>
+                <span>Print Report</span>
+            </button>
+            <button class="action-btn" onclick="exportData()">
+                <i class="fas fa-download"></i>
+                <span>Export Data</span>
+            </button>
+        </div>
+
+        <!-- Emergency Alert Section -->
+        <div class="alert-section" id="sendAlert">
+            <h3><i class="fas fa-bullhorn"></i> Quick Emergency Alert</h3>
+            <form method="POST">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <select name="disaster_id" class="form-control" required>
+                            <option value="">Select Disaster</option>
+                            <?php foreach($disasters as $d): ?>
+                                <option value="<?= $d['disaster_id'] ?>"><?= htmlspecialchars($d['disaster_name']) ?> - <?= $d['district'] ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" name="alert_type" class="form-control" placeholder="Alert Type (e.g., Warning, Update)" value="Emergency Alert">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <textarea name="alert_message" class="form-control" rows="3" placeholder="Enter emergency message..." required></textarea>
+                </div>
+                <button type="submit" name="send_alert" class="btn btn-primary">
+                    <i class="fas fa-paper-plane"></i> Send Alert
+                </button>
+            </form>
+        </div>
 
         <!-- ADD NEW DISASTER -->
-<div class="admin-card">
-    <h3><i class="fas fa-plus-circle"></i> Add New Disaster</h3>
-    <form method="POST" class="admin-form">
-        <input type="text" name="disaster_type" placeholder="Disaster Type" required>
-
-        <small style="color:#555;">Max 200 characters</small>
-        <textarea name="description" placeholder="Description"
-            rows="4" maxlength="200"
-            style="border:1px solid #ccc; border-radius:6px; padding:8px; width:100%; box-sizing:border-box;"
-            required></textarea>
-
-        <input type="text" name="district" placeholder="District" required>
-
-        <select name="severity" required>
-            <option value="">-- Select Severity --</option>
-            <option value="Low">Low</option>
-            <option value="Medium">Medium</option>
-            <option value="High">High</option>
-        </select>
-
-        <select name="status" required>
-            <option value="Active">Active</option>
-            <option value="Under Control">Under Control</option>
-            <option value="Ended">Ended</option>
-        </select>
-
-        <button name="add_disaster">Add Disaster</button>
-    </form>
-</div>
-
-<!-- MANAGE EXISTING DISASTERS -->
-<div class="admin-card">
-    <h3><i class="fas fa-tasks"></i> Manage Existing Disasters</h3>
-
-    <?php if (empty($disasters)): ?>
-        <p style="color:#666;">No disasters found.</p>
-    <?php else: ?>
-        <div class="table-container">
-            <table>
-                <tr>
-                    <th>Disaster</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                </tr>
-
-                <?php foreach ($disasters as $d): ?>
-                <tr>
-                    <form method="POST">
-                        <!-- Disaster Name -->
-                        <td style="font-weight:bold;">
-                            <?= htmlspecialchars($d['disaster_name']) ?>
-                        </td>
-
-                        <!-- Status Dropdown -->
-                        <td>
-                            <select name="status" class="table-select">
-                                <option value="Active" <?= $d['status']=='Active'?'selected':'' ?>>Active</option>
-                                <option value="Under Control" <?= $d['status']=='Under Control'?'selected':'' ?>>Under Control</option>
-                                <option value="Ended" <?= $d['status']=='Ended'?'selected':'' ?>>Ended</option>
-                            </select>
-                        </td>
-
-                        <!-- Actions -->
-                        <td>
-                            <input type="hidden" name="disaster_id" value="<?= $d['disaster_id'] ?>">
-
-                            <button name="update_disaster" class="table-btn">
-                                Update
-                            </button>
-
-                            <a href="?disaster_id=<?= $d['disaster_id'] ?>"
-                               class="table-btn"
-                               style="text-decoration:none;">
-                                View Victims
-                            </a>
-                        </td>
-                    </form>
-                </tr>
-                <?php endforeach; ?>
-            </table>
-        </div>
-    <?php endif; ?>
-</div>
-
-
-
-
-        <!-- Victim Management -->
-        <?php if($selected_disaster_id && $victims): ?>
-        <div class="admin-card">
-            <h3><i class="fas fa-users"></i> Victims for Selected Disaster</h3>
-            <div class="table-container">
-                <table>
-                    <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Approval Status</th>
-                        <th>Distribution Status</th>
-                        <th>Action</th>
-                    </tr>
-                    <?php foreach($victims as $v): ?>
-                    <tr>
-                        <form method="POST">
-                            <td><?= htmlspecialchars($v['full_name']) ?></td>
-                            <td><?= $v['phone'] ?></td>
-                            <td>
-                                <select name="approval_status" class="table-select">
-                                    <option value="Pending" <?= $v['approval_status']=='Pending'?'selected':'' ?>>Pending</option>
-                                    <option value="Approved" <?= $v['approval_status']=='Approved'?'selected':'' ?>>Approved</option>
-                                    <option value="Rejected" <?= $v['approval_status']=='Rejected'?'selected':'' ?>>Rejected</option>
-                                </select>
-                            </td>
-                            <td>
-                                <select name="distribution_status" class="table-select">
-                                    <option value="1" <?= $v['distribution_status']==1?'selected':'' ?>>Pending</option>
-                                    <option value="2" <?= $v['distribution_status']==2?'selected':'' ?>>Completed</option>
-                                </select>
-                            </td>
-                            <td>
-                                <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
-                                <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
-                                <button name="update_victim" class="table-btn">Update</button>
-                            </td>
-                        </form>
-                    </tr>
-                    <?php endforeach; ?>
-                </table>
+        <div class="dashboard-section" id="addDisaster">
+            <div class="section-header">
+                <h3><i class="fas fa-plus-circle"></i> Add New Disaster</h3>
+                <span class="badge badge-primary">NEW</span>
             </div>
+            <form method="POST">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <input type="text" name="disaster_type" class="form-control" placeholder="Disaster Type (e.g., Flood, Fire, Earthquake)" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" name="district" class="form-control" placeholder="Affected District" required>
+                    </div>
+                </div>
+                
+                <div class="form-grid">
+                    <div class="form-group">
+                        <select name="severity" class="form-control" required>
+                            <option value="">-- Select Severity --</option>
+                            <option value="Low">Low</option>
+                            <option value="Medium">Medium</option>
+                            <option value="High">High</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <select name="status" class="form-control" required>
+                            <option value="Active">Active</option>
+                            <option value="Under Control">Under Control</option>
+                            <option value="Ended">Ended</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <textarea name="description" class="form-control" rows="4" placeholder="Detailed description of the disaster..." required></textarea>
+                </div>
+                
+                <button type="submit" name="add_disaster" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Add Disaster
+                </button>
+            </form>
         </div>
-        <?php endif; ?>
+
+        <!-- MANAGE EXISTING DISASTERS -->
+        <div class="dashboard-section" id="disaster-management">
+            <div class="section-header">
+                <h3><i class="fas fa-fire"></i> Manage Disasters</h3>
+                <div>
+                    <span class="badge badge-danger"><?= $stats['active_disasters'] ?? 0 ?> ACTIVE</span>
+                    <span class="badge badge-warning"><?= $stats['total_disasters'] ?? 0 ?> TOTAL</span>
+                </div>
+            </div>
+
+            <?php if (empty($disasters)): ?>
+                <div style="text-align: center; padding: 40px; color: #666;">
+                    <i class="fas fa-check-circle" style="font-size: 48px; margin-bottom: 20px; color: var(--secondary);"></i>
+                    <p>No disasters found. All clear!</p>
+                </div>
+            <?php else: ?>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Disaster Name</th>
+                                <th>Description</th>
+                                <th>District</th>
+                                <th>Severity</th>
+                                <th>Status</th>
+                                <th>Start Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($disasters as $d): ?>
+                            <tr class="<?= $d['status'] == 'Active' ? 'status-active-bg' : ($d['status'] == 'Under Control' ? 'status-control-bg' : 'status-ended-bg') ?>">
+                                <td>#<?= $d['disaster_id'] ?></td>
+                                <td>
+                                    <strong><?= htmlspecialchars($d['disaster_name']) ?></strong>
+                                </td>
+                                <td>
+                                    <small><?= htmlspecialchars(substr($d['description'] ?? 'No description', 0, 50)) ?>...</small>
+                                </td>
+                                <td><?= htmlspecialchars($d['district']) ?></td>
+                                <td>
+                                    <span class="badge badge-<?= strtolower($d['severity']) ?>">
+                                        <?= $d['severity'] ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <form method="POST" style="display: inline;">
+                                        <input type="hidden" name="disaster_id" value="<?= $d['disaster_id'] ?>">
+                                        <select name="status" onchange="this.form.submit()" 
+                                                class="form-control" style="width: auto; display: inline-block; padding: 6px 12px; min-width: 140px;">
+                                            <option value="Active" <?= $d['status']=='Active'?'selected':'' ?>>Active</option>
+                                            <option value="Under Control" <?= $d['status']=='Under Control'?'selected':'' ?>>Under Control</option>
+                                            <option value="Ended" <?= $d['status']=='Ended'?'selected':'' ?>>Ended</option>
+                                        </select>
+                                        <input type="hidden" name="update_disaster" value="1">
+                                    </form>
+                                </td>
+                                <td><?= date('d M Y', strtotime($d['start_date'] ?? $d['created_at'])) ?></td>
+                                <td>
+                                    <div style="display: flex; gap: 5px;">
+                                        <a href="?disaster_id=<?= $d['disaster_id'] ?>" 
+                                           class="btn btn-primary btn-xs">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        <form method="POST" style="display: inline;" onsubmit="return confirmDelete()">
+                                            <input type="hidden" name="disaster_id" value="<?= $d['disaster_id'] ?>">
+                                            <button type="submit" name="delete_disaster" class="btn btn-danger btn-xs">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- VICTIM MANAGEMENT SECTION -->
+        <div class="dashboard-section" id="victim-management">
+            <?php if($selected_disaster_id): ?>
+                <div class="section-header">
+                    <h3><i class="fas fa-users"></i> 
+                        <?php if($disaster_details): ?>
+                            Victims for: <?= htmlspecialchars($disaster_details['disaster_name']) ?> 
+                            <small style="color: #666; font-weight: normal;">(District: <?= htmlspecialchars($disaster_details['district']) ?>)</small>
+                        <?php else: ?>
+                            Victim Management
+                        <?php endif; ?>
+                    </h3>
+                    <div>
+                        <span class="badge badge-info"><?= count($victims) ?> VICTIMS</span>
+                        <a href="admin_dashboard.php" class="btn btn-sm" style="background: #f5f5f5; margin-left: 10px;">
+                            <i class="fas fa-times"></i> Clear Filter
+                        </a>
+                    </div>
+                </div>
+                
+                <!-- Special Needs Statistics -->
+                <div class="special-needs-stats">
+                    <div class="stat-card total" onclick="window.location.href='?disaster_id=<?= $selected_disaster_id ?>'">
+                        <div class="stat-number"><?= $special_needs_counts['total'] ?></div>
+                        <div class="stat-label">Total Victims</div>
+                    </div>
+                    <div class="stat-card baby" onclick="window.location.href='?disaster_id=<?= $selected_disaster_id ?>&filter=baby'">
+                        <div class="stat-number"><?= $special_needs_counts['baby'] ?></div>
+                        <div class="stat-label">With Babies <i class="fas fa-baby"></i></div>
+                    </div>
+                    <div class="stat-card elderly" onclick="window.location.href='?disaster_id=<?= $selected_disaster_id ?>&filter=elderly'">
+                        <div class="stat-number"><?= $special_needs_counts['elderly'] ?></div>
+                        <div class="stat-label">Elderly <i class="fas fa-wheelchair"></i></div>
+                    </div>
+                    <div class="stat-card disabled" onclick="window.location.href='?disaster_id=<?= $selected_disaster_id ?>&filter=disabled'">
+                        <div class="stat-number"><?= $special_needs_counts['disabled'] ?></div>
+                        <div class="stat-label">Disabled <i class="fas fa-universal-access"></i></div>
+                    </div>
+                    <div class="stat-card pending">
+                        <div class="stat-number"><?= $special_needs_counts['pending'] ?></div>
+                        <div class="stat-label">Pending Approval</div>
+                    </div>
+                    <div class="stat-card approved">
+                        <div class="stat-number"><?= $special_needs_counts['approved'] ?></div>
+                        <div class="stat-label">Approved</div>
+                    </div>
+                </div>
+                
+                <!-- Filter Tabs -->
+                <div class="filter-tabs">
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>" 
+                       class="filter-tab all <?= !$filter_type ? 'active' : '' ?>">
+                        <i class="fas fa-users"></i> All Victims (<?= $special_needs_counts['total'] ?>)
+                    </a>
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>&filter=baby" 
+                       class="filter-tab baby <?= $filter_type === 'baby' ? 'active' : '' ?>">
+                        <i class="fas fa-baby"></i> With Babies (<?= $special_needs_counts['baby'] ?>)
+                    </a>
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>&filter=elderly" 
+                       class="filter-tab elderly <?= $filter_type === 'elderly' ? 'active' : '' ?>">
+                        <i class="fas fa-wheelchair"></i> Elderly (<?= $special_needs_counts['elderly'] ?>)
+                    </a>
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>&filter=disabled" 
+                       class="filter-tab disabled <?= $filter_type === 'disabled' ? 'active' : '' ?>">
+                        <i class="fas fa-universal-access"></i> Disabled (<?= $special_needs_counts['disabled'] ?>)
+                    </a>
+                </div>
+                
+                <?php if(empty($victims)): ?>
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <i class="fas fa-user-slash" style="font-size: 48px; margin-bottom: 20px; color: #ccc;"></i>
+                        <p>
+                            <?php if($filter_type === 'baby'): ?>
+                                No victims with babies registered for this disaster.
+                            <?php elseif($filter_type === 'elderly'): ?>
+                                No elderly victims registered for this disaster.
+                            <?php elseif($filter_type === 'disabled'): ?>
+                                No disabled victims registered for this disaster.
+                            <?php else: ?>
+                                No victims registered for this disaster yet.
+                            <?php endif; ?>
+                        </p>
+                        <?php if($filter_type): ?>
+                            <a href="?disaster_id=<?= $selected_disaster_id ?>" class="btn btn-primary btn-sm">
+                                <i class="fas fa-users"></i> View All Victims
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <!-- Victim Table -->
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Victim Details</th>
+                                    <th>Contact Info</th>
+                                    <th>Family & Special Needs</th>
+                                    <th>Needs Status</th>
+                                    <th>Registration Date</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach($victims as $index => $v): ?>
+                                <tr>
+                                    <td><?= $index + 1 ?></td>
+                                    <td>
+                                        <strong><?= htmlspecialchars($v['full_name']) ?></strong><br>
+                                        <small style="color: #666;">IC: <?= htmlspecialchars($v['ic_number']) ?></small><br>
+                                        <small style="color: #888;"><?= htmlspecialchars($v['city'] ?? 'Unknown City') ?></small>
+                                    </td>
+                                    <td>
+                                        <div><i class="fas fa-envelope" style="color: #666; width: 16px;"></i> 
+                                            <?= htmlspecialchars($v['email']) ?>
+                                            <?= $v['email_verified'] ? ' <span class="badge" style="background:#e8f5e9; color:#2e7d32; font-size:10px;">Verified</span>' : '' ?>
+                                        </div>
+                                        <div><i class="fas fa-phone" style="color: #666; width: 16px;"></i> 
+                                            <?= htmlspecialchars($v['phone'] ?? 'Not provided') ?>
+                                        </div>
+                                        <div><i class="fas fa-home" style="color: #666; width: 16px;"></i> 
+                                            <small><?= htmlspecialchars(substr($v['address'], 0, 30)) ?>...</small>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div style="margin-bottom: 5px;">
+                                            <small><strong>Family:</strong> <?= $v['family_members'] ?> members</small>
+                                        </div>
+                                        <div class="needs-tags">
+                                            <?php if($v['has_baby']): ?>
+                                                <span class="tag tag-baby"><i class="fas fa-baby"></i> Baby</span>
+                                            <?php endif; ?>
+                                            <?php if($v['has_elderly']): ?>
+                                                <span class="tag tag-elderly"><i class="fas fa-wheelchair"></i> Elderly</span>
+                                            <?php endif; ?>
+                                            <?php if($v['has_disabled']): ?>
+                                                <span class="tag tag-disabled"><i class="fas fa-universal-access"></i> Disabled</span>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php if($v['special_request']): ?>
+                                            <div style="margin-top: 5px;">
+                                                <small style="color: #ff9800;">
+                                                    <i class="fas fa-exclamation-circle"></i> Special request
+                                                </small>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <form method="POST" style="margin-bottom: 5px;">
+                                            <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
+                                            <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
+                                            <select name="status" class="form-control" style="width: 100%; padding: 6px; margin-bottom: 5px;" onchange="this.form.submit()">
+                                                <option value="Pending" <?= ($v['need_status'] ?? '')=='Pending'?'selected':'' ?>>Pending</option>
+                                                <option value="Approved" <?= ($v['need_status'] ?? '')=='Approved'?'selected':'' ?>>Approved</option>
+                                                <option value="Rejected" <?= ($v['need_status'] ?? '')=='Rejected'?'selected':'' ?>>Rejected</option>
+                                                <option value="Assisted" <?= ($v['need_status'] ?? '')=='Assisted'?'selected':'' ?>>Assisted</option>
+                                            </select>
+                                            <input type="hidden" name="distribution_id" value="<?= $v['distribution_id'] ?? 0 ?>">
+                                            <select name="priority" class="form-control" style="width: 100%; padding: 6px;" onchange="this.form.submit()">
+                                                <option value="Low" <?= ($v['need_priority'] ?? '')=='Low'?'selected':'' ?>>Low Priority</option>
+                                                <option value="Medium" <?= ($v['need_priority'] ?? '')=='Medium'?'selected':'' ?>>Medium Priority</option>
+                                                <option value="High" <?= ($v['need_priority'] ?? '')=='High'?'selected':'' ?>>High Priority</option>
+                                            </select>
+                                            <input type="hidden" name="update_victim" value="1">
+                                        </form>
+                                        
+                                        <!-- Quick Status Buttons -->
+                                        <div style="display: flex; gap: 5px; margin-top: 5px;">
+                                            <form method="POST" style="display: inline;">
+                                                <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
+                                                <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
+                                                <input type="hidden" name="status" value="Assisted">
+                                                <input type="hidden" name="distribution_id" value="<?= $v['distribution_id'] ?? 0 ?>">
+                                                <input type="hidden" name="priority" value="<?= $v['need_priority'] ?? 'Medium' ?>">
+                                                <input type="hidden" name="update_victim" value="1">
+                                                <button type="submit" class="btn btn-xs" style="background: #e8f5e9; color: #2e7d32; padding: 3px 8px;">
+                                                    <i class="fas fa-check"></i> Mark Assisted
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <?= date('d M Y', strtotime($v['created_at'])) ?><br>
+                                        <small style="color: #888;">
+                                            <?= date('H:i', strtotime($v['created_at'])) ?>
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                                            <!-- Quick Contact -->
+                                            <div style="display: flex; gap: 3px;">
+                                                <?php if($v['phone']): ?>
+                                                    <a href="tel:<?= htmlspecialchars($v['phone']) ?>" 
+                                                       class="btn btn-xs" style="background: #e3f2fd; flex: 1; padding: 4px 6px;"
+                                                       title="Call <?= htmlspecialchars($v['full_name']) ?>">
+                                                        <i class="fas fa-phone"></i>
+                                                    </a>
+                                                <?php endif; ?>
+                                                <a href="mailto:<?= htmlspecialchars($v['email']) ?>" 
+                                                   class="btn btn-xs" style="background: #f3e5f5; flex: 1; padding: 4px 6px;"
+                                                   title="Email <?= htmlspecialchars($v['full_name']) ?>">
+                                                    <i class="fas fa-envelope"></i>
+                                                </a>
+                                            </div>
+                                            
+                                            <!-- Main Action Buttons -->
+                                            <div style="display: flex; flex-direction: column; gap: 3px;">
+                                                <!-- Edit Button -->
+                                                <button class="btn btn-xs" style="background: #fff3e0; color: #ff9800;"
+                                                        onclick="editVictim(<?= $v['victim_id'] ?>)"
+                                                        title="Edit Victim Information">
+                                                    <i class="fas fa-edit"></i> Edit
+                                                </button>
+                                                
+                                                <!-- View Details Button -->
+                                                <button class="btn btn-xs" style="background: #e3f2fd; color: #2196F3;"
+                                                        onclick="viewVictimDetails(<?= $v['victim_id'] ?>)"
+                                                        title="View Full Details">
+                                                    <i class="fas fa-eye"></i> Details
+                                                </button>
+                                                
+                                                <!-- Generate Report Button -->
+                                                <button class="btn btn-xs" style="background: #e8f5e9; color: #4CAF50;"
+                                                        onclick="generateReport(<?= $v['victim_id'] ?>)"
+                                                        title="Generate Victim Report">
+                                                    <i class="fas fa-file-pdf"></i> Report
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Export Options -->
+                    <div style="margin-top: 20px; text-align: center;">
+                        <button onclick="exportVictims(<?= $selected_disaster_id ?>, '<?= $filter_type ?>')" class="btn btn-primary">
+                            <i class="fas fa-download"></i> Export Victim List (CSV)
+                        </button>
+                        <button onclick="window.print()" class="btn" style="background: #f5f5f5; margin-left: 10px;">
+                            <i class="fas fa-print"></i> Print This List
+                        </button>
+                        <button onclick="generateAllReports(<?= $selected_disaster_id ?>)" class="btn" style="background: #e8f5e9; color: #4CAF50; margin-left: 10px;">
+                            <i class="fas fa-file-alt"></i> Generate All Reports
+                        </button>
+                    </div>
+                <?php endif; ?>
+            <?php else: ?>
+                <div class="section-header">
+                    <h3><i class="fas fa-users"></i> Victim Management</h3>
+                    <span class="badge badge-info">SELECT A DISASTER</span>
+                </div>
+                <div style="text-align: center; padding: 40px; color: #666;">
+                    <i class="fas fa-mouse-pointer" style="font-size: 48px; margin-bottom: 20px; color: var(--primary);"></i>
+                    <p>Select a disaster from the list above to view and manage victims.</p>
+                    <p><small>Click "View" on any disaster to see its registered victims.</small></p>
+                </div>
+            <?php endif; ?>
+        </div>
 
     </div>
 </div>
 
+<!-- Victim Details Modal -->
+<div id="victimModal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-user-circle"></i> Victim Details</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="victimModalContent">
+            <!-- Content will be loaded here by JavaScript -->
+        </div>
+    </div>
+</div>
+
+<script>
+// Mobile Toggle for Sidebar
+document.getElementById('mobileToggle').addEventListener('click', function() {
+    document.getElementById('sidebar').classList.toggle('active');
+});
+
+// Check screen size on load and resize
+function checkScreenSize() {
+    const sidebar = document.getElementById('sidebar');
+    const mainContent = document.getElementById('mainContent');
+    const mobileToggle = document.getElementById('mobileToggle');
+    
+    if (window.innerWidth <= 1200) {
+        sidebar.classList.add('sidebar-collapsed');
+        mainContent.classList.add('main-content-expanded');
+        mobileToggle.style.display = 'block';
+    } else {
+        sidebar.classList.remove('sidebar-collapsed', 'active');
+        mainContent.classList.remove('main-content-expanded');
+        mobileToggle.style.display = 'none';
+    }
+}
+
+// Check on load and resize
+window.addEventListener('load', checkScreenSize);
+window.addEventListener('resize', checkScreenSize);
+
+// Smooth scroll for sidebar
+document.querySelector('.sidebar-content').addEventListener('wheel', function(e) {
+    e.preventDefault();
+    this.scrollTop += e.deltaY;
+});
+
+// Your existing JavaScript functions (keeping all your functionality)
+function exportData() {
+    alert('Export functionality would be implemented here.\nYou can export disaster data to CSV or PDF formats.');
+}
+
+function printReport() {
+    window.print();
+}
+
+function confirmDelete() {
+    return confirm('Are you sure you want to delete this disaster? This action cannot be undone.');
+}
+
+// Victim Management Functions
+function callVictim(phoneNumber) {
+    if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
+        if(confirm('Call ' + phoneNumber + '?')) {
+            window.location.href = 'tel:' + phoneNumber.replace(/\s+/g, '');
+        }
+    } else {
+        alert('No phone number available for this victim.');
+    }
+}
+
+function emailVictim(email) {
+    if(confirm('Send email to ' + email + '?')) {
+        window.location.href = 'mailto:' + email;
+    }
+}
+
+// Send WhatsApp message
+function sendWhatsApp(phoneNumber) {
+    if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
+        const message = "Hello, this is Melaka Disaster Assistance. We're checking on your situation.";
+        const whatsappUrl = `https://wa.me/${phoneNumber.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`;
+        window.open(whatsappUrl, '_blank');
+    } else {
+        alert('No phone number available for WhatsApp.');
+    }
+}
+
+// Edit Victim Information
+function editVictim(victimId) {
+    if(confirm('Edit victim #' + victimId + '?\nThis will open the edit form.')) {
+        // Redirect to edit page - you need to create edit_victim.php
+        window.open('edit_victim.php?id=' + victimId, '_blank');
+    }
+}
+
+// Generate PDF Report for a victim
+function generateReport(victimId) {
+    if(confirm('Generate PDF report for this victim?')) {
+        // Redirect to report generation - you need to create generate_report.php
+        window.open('generate_report.php?victim_id=' + victimId, '_blank');
+    }
+}
+
+// Generate reports for all victims in current disaster
+function generateAllReports(disasterId) {
+    if(confirm('Generate PDF reports for ALL victims in this disaster?\nThis may take a moment.')) {
+        // Redirect to batch report generation - you need to create generate_all_reports.php
+        window.location.href = 'generate_all_reports.php?disaster_id=' + disasterId;
+    }
+}
+
+// Export victims to CSV
+function exportVictims(disasterId, filterType) {
+    let filterText = '';
+    if (filterType === 'baby') filterText = 'with babies';
+    else if (filterType === 'elderly') filterText = 'elderly';
+    else if (filterType === 'disabled') filterText = 'disabled';
+    
+    const message = filterText ? 
+        `Export ${filterText} victim list for this disaster to CSV?` :
+        'Export victim list for this disaster to CSV?';
+    
+    if(confirm(message)) {
+        // Redirect to export script - you need to create export_victims.php
+        window.location.href = 'export_victims.php?disaster_id=' + disasterId + '&filter=' + filterType;
+    }
+}
+
+// View Victim Details in Modal with actual data
+function viewVictimDetails(victimId) {
+    // Show loading in modal
+    document.getElementById('victimModalContent').innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+            <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: var(--primary);"></i>
+            <p>Loading victim details...</p>
+        </div>
+    `;
+    
+    // Show modal
+    document.getElementById('victimModal').style.display = 'flex';
+    
+    // Fetch actual data from server
+    fetch(`?get_victim_details=1&victim_id=${victimId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('victimModalContent').innerHTML = `
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #ff9800;"></i>
+                        <p>Error: ${data.error}</p>
+                        <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; margin-top: 20px;">
+                            Close
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Format special needs
+            const specialNeeds = [];
+            if (data.has_baby) specialNeeds.push('👶 Has Baby');
+            if (data.has_elderly) specialNeeds.push('👵 Has Elderly');
+            if (data.has_disabled) specialNeeds.push('♿ Has Disabled');
+            
+            // Format registration date
+            const regDate = new Date(data.created_at);
+            const formattedDate = regDate.toLocaleDateString('en-MY', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            
+            // Format need date if exists
+            let needDate = 'Not recorded';
+            if (data.need_created) {
+                const needDateObj = new Date(data.need_created);
+                needDate = needDateObj.toLocaleDateString('en-MY', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                });
+            }
+            
+            // Update modal content with actual data
+            document.getElementById('victimModalContent').innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <h4 style="color: var(--primary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid var(--border);">
+                        ${data.full_name}
+                    </h4>
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+                        <span class="badge" style="background: #e3f2fd; color: var(--info);">
+                            ID: #${data.victim_id}
+                        </span>
+                        ${data.email_verified ? 
+                            '<span class="badge" style="background:#e8f5e9; color:#2e7d32;">Email Verified</span>' : 
+                            '<span class="badge" style="background:#fff3e0; color:#ff9800;">Email Not Verified</span>'
+                        }
+                    </div>
+                </div>
+                
+                <div class="victim-details-grid">
+                    <div class="detail-card">
+                        <h4><i class="fas fa-id-card"></i> Personal Information</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">IC Number</div>
+                            <div class="detail-value">${data.ic_number}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Email</div>
+                            <div class="detail-value">${data.email}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Phone Number</div>
+                            <div class="detail-value">${data.phone || 'Not provided'}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-card">
+                        <h4><i class="fas fa-map-marker-alt"></i> Location Details</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">District</div>
+                            <div class="detail-value">${data.district}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">City</div>
+                            <div class="detail-value">${data.city || 'Not specified'}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Postal Code</div>
+                            <div class="detail-value">${data.postal_code || 'Not specified'}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-card">
+                        <h4><i class="fas fa-home"></i> Address</h4>
+                        <div class="detail-row">
+                            <div class="detail-value" style="white-space: pre-wrap;">${data.address}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-card">
+                        <h4><i class="fas fa-users"></i> Family & Needs</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">Family Members</div>
+                            <div class="detail-value">${data.family_members} persons</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Special Needs</div>
+                            <div class="detail-value">
+                                ${specialNeeds.length > 0 ? 
+                                    specialNeeds.map(need => `<span style="display: block; margin-bottom: 3px;">${need}</span>`).join('') : 
+                                    'No special needs recorded'
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-card">
+                        <h4><i class="fas fa-clipboard-check"></i> Disaster Information</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">Assigned Disaster</div>
+                            <div class="detail-value">${data.disaster_name || 'Not assigned'}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Needs Status</div>
+                            <div class="detail-value">
+                                <span class="badge badge-${data.need_status ? data.need_status.toLowerCase() : 'pending'}">
+                                    ${data.need_status || 'Pending'}
+                                </span>
+                                ${data.priority ? `<br><small>Priority: ${data.priority}</small>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-card">
+                        <h4><i class="fas fa-calendar-alt"></i> Dates</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">Registration Date</div>
+                            <div class="detail-value">${formattedDate}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Needs Recorded</div>
+                            <div class="detail-value">${needDate}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                ${data.special_request ? `
+                    <div class="detail-card" style="margin-top: 20px;">
+                        <h4><i class="fas fa-exclamation-circle"></i> Special Request</h4>
+                        <div class="detail-row">
+                            <div class="detail-value" style="background: #fff3e0; border-left-color: #ff9800; padding: 15px;">
+                                <i class="fas fa-exclamation-circle" style="color: #ff9800; margin-right: 10px;"></i>
+                                ${data.special_request}
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+                
+                <div class="modal-actions">
+                    ${data.phone ? `
+                        <button class="action-btn-circle call" onclick="callVictim('${data.phone.replace(/'/g, "\\'")}')" title="Call Victim">
+                            <i class="fas fa-phone"></i>
+                        </button>
+                        <button class="action-btn-circle whatsapp" onclick="sendWhatsApp('${data.phone.replace(/'/g, "\\'")}')" title="Send WhatsApp">
+                            <i class="fab fa-whatsapp"></i>
+                        </button>
+                    ` : ''}
+                    <button class="action-btn-circle email" onclick="emailVictim('${data.email.replace(/'/g, "\\'")}')" title="Send Email">
+                        <i class="fas fa-envelope"></i>
+                    </button>
+                    <button class="action-btn-circle report" onclick="generateReport(${data.victim_id})" title="Generate Report">
+                        <i class="fas fa-file-pdf"></i>
+                    </button>
+                    <button class="action-btn-circle edit" onclick="editVictim(${data.victim_id})" title="Edit Victim">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                </div>
+                
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; padding: 10px 30px;">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            `;
+        })
+        .catch(error => {
+            console.error('Error fetching victim details:', error);
+            document.getElementById('victimModalContent').innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #666;">
+                    <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #f44336;"></i>
+                    <p>Error loading victim details. Please try again.</p>
+                    <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; margin-top: 20px;">
+                        Close
+                    </button>
+                </div>
+            `;
+        });
+}
+
+function closeModal() {
+    document.getElementById('victimModal').style.display = 'none';
+}
+
+// Auto-dismiss messages after 5 seconds
+setTimeout(() => {
+    const messages = document.querySelectorAll('.message');
+    messages.forEach(msg => {
+        msg.style.opacity = '0';
+        msg.style.transition = 'opacity 0.5s';
+        setTimeout(() => {
+            if (msg.parentNode) {
+                msg.style.display = 'none';
+            }
+        }, 500);
+    });
+}, 5000);
+
+// Smooth scrolling for navigation
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const targetId = this.getAttribute('href');
+        if(targetId !== '#') {
+            const targetElement = document.querySelector(targetId);
+            if(targetElement) {
+                targetElement.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        }
+    });
+});
+
+// Close modal when clicking outside
+document.getElementById('victimModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+        closeModal();
+    }
+});
+
+// Keyboard shortcut to close modal
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeModal();
+    }
+});
+
+// Prevent form resubmission on page refresh
+if (window.history.replaceState) {
+    window.history.replaceState(null, null, window.location.href);
+}
+</script>
 </body>
 </html>
