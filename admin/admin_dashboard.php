@@ -2,10 +2,162 @@
 include "../db.php";
 $message = "";
 
+// API Configuration for YOUR system
+$YOUR_API_URL = "http://10.147.17.154:8000/distribution_module/api_victim_approve.php";
+
+// Start timing for performance monitoring
+$start_time = microtime(true);
+
+// Function to get current approval status from YOUR API - BATCH VERSION
+function getStatusesFromYourAPI($victim_ids, $disaster_id) {
+    global $YOUR_API_URL;
+    
+    if (empty($victim_ids)) {
+        return [];
+    }
+    
+    try {
+        // Batch request - send all victim IDs at once
+        $victim_ids_str = implode(',', array_map('intval', $victim_ids));
+        $url = $YOUR_API_URL . "?victim_ids=$victim_ids_str&disaster_id=$disaster_id";
+        
+        // Use file_get_contents with stream context for timeout
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 5, // 5 second timeout
+                'ignore_errors' => true
+            ],
+            'ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+            ]
+        ]);
+        
+        $response = @file_get_contents($url, false, $context);
+        
+        if ($response !== false) {
+            $data = json_decode($response, true);
+            
+            // Return associative array with victim_id as key
+            $statuses = [];
+            if (is_array($data)) {
+                foreach ($data as $entry) {
+                    if (isset($entry['victim_id'])) {
+                        $statuses[$entry['victim_id']] = $entry['approval_status'] ?? 'Pending';
+                    }
+                }
+            }
+            return $statuses;
+        }
+    } catch (Exception $e) {
+        error_log("Error fetching statuses from YOUR API: " . $e->getMessage());
+    }
+    
+    return [];
+}
+
+// Function to sync status from YOUR API to local database - BATCH VERSION
+function syncStatusesFromYourAPI($conn, $api_statuses, $disaster_id) {
+    if (empty($api_statuses)) {
+        return 0;
+    }
+    
+    try {
+        // Prepare CASE statement for batch update
+        $cases = [];
+        $params = [];
+        
+        foreach ($api_statuses as $victim_id => $status) {
+            $cases[] = "WHEN victim_id = ? AND disaster_id = ? THEN ?";
+            $params[] = $victim_id;
+            $params[] = $disaster_id;
+            $params[] = $status;
+        }
+        
+        // Add disaster_id for WHERE clause
+        $params[] = $disaster_id;
+        
+        // Build the batch update query
+        $case_sql = implode(' ', $cases);
+        $sql = "UPDATE needs 
+                SET status = CASE 
+                    $case_sql
+                    ELSE status 
+                END
+                WHERE disaster_id = ?";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->execute($params);
+        
+        // Also update victim table in batch
+        $victim_cases = [];
+        $victim_params = [];
+        
+        foreach ($api_statuses as $victim_id => $status) {
+            $victim_cases[] = "WHEN victim_id = ? AND disaster_id = ? THEN ?";
+            $victim_params[] = $victim_id;
+            $victim_params[] = $disaster_id;
+            $victim_params[] = $status;
+        }
+        
+        $victim_case_sql = implode(' ', $victim_cases);
+        $victim_params[] = $disaster_id;
+        
+        $victim_sql = "UPDATE victim 
+                      SET status = CASE 
+                          $victim_case_sql
+                          ELSE status 
+                      END
+                      WHERE disaster_id = ?";
+        
+        $victim_stmt = $conn->prepare($victim_sql);
+        $victim_stmt->execute($victim_params);
+        
+        return count($api_statuses);
+        
+    } catch (Exception $e) {
+        error_log("Error syncing statuses from API: " . $e->getMessage());
+        return 0;
+    }
+}
+
 // Handle Clear Filter
 if (isset($_GET['clear'])) {
     $selected_disaster_id = null;
     $filter_type = null;
+}
+
+// Handle sync from YOUR API - SINGLE (keep for compatibility)
+if (isset($_GET['sync_from_api'])) {
+    $victim_id = $_GET['victim_id'] ?? null;
+    $disaster_id = $_GET['disaster_id'] ?? null;
+    
+    if ($victim_id && $disaster_id) {
+        // Use batch function even for single sync
+        $api_statuses = getStatusesFromYourAPI([$victim_id], $disaster_id);
+        if (!empty($api_statuses)) {
+            $updated = syncStatusesFromYourAPI($conn, $api_statuses, $disaster_id);
+            if ($updated > 0) {
+                $message = "✅ Status synced from API";
+            } else {
+                $message = "❌ Failed to sync status from API";
+            }
+        }
+    }
+}
+
+// Handle bulk sync from YOUR API
+if (isset($_POST['bulk_sync_from_api'])) {
+    $disaster_id = $_POST['disaster_id'] ?? null;
+    $victim_ids = $_POST['victim_ids'] ?? [];
+    
+    if ($disaster_id && !empty($victim_ids)) {
+        $api_statuses = getStatusesFromYourAPI($victim_ids, $disaster_id);
+        $synced = syncStatusesFromYourAPI($conn, $api_statuses, $disaster_id);
+        $failed = count($victim_ids) - $synced;
+        
+        $message = "✅ Bulk sync completed: $synced synced, $failed failed";
+    }
 }
 
 // -------------------------
@@ -73,24 +225,51 @@ if (isset($_POST['delete_disaster'])) {
     }
 }
 
-// Update Victim Status
+// Update Victim Status (local only - friend shouldn't send back to you)
 if (isset($_POST['update_victim'])) {
-    $stmt = $conn->prepare("
-        UPDATE needs 
-        SET status = :status, 
-            distribution_id = :distribution_id,
-            priority = :priority
-        WHERE victim_id = :victim_id 
-        AND disaster_id = :disaster_id
-    ");
-    $stmt->execute([
-        ':status' => $_POST['status'],
-        ':distribution_id' => $_POST['distribution_id'],
-        ':priority' => $_POST['priority'],
-        ':victim_id' => $_POST['victim_id'],
-        ':disaster_id' => $_POST['disaster_id']
-    ]);
-    $message = "✅ Victim status updated!";
+    $victim_id = $_POST['victim_id'];
+    $disaster_id = $_POST['disaster_id'];
+    $status = $_POST['status'];
+    $distribution_id = $_POST['distribution_id'];
+    $priority = $_POST['priority'];
+    
+    try {
+        // Update local database only
+        $stmt = $conn->prepare("
+            UPDATE needs 
+            SET status = :status, 
+                distribution_id = :distribution_id,
+                priority = :priority
+            WHERE victim_id = :victim_id 
+            AND disaster_id = :disaster_id
+        ");
+        $stmt->execute([
+            ':status' => $status,
+            ':distribution_id' => $distribution_id,
+            ':priority' => $priority,
+            ':victim_id' => $victim_id,
+            ':disaster_id' => $disaster_id
+        ]);
+        
+        // Also update victim table status if exists
+        $update_victim_stmt = $conn->prepare("
+            UPDATE victim 
+            SET status = :status 
+            WHERE victim_id = :victim_id 
+            AND disaster_id = :disaster_id
+        ");
+        $update_victim_stmt->execute([
+            ':status' => $status,
+            ':victim_id' => $victim_id,
+            ':disaster_id' => $disaster_id
+        ]);
+        
+        $message = "✅ Victim status updated locally!";
+        
+    } catch (Exception $e) {
+        $message = "❌ Error updating victim: " . $e->getMessage();
+        error_log("Database error: " . $e->getMessage());
+    }
 }
 
 // Handle Emergency Alert
@@ -120,6 +299,7 @@ function getVictimDetails($conn, $victim_id) {
         LEFT JOIN disaster d ON v.disaster_id = d.disaster_id
         LEFT JOIN needs n ON v.victim_id = n.victim_id AND v.disaster_id = n.disaster_id
         WHERE v.victim_id = ?
+        LIMIT 1
     ");
     $stmt->execute([$victim_id]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
@@ -160,11 +340,15 @@ $disaster_details = null;
 
 if ($selected_disaster_id) {
     // Get disaster details
-    $stmt = $conn->prepare("SELECT * FROM disaster WHERE disaster_id = ?");
+    $stmt = $conn->prepare("SELECT * FROM disaster WHERE disaster_id = ? LIMIT 1");
     $stmt->execute([$selected_disaster_id]);
     $disaster_details = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // Build query based on filter
+    // Build query based on filter with PAGINATION
+    $page = $_GET['page'] ?? 1;
+    $limit = 50; // Show 50 victims per page
+    $offset = ($page - 1) * $limit;
+    
     $sql = "
         SELECT v.*, 
                n.status as need_status, 
@@ -192,15 +376,47 @@ if ($selected_disaster_id) {
                  WHEN n.priority = 'Medium' THEN 2
                  WHEN n.priority = 'Low' THEN 3
                  ELSE 4 END,
-            v.created_at DESC";
+            v.created_at DESC
+            LIMIT ? OFFSET ?";
+    
+    $params[] = $limit;
+    $params[] = $offset;
     
     $stmt = $conn->prepare($sql);
     $stmt->execute($params);
     $victims = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // BATCH API CALL - Get all statuses at once instead of one-by-one
+    if (!empty($victims)) {
+        $victim_ids = array_column($victims, 'victim_id');
+        $api_statuses = getStatusesFromYourAPI($victim_ids, $selected_disaster_id);
+        
+        // Create a map for quick lookup
+        $status_map = [];
+        foreach ($api_statuses as $victim_id => $status) {
+            $status_map[$victim_id] = $status;
+        }
+        
+        // Batch update local database if we got statuses from API
+        if (!empty($api_statuses)) {
+            $updated_count = syncStatusesFromYourAPI($conn, $api_statuses, $selected_disaster_id);
+            
+            // Also update the in-memory array for display
+            foreach ($victims as &$victim) {
+                if (isset($status_map[$victim['victim_id']])) {
+                    $victim['api_status'] = $status_map[$victim['victim_id']];
+                    $victim['need_status'] = $status_map[$victim['victim_id']];
+                } else {
+                    $victim['api_status'] = null;
+                }
+            }
+            unset($victim); // Break reference
+        }
+    }
 }
 
-// Get pending needs count
-$pending_needs = $conn->query("SELECT COUNT(*) as count FROM needs WHERE status = 'Pending'")->fetch(PDO::FETCH_ASSOC);
+// Get pending needs count - with LIMIT for performance
+$pending_needs = $conn->query("SELECT COUNT(*) as count FROM needs WHERE status = 'Pending' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 
 // Get special needs counts for the selected disaster
 $special_needs_counts = [
@@ -209,7 +425,8 @@ $special_needs_counts = [
     'elderly' => 0,
     'disabled' => 0,
     'pending' => 0,
-    'approved' => 0
+    'approved' => 0,
+    'rejected' => 0
 ];
 
 if ($selected_disaster_id) {
@@ -220,10 +437,13 @@ if ($selected_disaster_id) {
             SUM(CASE WHEN has_elderly = true THEN 1 ELSE 0 END) as elderly_count,
             SUM(CASE WHEN has_disabled = true THEN 1 ELSE 0 END) as disabled_count,
             SUM(CASE WHEN n.status = 'Pending' THEN 1 ELSE 0 END) as pending_count,
-            SUM(CASE WHEN n.status = 'Approved' THEN 1 ELSE 0 END) as approved_count
+            SUM(CASE WHEN n.status = 'Approved' THEN 1 ELSE 0 END) as approved_count,
+            SUM(CASE WHEN n.status = 'Rejected' THEN 1 ELSE 0 END) as rejected_count
         FROM victim v
         LEFT JOIN needs n ON v.victim_id = n.victim_id AND v.disaster_id = n.disaster_id
         WHERE v.disaster_id = ?
+        GROUP BY v.disaster_id
+        LIMIT 1
     ");
     $counts_query->execute([$selected_disaster_id]);
     $counts = $counts_query->fetch(PDO::FETCH_ASSOC);
@@ -235,9 +455,17 @@ if ($selected_disaster_id) {
             'elderly' => $counts['elderly_count'] ?? 0,
             'disabled' => $counts['disabled_count'] ?? 0,
             'pending' => $counts['pending_count'] ?? 0,
-            'approved' => $counts['approved_count'] ?? 0
+            'approved' => $counts['approved_count'] ?? 0,
+            'rejected' => $counts['rejected_count'] ?? 0
         ];
     }
+}
+
+// Log performance
+$end_time = microtime(true);
+$load_time = round(($end_time - $start_time), 3);
+if ($load_time > 1) {
+    error_log("Page loaded in {$load_time}s - Disaster: {$selected_disaster_id}, Victims: " . count($victims));
 }
 ?>
 
@@ -250,6 +478,7 @@ if ($selected_disaster_id) {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
+/* ALL YOUR EXISTING CSS STYLES REMAIN EXACTLY THE SAME */
 :root {
     --primary: #1a237e;
     --primary-dark: #283593;
@@ -964,6 +1193,7 @@ textarea.form-control {
 .stat-card.disabled { border-left-color: #2e7d32; }
 .stat-card.pending { border-left-color: #ff9800; }
 .stat-card.approved { border-left-color: #4CAF50; }
+.stat-card.rejected { border-left-color: #f44336; }
 
 .stat-card .stat-number {
     font-size: 32px;
@@ -976,6 +1206,7 @@ textarea.form-control {
 .stat-card.disabled .stat-number { color: #2e7d32; }
 .stat-card.pending .stat-number { color: #ff9800; }
 .stat-card.approved .stat-number { color: #4CAF50; }
+.stat-card.rejected .stat-number { color: #f44336; }
 
 .stat-card .stat-label {
     font-size: 14px;
@@ -1144,6 +1375,68 @@ textarea.form-control {
 .action-btn-circle.report { background: #fff3e0; color: #ff9800; }
 .action-btn-circle.edit { background: #e0f2f1; color: #00796b; }
 
+/* API Status Indicator */
+.api-status-indicator {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 5px;
+}
+
+.api-synced { background: #d4edda; color: #155724; }
+.api-pending { background: #fff3cd; color: #856404; }
+.api-unsynced { background: #f8d7da; color: #721c24; }
+
+/* Sync Button */
+.sync-btn {
+    background: #e3f2fd;
+    color: #2196F3;
+    border: 1px solid #bbdefb;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.sync-btn:hover {
+    background: #bbdefb;
+}
+
+/* Bulk Sync Bar */
+.bulk-sync-bar {
+    background: #fff3cd;
+    border: 2px solid #ffc107;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    display: none;
+}
+
+.bulk-sync-bar.active {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* API Info Card */
+.api-info-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+.api-info-card h4 {
+    color: white;
+    margin-bottom: 10px;
+}
+
+.api-info-card small {
+    opacity: 0.9;
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
     .main-content {
@@ -1200,6 +1493,11 @@ textarea.form-control {
     .search-box {
         width: 200px;
     }
+    
+    .bulk-sync-bar {
+        flex-direction: column;
+        gap: 10px;
+    }
 }
 
 @media (max-width: 576px) {
@@ -1223,10 +1521,29 @@ textarea.form-control {
         grid-template-columns: 1fr;
     }
 }
+
+/* Add a performance indicator */
+.load-time {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    z-index: 9999;
+    display: none; /* Hidden by default, can enable for debugging */
+}
 </style>
 </head>
 <body>
-    <!-- System Header (From Admin Dashboard) -->
+    <!-- Performance indicator (optional, for debugging) -->
+    <div class="load-time" id="loadTime">
+        Loaded in <?= $load_time ?>s
+    </div>
+
+    <!-- System Header -->
     <header class="system-header">
         <div class="header-container">
             <div class="logo-section">
@@ -1266,7 +1583,7 @@ textarea.form-control {
         </div>
     </header>
 
-    <!-- Sidebar Navigation (From Admin Dashboard) -->
+    <!-- Sidebar Navigation -->
     <nav class="sidebar" id="sidebar">
         <div class="sidebar-content">
             <ul class="nav-menu">
@@ -1334,6 +1651,22 @@ textarea.form-control {
         </div>
         <?php endif; ?>
 
+        <!-- API Info Card -->
+        <div class="api-info-card">
+            <h4><i class="fas fa-sync-alt"></i> API Integration Status</h4>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <p>Connected to: <strong>http://10.147.17.154:8000/distribution_module/api_victim_approve.php</strong></p>
+                    <small>Status updates are automatically fetched from the approval system</small>
+                </div>
+                <?php if($selected_disaster_id): ?>
+                <button onclick="syncAllFromAPI()" class="btn btn-light">
+                    <i class="fas fa-sync-alt"></i> Sync All Now
+                </button>
+                <?php endif; ?>
+            </div>
+        </div>
+
         <!-- Quick Actions -->
         <div class="quick-actions">
             <button class="action-btn" onclick="document.getElementById('addDisaster').scrollIntoView({behavior: 'smooth'})">
@@ -1344,14 +1677,12 @@ textarea.form-control {
                 <i class="fas fa-bullhorn"></i>
                 <span>Send Emergency Alert</span>
             </button>
-            <button class="action-btn" onclick="printReport()">
-                <i class="fas fa-print"></i>
-                <span>Print Report</span>
+            <?php if($selected_disaster_id): ?>
+            <button class="action-btn" onclick="syncAllFromAPI()" style="background: #fff3cd;">
+                <i class="fas fa-sync-alt"></i>
+                <span>Sync from Approval System</span>
             </button>
-            <button class="action-btn" onclick="exportData()">
-                <i class="fas fa-download"></i>
-                <span>Export Data</span>
-            </button>
+            <?php endif; ?>
         </div>
 
         <!-- Emergency Alert Section -->
@@ -1522,6 +1853,9 @@ textarea.form-control {
                         <a href="admin_dashboard.php" class="btn btn-sm" style="background: #f5f5f5; margin-left: 10px;">
                             <i class="fas fa-times"></i> Clear Filter
                         </a>
+                        <button onclick="syncAllFromAPI()" class="btn btn-sm" style="background: #e3f2fd; margin-left: 10px;">
+                            <i class="fas fa-sync-alt"></i> Sync All
+                        </button>
                     </div>
                 </div>
                 
@@ -1551,6 +1885,30 @@ textarea.form-control {
                         <div class="stat-number"><?= $special_needs_counts['approved'] ?></div>
                         <div class="stat-label">Approved</div>
                     </div>
+                    <div class="stat-card rejected">
+                        <div class="stat-number"><?= $special_needs_counts['rejected'] ?></div>
+                        <div class="stat-label">Rejected</div>
+                    </div>
+                </div>
+                
+                <!-- Bulk Sync Bar -->
+                <div class="bulk-sync-bar" id="bulkSyncBar">
+                    <div>
+                        <strong><i class="fas fa-sync-alt"></i> 
+                        <span id="selectedSyncCount">0</span> victim(s) selected for sync</strong>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <form method="POST" id="bulkSyncForm">
+                            <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
+                            <button type="submit" name="bulk_sync_from_api" class="btn btn-warning btn-sm"
+                                    onclick="return confirm('Sync selected victims from approval system?')">
+                                <i class="fas fa-sync-alt"></i> Sync Selected
+                            </button>
+                        </form>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="clearSyncSelection()">
+                            <i class="fas fa-times"></i> Clear
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- Filter Tabs -->
@@ -1572,6 +1930,31 @@ textarea.form-control {
                         <i class="fas fa-universal-access"></i> Disabled (<?= $special_needs_counts['disabled'] ?>)
                     </a>
                 </div>
+                
+                <!-- Pagination Controls -->
+                <?php if($special_needs_counts['total'] > 50): ?>
+                <div style="display: flex; justify-content: center; margin-bottom: 20px; gap: 10px;">
+                    <?php 
+                    $total_pages = ceil($special_needs_counts['total'] / 50);
+                    $current_page = $_GET['page'] ?? 1;
+                    
+                    if ($current_page > 1): ?>
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>&filter=<?= $filter_type ?>&page=<?= $current_page - 1 ?>" class="btn btn-sm btn-primary">
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </a>
+                    <?php endif; ?>
+                    
+                    <span style="padding: 8px 16px; background: #f5f5f5; border-radius: 5px;">
+                        Page <?= $current_page ?> of <?= $total_pages ?>
+                    </span>
+                    
+                    <?php if ($current_page < $total_pages): ?>
+                    <a href="?disaster_id=<?= $selected_disaster_id ?>&filter=<?= $filter_type ?>&page=<?= $current_page + 1 ?>" class="btn btn-sm btn-primary">
+                        Next <i class="fas fa-chevron-right"></i>
+                    </a>
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
                 
                 <?php if(empty($victims)): ?>
                     <div style="text-align: center; padding: 40px; color: #666;">
@@ -1596,9 +1979,12 @@ textarea.form-control {
                 <?php else: ?>
                     <!-- Victim Table -->
                     <div class="table-responsive">
-                        <table>
+                        <table id="victimsTable">
                             <thead>
                                 <tr>
+                                    <th style="width: 40px;">
+                                        <input type="checkbox" id="selectAllSync">
+                                    </th>
                                     <th>#</th>
                                     <th>Victim Details</th>
                                     <th>Contact Info</th>
@@ -1609,13 +1995,28 @@ textarea.form-control {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach($victims as $index => $v): ?>
+                                <?php 
+                                $start_number = (($_GET['page'] ?? 1) - 1) * 50 + 1;
+                                foreach($victims as $index => $v): 
+                                ?>
                                 <tr>
-                                    <td><?= $index + 1 ?></td>
+                                    <td>
+                                        <input type="checkbox" name="victim_ids[]" 
+                                               value="<?= $v['victim_id'] ?>" 
+                                               class="sync-checkbox">
+                                    </td>
+                                    <td><?= $start_number + $index ?></td>
                                     <td>
                                         <strong><?= htmlspecialchars($v['full_name']) ?></strong><br>
                                         <small style="color: #666;">IC: <?= htmlspecialchars($v['ic_number']) ?></small><br>
                                         <small style="color: #888;"><?= htmlspecialchars($v['city'] ?? 'Unknown City') ?></small>
+                                        <div style="margin-top: 3px;">
+                                            <button type="button" class="sync-btn" 
+                                                    onclick="syncSingleFromAPI(<?= $v['victim_id'] ?>, <?= $selected_disaster_id ?>)"
+                                                    title="Sync from approval system">
+                                                <i class="fas fa-sync-alt"></i> Sync
+                                            </button>
+                                        </div>
                                     </td>
                                     <td>
                                         <div><i class="fas fa-envelope" style="color: #666; width: 16px;"></i> 
@@ -1653,39 +2054,100 @@ textarea.form-control {
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <form method="POST" style="margin-bottom: 5px;">
+                                        <form method="POST" class="status-form" style="margin-bottom: 5px;">
                                             <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
                                             <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
-                                            <select name="status" class="form-control" style="width: 100%; padding: 6px; margin-bottom: 5px;" onchange="this.form.submit()">
-                                                <option value="Pending" <?= ($v['need_status'] ?? '')=='Pending'?'selected':'' ?>>Pending</option>
-                                                <option value="Approved" <?= ($v['need_status'] ?? '')=='Approved'?'selected':'' ?>>Approved</option>
-                                                <option value="Rejected" <?= ($v['need_status'] ?? '')=='Rejected'?'selected':'' ?>>Rejected</option>
-                                                <option value="Assisted" <?= ($v['need_status'] ?? '')=='Assisted'?'selected':'' ?>>Assisted</option>
-                                            </select>
-                                            <input type="hidden" name="distribution_id" value="<?= $v['distribution_id'] ?? 0 ?>">
-                                            <select name="priority" class="form-control" style="width: 100%; padding: 6px;" onchange="this.form.submit()">
-                                                <option value="Low" <?= ($v['need_priority'] ?? '')=='Low'?'selected':'' ?>>Low Priority</option>
-                                                <option value="Medium" <?= ($v['need_priority'] ?? '')=='Medium'?'selected':'' ?>>Medium Priority</option>
-                                                <option value="High" <?= ($v['need_priority'] ?? '')=='High'?'selected':'' ?>>High Priority</option>
-                                            </select>
-                                            <input type="hidden" name="update_victim" value="1">
-                                        </form>
-                                        
-                                        <!-- Quick Status Buttons -->
-                                        <div style="display: flex; gap: 5px; margin-top: 5px;">
-                                            <form method="POST" style="display: inline;">
-                                                <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
-                                                <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
-                                                <input type="hidden" name="status" value="Assisted">
-                                                <input type="hidden" name="distribution_id" value="<?= $v['distribution_id'] ?? 0 ?>">
-                                                <input type="hidden" name="priority" value="<?= $v['need_priority'] ?? 'Medium' ?>">
-                                                <input type="hidden" name="update_victim" value="1">
-                                                <button type="submit" class="btn btn-xs" style="background: #e8f5e9; color: #2e7d32; padding: 3px 8px;">
-                                                    <i class="fas fa-check"></i> Mark Assisted
-                                                </button>
-                                            </form>
-                                        </div>
-                                    </td>
+                                            
+                                            <td>
+                                                <form method="POST" class="status-form" style="margin-bottom: 5px;">
+                                                    <input type="hidden" name="victim_id" value="<?= $v['victim_id'] ?>">
+                                                    <input type="hidden" name="disaster_id" value="<?= $selected_disaster_id ?>">
+                                                    
+                                                    <!-- Status Section -->
+                                                    <div style="margin-bottom: 15px;">
+                                                        <div style="font-weight: 600; color: #666; margin-bottom: 5px; font-size: 14px;">
+                                                            Status:
+                                                        </div>
+                                                        
+                                                        <div style="
+                                                            background: white;
+                                                            border: 2px solid #e0e0e0;
+                                                            border-radius: 10px;
+                                                            padding: 10px 15px;
+                                                            font-size: 14px;
+                                                            color: #333;
+                                                            height: 46px;
+                                                            display: flex;
+                                                            align-items: center;
+                                                            justify-content: space-between;
+                                                            font-family: inherit;
+                                                        ">
+                                                            <span style="color: #333; font-weight: normal;">
+                                                                <?= htmlspecialchars($v['need_status'] ?? 'Pending') ?>
+                                                            </span>
+                                                            
+                                                            <?php if(isset($v['api_status'])): ?>
+                                                            <span style="font-size: 11px; color: #666;">
+                                                                <i class="fas fa-sync-alt"></i> API
+                                                            </span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <!-- Priority Level Section -->
+                                                    <div style="margin-bottom: 15px;">
+                                                        <div style="font-weight: 600; color: #666; margin-bottom: 5px; font-size: 14px;">
+                                                            Priority Level:
+                                                        </div>
+                                                        
+                                                        <div style="
+                                                            background: white;
+                                                            border: 2px solid #e0e0e0;
+                                                            border-radius: 10px;
+                                                            padding: 10px 15px;
+                                                            font-size: 14px;
+                                                            color: #333;
+                                                            height: 46px;
+                                                            display: flex;
+                                                            align-items: center;
+                                                            justify-content: space-between;
+                                                            font-family: inherit;
+                                                        ">
+                                                            <span style="color: #333; font-weight: normal;">
+                                                                <?= htmlspecialchars($v['need_priority'] ?? 'Medium') ?>
+                                                            </span>
+                                                            
+                                                            <!-- Priority badge color based on level -->
+                                                            <span style="
+                                                                font-size: 11px;
+                                                                padding: 3px 8px;
+                                                                border-radius: 4px;
+                                                                background: <?= 
+                                                                    ($v['need_priority'] ?? 'Medium') == 'High' ? '#ffebee' : 
+                                                                    (($v['need_priority'] ?? 'Medium') == 'Medium' ? '#fff3e0' : '#e8f5e9')
+                                                                ?>;
+                                                                color: <?= 
+                                                                    ($v['need_priority'] ?? 'Medium') == 'High' ? '#f44336' : 
+                                                                    (($v['need_priority'] ?? 'Medium') == 'Medium' ? '#ff9800' : '#4CAF50')
+                                                                ?>;
+                                                                font-weight: 500;
+                                                            ">
+                                                                <?= 
+                                                                    ($v['need_priority'] ?? 'Medium') == 'High' ? '⚡ High' : 
+                                                                    (($v['need_priority'] ?? 'Medium') == 'Medium' ? '⚖ Medium' : '📈 Low')
+                                                                ?>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <!-- Quick Status Buttons -->
+                                                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #eee;">
+                                                        <small style="color: #666;">
+                                                            <i class="fas fa-info-circle"></i> Status is synced from approval system
+                                                        </small>
+                                                    </div>
+                                                </form>
+                                            </td>
                                     <td>
                                         <?= date('d M Y', strtotime($v['created_at'])) ?><br>
                                         <small style="color: #888;">
@@ -1712,25 +2174,11 @@ textarea.form-control {
                                             
                                             <!-- Main Action Buttons -->
                                             <div style="display: flex; flex-direction: column; gap: 3px;">
-                                                <!-- Edit Button -->
-                                                <button class="btn btn-xs" style="background: #fff3e0; color: #ff9800;"
-                                                        onclick="editVictim(<?= $v['victim_id'] ?>)"
-                                                        title="Edit Victim Information">
-                                                    <i class="fas fa-edit"></i> Edit
-                                                </button>
-                                                
                                                 <!-- View Details Button -->
                                                 <button class="btn btn-xs" style="background: #e3f2fd; color: #2196F3;"
                                                         onclick="viewVictimDetails(<?= $v['victim_id'] ?>)"
                                                         title="View Full Details">
                                                     <i class="fas fa-eye"></i> Details
-                                                </button>
-                                                
-                                                <!-- Generate Report Button -->
-                                                <button class="btn btn-xs" style="background: #e8f5e9; color: #4CAF50;"
-                                                        onclick="generateReport(<?= $v['victim_id'] ?>)"
-                                                        title="Generate Victim Report">
-                                                    <i class="fas fa-file-pdf"></i> Report
                                                 </button>
                                             </div>
                                         </div>
@@ -1749,8 +2197,8 @@ textarea.form-control {
                         <button onclick="window.print()" class="btn" style="background: #f5f5f5; margin-left: 10px;">
                             <i class="fas fa-print"></i> Print This List
                         </button>
-                        <button onclick="generateAllReports(<?= $selected_disaster_id ?>)" class="btn" style="background: #e8f5e9; color: #4CAF50; margin-left: 10px;">
-                            <i class="fas fa-file-alt"></i> Generate All Reports
+                        <button onclick="syncAllFromAPI()" class="btn" style="background: #e3f2fd; margin-left: 10px;">
+                            <i class="fas fa-sync-alt"></i> Sync All Statuses
                         </button>
                     </div>
                 <?php endif; ?>
@@ -1767,404 +2215,573 @@ textarea.form-control {
             <?php endif; ?>
         </div>
 
-    </div>
-</div>
+    </main>
 
-<!-- Victim Details Modal -->
-<div id="victimModal" class="modal-overlay">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-user-circle"></i> Victim Details</h3>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
+    <!-- Victim Details Modal -->
+    <div id="victimModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-user-circle"></i> Victim Details</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="victimModalContent">
+                <!-- Content will be loaded here by JavaScript -->
+            </div>
         </div>
-        <div class="modal-body" id="victimModalContent">
-            <!-- Content will be loaded here by JavaScript -->
-        </div>
     </div>
-</div>
 
-<script>
-// Mobile Toggle for Sidebar
-document.getElementById('mobileToggle').addEventListener('click', function() {
-    document.getElementById('sidebar').classList.toggle('active');
-});
+    <script>
+    // Mobile Toggle for Sidebar
+    document.getElementById('mobileToggle').addEventListener('click', function() {
+        document.getElementById('sidebar').classList.toggle('active');
+    });
 
-// Check screen size on load and resize
-function checkScreenSize() {
-    const sidebar = document.getElementById('sidebar');
-    const mainContent = document.getElementById('mainContent');
-    const mobileToggle = document.getElementById('mobileToggle');
-    
-    if (window.innerWidth <= 1200) {
-        sidebar.classList.add('sidebar-collapsed');
-        mainContent.classList.add('main-content-expanded');
-        mobileToggle.style.display = 'block';
-    } else {
-        sidebar.classList.remove('sidebar-collapsed', 'active');
-        mainContent.classList.remove('main-content-expanded');
-        mobileToggle.style.display = 'none';
-    }
-}
-
-// Check on load and resize
-window.addEventListener('load', checkScreenSize);
-window.addEventListener('resize', checkScreenSize);
-
-// Smooth scroll for sidebar
-document.querySelector('.sidebar-content').addEventListener('wheel', function(e) {
-    e.preventDefault();
-    this.scrollTop += e.deltaY;
-});
-
-// Your existing JavaScript functions (keeping all your functionality)
-function exportData() {
-    alert('Export functionality would be implemented here.\nYou can export disaster data to CSV or PDF formats.');
-}
-
-function printReport() {
-    window.print();
-}
-
-function confirmDelete() {
-    return confirm('Are you sure you want to delete this disaster? This action cannot be undone.');
-}
-
-// Victim Management Functions
-function callVictim(phoneNumber) {
-    if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
-        if(confirm('Call ' + phoneNumber + '?')) {
-            window.location.href = 'tel:' + phoneNumber.replace(/\s+/g, '');
+    // Check screen size on load and resize
+    function checkScreenSize() {
+        const sidebar = document.getElementById('sidebar');
+        const mainContent = document.getElementById('mainContent');
+        const mobileToggle = document.getElementById('mobileToggle');
+        
+        if (window.innerWidth <= 1200) {
+            sidebar.classList.add('sidebar-collapsed');
+            mainContent.classList.add('main-content-expanded');
+            mobileToggle.style.display = 'block';
+        } else {
+            sidebar.classList.remove('sidebar-collapsed', 'active');
+            mainContent.classList.remove('main-content-expanded');
+            mobileToggle.style.display = 'none';
         }
-    } else {
-        alert('No phone number available for this victim.');
     }
-}
 
-function emailVictim(email) {
-    if(confirm('Send email to ' + email + '?')) {
-        window.location.href = 'mailto:' + email;
+    // Check on load and resize
+    window.addEventListener('load', checkScreenSize);
+    window.addEventListener('resize', checkScreenSize);
+
+    // Smooth scroll for sidebar
+    document.querySelector('.sidebar-content').addEventListener('wheel', function(e) {
+        e.preventDefault();
+        this.scrollTop += e.deltaY;
+    });
+
+    // Your existing JavaScript functions
+    function exportData() {
+        alert('Export functionality would be implemented here.\nYou can export disaster data to CSV or PDF formats.');
     }
-}
 
-// Send WhatsApp message
-function sendWhatsApp(phoneNumber) {
-    if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
-        const message = "Hello, this is Melaka Disaster Assistance. We're checking on your situation.";
-        const whatsappUrl = `https://wa.me/${phoneNumber.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`;
-        window.open(whatsappUrl, '_blank');
-    } else {
-        alert('No phone number available for WhatsApp.');
+    function printReport() {
+        window.print();
     }
-}
 
-// Edit Victim Information
-function editVictim(victimId) {
-    if(confirm('Edit victim #' + victimId + '?\nThis will open the edit form.')) {
-        // Redirect to edit page - you need to create edit_victim.php
-        window.open('edit_victim.php?id=' + victimId, '_blank');
+    function confirmDelete() {
+        return confirm('Are you sure you want to delete this disaster? This action cannot be undone.');
     }
-}
 
-// Generate PDF Report for a victim
-function generateReport(victimId) {
-    if(confirm('Generate PDF report for this victim?')) {
-        // Redirect to report generation - you need to create generate_report.php
-        window.open('generate_report.php?victim_id=' + victimId, '_blank');
+    // Victim Management Functions
+    function callVictim(phoneNumber) {
+        if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
+            if(confirm('Call ' + phoneNumber + '?')) {
+                window.location.href = 'tel:' + phoneNumber.replace(/\s+/g, '');
+            }
+        } else {
+            alert('No phone number available for this victim.');
+        }
     }
-}
 
-// Generate reports for all victims in current disaster
-function generateAllReports(disasterId) {
-    if(confirm('Generate PDF reports for ALL victims in this disaster?\nThis may take a moment.')) {
-        // Redirect to batch report generation - you need to create generate_all_reports.php
-        window.location.href = 'generate_all_reports.php?disaster_id=' + disasterId;
+    function emailVictim(email) {
+        if(confirm('Send email to ' + email + '?')) {
+            window.location.href = 'mailto:' + email;
+        }
     }
-}
 
-// Export victims to CSV
-function exportVictims(disasterId, filterType) {
-    let filterText = '';
-    if (filterType === 'baby') filterText = 'with babies';
-    else if (filterType === 'elderly') filterText = 'elderly';
-    else if (filterType === 'disabled') filterText = 'disabled';
-    
-    const message = filterText ? 
-        `Export ${filterText} victim list for this disaster to CSV?` :
-        'Export victim list for this disaster to CSV?';
-    
-    if(confirm(message)) {
-        // Redirect to export script - you need to create export_victims.php
-        window.location.href = 'export_victims.php?disaster_id=' + disasterId + '&filter=' + filterType;
+    // Send WhatsApp message
+    function sendWhatsApp(phoneNumber) {
+        if(phoneNumber && phoneNumber !== 'Not provided' && phoneNumber !== '') {
+            const message = "Hello, this is Melaka Disaster Assistance. We're checking on your situation.";
+            const whatsappUrl = `https://wa.me/${phoneNumber.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`;
+            window.open(whatsappUrl, '_blank');
+        } else {
+            alert('No phone number available for WhatsApp.');
+        }
     }
-}
 
-// View Victim Details in Modal with actual data
-function viewVictimDetails(victimId) {
-    // Show loading in modal
-    document.getElementById('victimModalContent').innerHTML = `
-        <div style="text-align: center; padding: 40px;">
-            <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: var(--primary);"></i>
-            <p>Loading victim details...</p>
-        </div>
-    `;
-    
-    // Show modal
-    document.getElementById('victimModal').style.display = 'flex';
-    
-    // Fetch actual data from server
-    fetch(`?get_victim_details=1&victim_id=${victimId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
+    // Edit Victim Information
+    function editVictim(victimId) {
+        if(confirm('Edit victim #' + victimId + '?\nThis will open the edit form.')) {
+            window.open('edit_victim.php?id=' + victimId, '_blank');
+        }
+    }
+
+    // Generate PDF Report for a victim
+    function generateReport(victimId) {
+        if(confirm('Generate PDF report for this victim?')) {
+            window.open('generate_report.php?victim_id=' + victimId, '_blank');
+        }
+    }
+
+    // Generate reports for all victims in current disaster
+    function generateAllReports(disasterId) {
+        if(confirm('Generate PDF reports for ALL victims in this disaster?\nThis may take a moment.')) {
+            window.location.href = 'generate_all_reports.php?disaster_id=' + disasterId;
+        }
+    }
+
+    // Export victims to CSV
+    function exportVictims(disasterId, filterType) {
+        let filterText = '';
+        if (filterType === 'baby') filterText = 'with babies';
+        else if (filterType === 'elderly') filterText = 'elderly';
+        else if (filterType === 'disabled') filterText = 'disabled';
+        
+        const message = filterText ? 
+            `Export ${filterText} victim list for this disaster to CSV?` :
+            'Export victim list for this disaster to CSV?';
+        
+        if(confirm(message)) {
+            window.location.href = 'export_victims.php?disaster_id=' + disasterId + '&filter=' + filterType;
+        }
+    }
+
+    // View Victim Details in Modal with actual data
+    function viewVictimDetails(victimId) {
+        // Show loading in modal
+        document.getElementById('victimModalContent').innerHTML = `
+            <div style="text-align: center; padding: 40px;">
+                <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: var(--primary);"></i>
+                <p>Loading victim details...</p>
+            </div>
+        `;
+        
+        // Show modal
+        document.getElementById('victimModal').style.display = 'flex';
+        
+        // Update modal header to show ID
+        const modalHeader = document.querySelector('#victimModal .modal-header h3');
+        if (modalHeader) {
+            modalHeader.innerHTML = `<i class="fas fa-user-circle"></i> Victim Details #${victimId}`;
+        }
+        
+        // Fetch actual data from server
+        fetch(`?get_victim_details=1&victim_id=${victimId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('victimModalContent').innerHTML = `
+                        <div style="text-align: center; padding: 40px; color: #666;">
+                            <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #ff9800;"></i>
+                            <p>Error: ${data.error}</p>
+                            <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; margin-top: 20px;">
+                                Close
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // Format special needs
+                const specialNeeds = [];
+                if (data.has_baby) specialNeeds.push('👶 Has Baby');
+                if (data.has_elderly) specialNeeds.push('👵 Has Elderly');
+                if (data.has_disabled) specialNeeds.push('♿ Has Disabled');
+                
+                // Format registration date
+                const regDate = new Date(data.created_at);
+                const formattedDate = regDate.toLocaleDateString('en-MY', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                
+                // Format need date if exists
+                let needDate = 'Not recorded';
+                if (data.need_created) {
+                    const needDateObj = new Date(data.need_created);
+                    needDate = needDateObj.toLocaleDateString('en-MY', {
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric'
+                    });
+                }
+                
+                // Update modal content with actual data
+                document.getElementById('victimModalContent').innerHTML = `
+                    <div style="margin-bottom: 20px;">
+                        <h4 style="color: var(--primary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid var(--border);">
+                            ${data.full_name}
+                        </h4>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+                            <span class="badge" style="background: #e3f2fd; color: var(--info);">
+                                ID: #${data.victim_id}
+                            </span>
+                            ${data.email_verified ? 
+                                '<span class="badge" style="background:#e8f5e9; color:#2e7d32;">Email Verified</span>' : 
+                                '<span class="badge" style="background:#fff3e0; color:#ff9800;">Email Not Verified</span>'
+                            }
+                        </div>
+                    </div>
+                    
+                    <div class="victim-details-grid">
+                        <div class="detail-card">
+                            <h4><i class="fas fa-id-card"></i> Personal Information</h4>
+                            <div class="detail-row">
+                                <div class="detail-label">IC Number</div>
+                                <div class="detail-value">${data.ic_number}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Email</div>
+                                <div class="detail-value">${data.email}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Phone Number</div>
+                                <div class="detail-value">${data.phone || 'Not provided'}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-card">
+                            <h4><i class="fas fa-map-marker-alt"></i> Location Details</h4>
+                            <div class="detail-row">
+                                <div class="detail-label">District</div>
+                                <div class="detail-value">${data.district}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">City</div>
+                                <div class="detail-value">${data.city || 'Not specified'}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Postal Code</div>
+                                <div class="detail-value">${data.postal_code || 'Not specified'}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-card">
+                            <h4><i class="fas fa-home"></i> Address</h4>
+                            <div class="detail-row">
+                                <div class="detail-value" style="white-space: pre-wrap;">${data.address}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-card">
+                            <h4><i class="fas fa-users"></i> Family & Needs</h4>
+                            <div class="detail-row">
+                                <div class="detail-label">Family Members</div>
+                                <div class="detail-value">${data.family_members} persons</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Special Needs</div>
+                                <div class="detail-value">
+                                    ${specialNeeds.length > 0 ? 
+                                        specialNeeds.map(need => `<span style="display: block; margin-bottom: 3px;">${need}</span>`).join('') : 
+                                        'No special needs recorded'
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-card">
+                            <h4><i class="fas fa-clipboard-check"></i> Disaster Information</h4>
+                            <div class="detail-row">
+                                <div class="detail-label">Assigned Disaster</div>
+                                <div class="detail-value">${data.disaster_name || 'Not assigned'}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Needs Status</div>
+                                <div class="detail-value">
+                                    <span class="badge badge-${data.need_status ? data.need_status.toLowerCase() : 'pending'}">
+                                        ${data.need_status || 'Pending'}
+                                    </span>
+                                    ${data.priority ? `<br><small>Priority: ${data.priority}</small>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-card">
+                            <h4><i class="fas fa-calendar-alt"></i> Dates</h4>
+                            <div class="detail-row">
+                                <div class="detail-label">Registration Date</div>
+                                <div class="detail-value">${formattedDate}</div>
+                            </div>
+                            <div class="detail-row">
+                                <div class="detail-label">Needs Recorded</div>
+                                <div class="detail-value">${needDate}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    ${data.special_request ? `
+                        <div class="detail-card" style="margin-top: 20px;">
+                            <h4><i class="fas fa-exclamation-circle"></i> Special Request</h4>
+                            <div class="detail-row">
+                                <div class="detail-value" style="background: #fff3e0; border-left-color: #ff9800; padding: 15px;">
+                                    <i class="fas fa-exclamation-circle" style="color: #ff9800; margin-right: 10px;"></i>
+                                    ${data.special_request}
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="modal-actions">
+                        ${data.phone ? `
+                            <button class="action-btn-circle call" onclick="callVictim('${data.phone.replace(/'/g, "\\'")}')" title="Call Victim">
+                                <i class="fas fa-phone"></i>
+                            </button>
+                            <button class="action-btn-circle whatsapp" onclick="sendWhatsApp('${data.phone.replace(/'/g, "\\'")}')" title="Send WhatsApp">
+                                <i class="fab fa-whatsapp"></i>
+                            </button>
+                        ` : ''}
+                        <button class="action-btn-circle email" onclick="emailVictim('${data.email.replace(/'/g, "\\'")}')" title="Send Email">
+                            <i class="fas fa-envelope"></i>
+                        </button>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 20px;">
+                        <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; padding: 10px 30px;">
+                            <i class="fas fa-times"></i> Close
+                        </button>
+                    </div>
+                `;
+            })
+            .catch(error => {
+                console.error('Error fetching victim details:', error);
                 document.getElementById('victimModalContent').innerHTML = `
                     <div style="text-align: center; padding: 40px; color: #666;">
-                        <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #ff9800;"></i>
-                        <p>Error: ${data.error}</p>
+                        <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #f44336;"></i>
+                        <p>Error loading victim details. Please try again.</p>
                         <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; margin-top: 20px;">
                             Close
                         </button>
                     </div>
                 `;
-                return;
-            }
-            
-            // Format special needs
-            const specialNeeds = [];
-            if (data.has_baby) specialNeeds.push('👶 Has Baby');
-            if (data.has_elderly) specialNeeds.push('👵 Has Elderly');
-            if (data.has_disabled) specialNeeds.push('♿ Has Disabled');
-            
-            // Format registration date
-            const regDate = new Date(data.created_at);
-            const formattedDate = regDate.toLocaleDateString('en-MY', {
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
             });
+    }
+
+    function closeModal() {
+        document.getElementById('victimModal').style.display = 'none';
+    }
+
+    // Sync functions for friend's admin_dashboard.php
+    function syncSingleFromAPI(victimId, disasterId) {
+        if (confirm(`Sync status for victim #${victimId} from approval system?`)) {
+            showLoading('Syncing from API...');
             
-            // Format need date if exists
-            let needDate = 'Not recorded';
-            if (data.need_created) {
-                const needDateObj = new Date(data.need_created);
-                needDate = needDateObj.toLocaleDateString('en-MY', {
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric'
-                });
-            }
+            window.location.href = `?sync_from_api=1&victim_id=${victimId}&disaster_id=${disasterId}&disaster_id=<?= $selected_disaster_id ?>&filter=<?= $filter_type ?><?= isset($_GET['page']) ? '&page=' . $_GET['page'] : '' ?>`;
+        }
+    }
+    
+    function syncAllFromAPI() {
+        if (confirm('Sync ALL victim statuses from approval system? This will update all victims for this disaster.')) {
+            showLoading('Syncing all from API...');
             
-            // Update modal content with actual data
-            document.getElementById('victimModalContent').innerHTML = `
-                <div style="margin-bottom: 20px;">
-                    <h4 style="color: var(--primary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid var(--border);">
-                        ${data.full_name}
-                    </h4>
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
-                        <span class="badge" style="background: #e3f2fd; color: var(--info);">
-                            ID: #${data.victim_id}
-                        </span>
-                        ${data.email_verified ? 
-                            '<span class="badge" style="background:#e8f5e9; color:#2e7d32;">Email Verified</span>' : 
-                            '<span class="badge" style="background:#fff3e0; color:#ff9800;">Email Not Verified</span>'
-                        }
-                    </div>
-                </div>
+            // Get all victim IDs from checkboxes
+            const syncCheckboxes = document.querySelectorAll('.sync-checkbox');
+            const victimIds = Array.from(syncCheckboxes).map(cb => cb.value);
+            
+            if (victimIds.length === 0) {
+                // If no checkboxes selected, sync all victims on current page
+                const pageVictimIds = Array.from(document.querySelectorAll('tr td:nth-child(3) strong')).map(td => {
+                    const match = td.closest('tr').querySelector('.sync-checkbox');
+                    return match ? match.value : null;
+                }).filter(id => id !== null);
                 
-                <div class="victim-details-grid">
-                    <div class="detail-card">
-                        <h4><i class="fas fa-id-card"></i> Personal Information</h4>
-                        <div class="detail-row">
-                            <div class="detail-label">IC Number</div>
-                            <div class="detail-value">${data.ic_number}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Email</div>
-                            <div class="detail-value">${data.email}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Phone Number</div>
-                            <div class="detail-value">${data.phone || 'Not provided'}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-card">
-                        <h4><i class="fas fa-map-marker-alt"></i> Location Details</h4>
-                        <div class="detail-row">
-                            <div class="detail-label">District</div>
-                            <div class="detail-value">${data.district}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">City</div>
-                            <div class="detail-value">${data.city || 'Not specified'}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Postal Code</div>
-                            <div class="detail-value">${data.postal_code || 'Not specified'}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-card">
-                        <h4><i class="fas fa-home"></i> Address</h4>
-                        <div class="detail-row">
-                            <div class="detail-value" style="white-space: pre-wrap;">${data.address}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-card">
-                        <h4><i class="fas fa-users"></i> Family & Needs</h4>
-                        <div class="detail-row">
-                            <div class="detail-label">Family Members</div>
-                            <div class="detail-value">${data.family_members} persons</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Special Needs</div>
-                            <div class="detail-value">
-                                ${specialNeeds.length > 0 ? 
-                                    specialNeeds.map(need => `<span style="display: block; margin-bottom: 3px;">${need}</span>`).join('') : 
-                                    'No special needs recorded'
-                                }
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-card">
-                        <h4><i class="fas fa-clipboard-check"></i> Disaster Information</h4>
-                        <div class="detail-row">
-                            <div class="detail-label">Assigned Disaster</div>
-                            <div class="detail-value">${data.disaster_name || 'Not assigned'}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Needs Status</div>
-                            <div class="detail-value">
-                                <span class="badge badge-${data.need_status ? data.need_status.toLowerCase() : 'pending'}">
-                                    ${data.need_status || 'Pending'}
-                                </span>
-                                ${data.priority ? `<br><small>Priority: ${data.priority}</small>` : ''}
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-card">
-                        <h4><i class="fas fa-calendar-alt"></i> Dates</h4>
-                        <div class="detail-row">
-                            <div class="detail-label">Registration Date</div>
-                            <div class="detail-value">${formattedDate}</div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Needs Recorded</div>
-                            <div class="detail-value">${needDate}</div>
-                        </div>
-                    </div>
-                </div>
+                if (pageVictimIds.length === 0) {
+                    alert('No victims to sync on this page.');
+                    return;
+                }
                 
-                ${data.special_request ? `
-                    <div class="detail-card" style="margin-top: 20px;">
-                        <h4><i class="fas fa-exclamation-circle"></i> Special Request</h4>
-                        <div class="detail-row">
-                            <div class="detail-value" style="background: #fff3e0; border-left-color: #ff9800; padding: 15px;">
-                                <i class="fas fa-exclamation-circle" style="color: #ff9800; margin-right: 10px;"></i>
-                                ${data.special_request}
-                            </div>
-                        </div>
-                    </div>
-                ` : ''}
+                // Create a form to submit
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.style.display = 'none';
                 
-                <div class="modal-actions">
-                    ${data.phone ? `
-                        <button class="action-btn-circle call" onclick="callVictim('${data.phone.replace(/'/g, "\\'")}')" title="Call Victim">
-                            <i class="fas fa-phone"></i>
-                        </button>
-                        <button class="action-btn-circle whatsapp" onclick="sendWhatsApp('${data.phone.replace(/'/g, "\\'")}')" title="Send WhatsApp">
-                            <i class="fab fa-whatsapp"></i>
-                        </button>
-                    ` : ''}
-                    <button class="action-btn-circle email" onclick="emailVictim('${data.email.replace(/'/g, "\\'")}')" title="Send Email">
-                        <i class="fas fa-envelope"></i>
-                    </button>
-                    <button class="action-btn-circle report" onclick="generateReport(${data.victim_id})" title="Generate Report">
-                        <i class="fas fa-file-pdf"></i>
-                    </button>
-                    <button class="action-btn-circle edit" onclick="editVictim(${data.victim_id})" title="Edit Victim">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                </div>
+                const disasterInput = document.createElement('input');
+                disasterInput.type = 'hidden';
+                disasterInput.name = 'disaster_id';
+                disasterInput.value = <?= $selected_disaster_id ?>;
+                form.appendChild(disasterInput);
                 
-                <div style="text-align: center; margin-top: 20px;">
-                    <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; padding: 10px 30px;">
-                        <i class="fas fa-times"></i> Close
-                    </button>
-                </div>
-            `;
-        })
-        .catch(error => {
-            console.error('Error fetching victim details:', error);
-            document.getElementById('victimModalContent').innerHTML = `
-                <div style="text-align: center; padding: 40px; color: #666;">
-                    <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 20px; color: #f44336;"></i>
-                    <p>Error loading victim details. Please try again.</p>
-                    <button onclick="closeModal()" class="btn" style="background: var(--primary); color: white; margin-top: 20px;">
-                        Close
-                    </button>
-                </div>
-            `;
-        });
-}
-
-function closeModal() {
-    document.getElementById('victimModal').style.display = 'none';
-}
-
-// Auto-dismiss messages after 5 seconds
-setTimeout(() => {
-    const messages = document.querySelectorAll('.message');
-    messages.forEach(msg => {
-        msg.style.opacity = '0';
-        msg.style.transition = 'opacity 0.5s';
-        setTimeout(() => {
-            if (msg.parentNode) {
-                msg.style.display = 'none';
-            }
-        }, 500);
-    });
-}, 5000);
-
-// Smooth scrolling for navigation
-document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-    anchor.addEventListener('click', function (e) {
-        e.preventDefault();
-        const targetId = this.getAttribute('href');
-        if(targetId !== '#') {
-            const targetElement = document.querySelector(targetId);
-            if(targetElement) {
-                targetElement.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start'
+                pageVictimIds.forEach(victimId => {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'victim_ids[]';
+                    input.value = victimId;
+                    form.appendChild(input);
                 });
+                
+                const submitInput = document.createElement('input');
+                submitInput.type = 'hidden';
+                submitInput.name = 'bulk_sync_from_api';
+                submitInput.value = '1';
+                form.appendChild(submitInput);
+                
+                document.body.appendChild(form);
+                form.submit();
+            } else {
+                // Use selected checkboxes
+                const form = document.getElementById('bulkSyncForm');
+                if (form) {
+                    form.submit();
+                }
             }
         }
+    }
+    
+    // Bulk sync selection functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        const selectAllSyncCheckbox = document.getElementById('selectAllSync');
+        const syncCheckboxes = document.querySelectorAll('.sync-checkbox');
+        const bulkSyncBar = document.getElementById('bulkSyncBar');
+        const selectedSyncCountSpan = document.getElementById('selectedSyncCount');
+        
+        if (selectAllSyncCheckbox) {
+            selectAllSyncCheckbox.addEventListener('change', function() {
+                const isChecked = this.checked;
+                syncCheckboxes.forEach(checkbox => {
+                    checkbox.checked = isChecked;
+                });
+                updateBulkSyncBar();
+            });
+        }
+        
+        syncCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', updateBulkSyncBar);
+        });
+        
+        function updateBulkSyncBar() {
+            const checkedBoxes = document.querySelectorAll('.sync-checkbox:checked');
+            const count = checkedBoxes.length;
+            
+            if (count > 0) {
+                bulkSyncBar.classList.add('active');
+                selectedSyncCountSpan.textContent = count;
+                
+                // Update the bulk sync form
+                const bulkSyncForm = document.getElementById('bulkSyncForm');
+                const existingInputs = bulkSyncForm.querySelectorAll('input[name="victim_ids[]"]');
+                existingInputs.forEach(input => input.remove());
+                
+                checkedBoxes.forEach(checkbox => {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'victim_ids[]';
+                    input.value = checkbox.value;
+                    bulkSyncForm.appendChild(input);
+                });
+            } else {
+                bulkSyncBar.classList.remove('active');
+            }
+            
+            // Update select all checkbox state
+            if (selectAllSyncCheckbox) {
+                if (count === syncCheckboxes.length && syncCheckboxes.length > 0) {
+                    selectAllSyncCheckbox.checked = true;
+                    selectAllSyncCheckbox.indeterminate = false;
+                } else if (count > 0) {
+                    selectAllSyncCheckbox.checked = false;
+                    selectAllSyncCheckbox.indeterminate = true;
+                } else {
+                    selectAllSyncCheckbox.checked = false;
+                    selectAllSyncCheckbox.indeterminate = false;
+                }
+            }
+        }
+        
+        // Initialize
+        updateBulkSyncBar();
     });
-});
-
-// Close modal when clicking outside
-document.getElementById('victimModal').addEventListener('click', function(e) {
-    if (e.target === this) {
-        closeModal();
+    
+    function clearSyncSelection() {
+        const syncCheckboxes = document.querySelectorAll('.sync-checkbox');
+        syncCheckboxes.forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        const selectAllSyncCheckbox = document.getElementById('selectAllSync');
+        if (selectAllSyncCheckbox) {
+            selectAllSyncCheckbox.checked = false;
+            selectAllSyncCheckbox.indeterminate = false;
+        }
+        updateBulkSyncBar();
     }
-});
-
-// Keyboard shortcut to close modal
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeModal();
+    
+    function showLoading(message) {
+        let loadingDiv = document.getElementById('loadingOverlay');
+        if (!loadingDiv) {
+            loadingDiv = document.createElement('div');
+            loadingDiv.id = 'loadingOverlay';
+            loadingDiv.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.7);
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                color: white;
+                z-index: 99999;
+                font-size: 18px;
+            `;
+            document.body.appendChild(loadingDiv);
+        }
+        
+        loadingDiv.innerHTML = `
+            <div style="text-align: center;">
+                <i class="fas fa-spinner fa-spin" style="font-size: 48px; margin-bottom: 20px;"></i>
+                <p>${message}</p>
+            </div>
+        `;
     }
-});
+    
+    // Auto-dismiss messages after 5 seconds
+    setTimeout(() => {
+        const messages = document.querySelectorAll('.message');
+        messages.forEach(msg => {
+            msg.style.opacity = '0';
+            msg.style.transition = 'opacity 0.5s';
+            setTimeout(() => {
+                if (msg.parentNode) {
+                    msg.style.display = 'none';
+                }
+            }, 500);
+        });
+    }, 5000);
 
-// Prevent form resubmission on page refresh
-if (window.history.replaceState) {
-    window.history.replaceState(null, null, window.location.href);
-}
-</script>
+    // Smooth scrolling for navigation
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const targetId = this.getAttribute('href');
+            if(targetId !== '#') {
+                const targetElement = document.querySelector(targetId);
+                if(targetElement) {
+                    targetElement.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            }
+        });
+    });
+
+    // Close modal when clicking outside
+    document.getElementById('victimModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeModal();
+        }
+    });
+
+    // Keyboard shortcut to close modal
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    });
+
+    // Prevent form resubmission on page refresh
+    if (window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.href);
+    }
+    </script>
 </body>
 </html>

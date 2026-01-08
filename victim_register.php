@@ -25,6 +25,244 @@ try {
     die("❌ Error fetching disasters: " . $e->getMessage());
 }
 
+// ================= SHELTER DATA =================
+$shelters = [
+    'Melaka Tengah' => [
+        [
+            'name' => 'Melaka Tengah Emergency Shelter 1',
+            'address' => '123 Jalan Merdeka, 75000 Melaka',
+            'phone' => '012-3456789',
+            'email' => 'mt1@shelter.gov.my',
+            'capacity' => '200 people',
+            'facilities' => 'Beds, Showers, Kitchen, Medical Bay',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'SMK Tun Tuah Temporary Shelter',
+            'address' => '45 Jalan Hang Tuah, 75300 Melaka',
+            'phone' => '013-9876543',
+            'email' => 'shelter2@melaka.gov.my',
+            'capacity' => '150 people',
+            'facilities' => 'Classrooms, Toilets, Food Service',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'Dewan Seri Negeri Melaka',
+            'address' => 'Kompleks Seri Negeri, Ayer Keroh',
+            'phone' => '06-2319999',
+            'email' => 'dewan@sriegeri.melaka.gov.my',
+            'capacity' => '500 people',
+            'facilities' => 'Large Hall, Kitchen, Medical Post',
+            'status' => 'Full'
+        ]
+    ],
+    'Alor Gajah' => [
+        [
+            'name' => 'Alor Gajah District Shelter',
+            'address' => '12 Jalan Melati, 78000 Alor Gajah',
+            'phone' => '013-1112223',
+            'email' => 'ag1@shelter.gov.my',
+            'capacity' => '180 people',
+            'facilities' => 'Sleeping Mats, Blankets, Basic Kitchen',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'SK Alor Gajah Relief Center',
+            'address' => '89 Jalan Pegaga, 78010 Alor Gajah',
+            'phone' => '019-8765432',
+            'email' => 'relief@ag.edu.my',
+            'capacity' => '120 people',
+            'facilities' => 'School Hall, Basic Amenities',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'Masjid Al-Amin Emergency Shelter',
+            'address' => 'Kampung Padang Sebang, 78000 Alor Gajah',
+            'phone' => '011-22334455',
+            'email' => 'alamin.masjid@gmail.com',
+            'capacity' => '100 people',
+            'facilities' => 'Prayer Hall, Basic Kitchen',
+            'status' => 'Limited Space'
+        ]
+    ],
+    'Jasin' => [
+        [
+            'name' => 'Jasin Community Shelter',
+            'address' => '56 Jalan Kenanga, 77000 Jasin',
+            'phone' => '014-5556667',
+            'email' => 'js1@shelter.gov.my',
+            'capacity' => '160 people',
+            'facilities' => 'Community Hall, Showers, Kitchen',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'Sekolah Kebangsaan Jasin 2',
+            'address' => 'Jalan Durian Daun, 77000 Jasin',
+            'phone' => '06-5291234',
+            'email' => 'skjasin2@moe.edu.my',
+            'capacity' => '220 people',
+            'facilities' => 'Classrooms, Canteen, Toilets',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'Balai Raya Merlimau',
+            'address' => 'Kampung Merlimau, 77300 Jasin',
+            'phone' => '017-8899001',
+            'email' => 'merlimau.balai@gmail.com',
+            'capacity' => '90 people',
+            'facilities' => 'Village Hall, Basic Facilities',
+            'status' => 'Available'
+        ]
+    ],
+    'Bandaraya Melaka' => [
+        [
+            'name' => 'Melaka International Trade Center',
+            'address' => 'MITC, Ayer Keroh, 75450 Melaka',
+            'phone' => '06-2329000',
+            'email' => 'mitc@shelter.melaka.gov.my',
+            'capacity' => '1000 people',
+            'facilities' => 'Large Hall, Medical Center, Kitchen',
+            'status' => 'Available'
+        ],
+        [
+            'name' => 'Stadium Hang Jebat',
+            'address' => 'Krubong, 75250 Melaka',
+            'phone' => '06-3175000',
+            'email' => 'stadium@melaka.gov.my',
+            'capacity' => '800 people',
+            'facilities' => 'Stadium Hall, Showers, Food Court',
+            'status' => 'Available'
+        ]
+    ]
+];
+
+// ================= FETCH RESOURCES FROM APIS =================
+function fetchResources($url) {
+    // Use file_get_contents with stream context for better error handling
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 10,
+            'ignore_errors' => true
+        ]
+    ]);
+    
+    try {
+        $response = @file_get_contents($url, false, $context);
+        
+        if ($response === FALSE) {
+            return ["error" => "API Connection Failed: Unable to reach server"];
+        }
+        
+        $data = json_decode($response, true);
+        
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ["error" => "Invalid JSON response: " . json_last_error_msg()];
+        }
+        
+        return $data;
+        
+    } catch (Exception $e) {
+        return ["error" => "API Error: " . $e->getMessage()];
+    }
+}
+
+// Fetch resources from all APIs
+$resources = [
+    'baby' => [],
+    'elderly' => [],
+    'disabled' => [],
+    'basic' => []
+];
+
+$api_endpoints = [
+    'baby' => 'http://10.147.17.224:8000/baby_api.php',
+    'elderly' => 'http://10.147.17.224:8000/elderly_api.php',
+    'disabled' => 'http://10.147.17.224:8000/disabled_api.php',
+    'basic' => 'http://10.147.17.224:8000/basic_needs_api.php'
+];
+
+// Track API status
+$api_errors = [];
+
+// Try to fetch from APIs, fallback to sample data
+foreach ($api_endpoints as $type => $url) {
+    $api_data = fetchResources($url);
+    
+    if (isset($api_data['error'])) {
+        $api_errors[$type] = $api_data['error'];
+        error_log("Failed to fetch $type resources: " . $api_data['error']);
+        // Use sample data if API fails
+        $resources[$type] = getSampleResources($type);
+    } else {
+        $resources[$type] = processApiData($api_data, $type);
+    }
+}
+
+function getSampleResources($type) {
+    $sample_data = [
+        'baby' => [
+            'Baby Diapers',
+            'Baby Formula',
+            'Baby Wipes',
+            'Baby Clothes',
+            'Baby Bottles'
+        ],
+        'elderly' => [
+            'Adult Diapers',
+            'Walking Stick',
+            'Walker',
+            'Blood Pressure Monitor',
+            'Glucose Meter'
+        ],
+        'disabled' => [
+            'Wheelchair',
+            'Crutches',
+            'Commode Chair',
+            'Shower Chair',
+            'Grab Bars'
+        ],
+        'basic' => [
+            'First Aid Kits',
+            'Bandages & Gauze',
+            'Antiseptic Solution',
+            'Pain Relievers',
+            'Prescription Medications',
+            'Thermometers',
+            'Blood Pressure Monitors',
+            'Medical Gloves',
+            'Face Masks',
+            'Emergency Blankets'
+        ]
+    ];
+    
+    return $sample_data[$type] ?? [];
+}
+
+function processApiData($api_data, $type) {
+    $processed = [];
+    
+    if (isset($api_data['status']) && $api_data['status'] === 'success' && isset($api_data['data'])) {
+        $items = $api_data['data'];
+        
+        foreach ($items as $item) {
+            $processed[] = $item['name'] ?? $item['item_name'] ?? 'Unnamed Item';
+        }
+    } elseif (is_array($api_data) && count($api_data) > 0) {
+        // Assume direct array of items
+        foreach ($api_data as $item) {
+            if (is_array($item)) {
+                $processed[] = $item['name'] ?? $item['item_name'] ?? 'Resource';
+            } else {
+                $processed[] = $item;
+            }
+        }
+    }
+    
+    return $processed;
+}
+
+// ================= HANDLE FORM SUBMISSION =================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $conn->beginTransaction();
@@ -42,130 +280,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             INSERT INTO victim 
             (full_name, ic_number, email, phone, email_verified, verification_token, address,
              postal_code, city, district, country, family_members, has_baby, has_elderly,
-             has_disabled, created_at, disaster_id, special_request)
+             has_disabled, created_at, disaster_id, special_request, selected_shelter)
             VALUES 
             (:full_name, :ic, :email, :phone, false, :token, :address,
              :postal, :city, :district, 'Malaysia', :family, :baby, :elderly,
-             :disabled, NOW(), :disaster, :special_request)
+             :disabled, NOW(), :disaster, :special_request, :selected_shelter)
             RETURNING victim_id
         ");
 
-        $stmt->bindValue(':full_name', $_POST['full_name']);
-        $stmt->bindValue(':ic', $_POST['ic_number']);
-        $stmt->bindValue(':email', $_POST['email']);
-        $stmt->bindValue(':phone', $_POST['phone']);
-        $stmt->bindValue(':token', $reference_number);
-        $stmt->bindValue(':address', $_POST['address']);
-        $stmt->bindValue(':postal', $_POST['postal_code']);
-        $stmt->bindValue(':city', $_POST['city'] ?: 'Melaka');
-        $stmt->bindValue(':district', $_POST['district']);
-        $stmt->bindValue(':family', $_POST['family_members'], PDO::PARAM_INT);
-        $stmt->bindValue(':baby', $has_baby, PDO::PARAM_BOOL);
-        $stmt->bindValue(':elderly', $has_elderly, PDO::PARAM_BOOL);
-        $stmt->bindValue(':disabled', $has_disabled, PDO::PARAM_BOOL);
-        $stmt->bindValue(':disaster', $_POST['disaster_id'], PDO::PARAM_INT);
-        $stmt->bindValue(':special_request', $_POST['special_needs'] ?? '', PDO::PARAM_STR);
+        $stmt->bindParam(':full_name', $_POST['full_name']);
+        $stmt->bindParam(':ic', $_POST['ic_number']);
+        $stmt->bindParam(':email', $_POST['email']);
+        $stmt->bindParam(':phone', $_POST['phone']);
+        $stmt->bindParam(':token', $reference_number);
+        $stmt->bindParam(':address', $_POST['address']);
+        $stmt->bindParam(':postal', $_POST['postal_code']);
+        $city = $_POST['city'] ?: 'Melaka';
+        $stmt->bindParam(':city', $city);
+        $stmt->bindParam(':district', $_POST['district']);
+        $family_members = (int)$_POST['family_members'];
+        $stmt->bindParam(':family', $family_members, PDO::PARAM_INT);
+        $stmt->bindParam(':baby', $has_baby, PDO::PARAM_BOOL);
+        $stmt->bindParam(':elderly', $has_elderly, PDO::PARAM_BOOL);
+        $stmt->bindParam(':disabled', $has_disabled, PDO::PARAM_BOOL);
+        $disaster_id = (int)$_POST['disaster_id'];
+        $stmt->bindParam(':disaster', $disaster_id, PDO::PARAM_INT);
+        
+        // Check if special needs can be requested
+        $has_special_person = $has_baby || $has_elderly || $has_disabled;
+        $special_request = '';
+        
+        // Collect selected resources
+        $selected_resources = [];
+        if ($has_special_person && isset($_POST['selected_resources'])) {
+            $selected_resources = json_decode($_POST['selected_resources'], true) ?? [];
+            $special_request = implode("\n", $selected_resources);
+        }
+        $stmt->bindParam(':special_request', $special_request);
+        
+        // Get selected shelter
+        $selected_shelter = $_POST['selected_shelter'] ?? '';
+        $stmt->bindParam(':selected_shelter', $selected_shelter);
 
         $stmt->execute();
-        $victim_row = $stmt->fetch(PDO::FETCH_ASSOC);
-        $victim_id = $victim_row['victim_id'] ?? null;
+        
+        // Get the victim_id using RETURNING clause
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $victim_id = $result['victim_id'] ?? $conn->lastInsertId();
 
         if (!$victim_id) {
-            throw new Exception("Failed to get victim ID");
+            throw new Exception("Failed to get victim ID after insertion");
         }
 
         // ================= INSERT INTO NEEDS TABLE =================
         $needs_inserted = false;
-        if (!empty($_POST['special_needs'])) {
-            try {
-                // First, let's check what columns the needs table has
-                $check_stmt = $conn->query("
-                    SELECT column_name 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'needs' 
-                    AND table_schema = 'public'
-                    ORDER BY ordinal_position
-                ");
-                $columns = $check_stmt->fetchAll(PDO::FETCH_COLUMN);
-                
-                if (empty($columns)) {
-                    throw new Exception("Needs table not found or has no columns");
-                }
-                
-                // Debug: Show columns found
-                error_log("Needs table columns: " . implode(", ", $columns));
-                
-                // Prepare INSERT based on available columns
-                $needs_sql = "INSERT INTO needs (";
-                $values_sql = "VALUES (";
-                $params = [];
-                
-                // Always include these if they exist
-                if (in_array('victim_id', $columns)) {
-                    $needs_sql .= "victim_id, ";
-                    $values_sql .= ":victim_id, ";
-                    $params[':victim_id'] = $victim_id;
-                }
-                
-                if (in_array('disaster_id', $columns)) {
-                    $needs_sql .= "disaster_id, ";
-                    $values_sql .= ":disaster_id, ";
-                    $params[':disaster_id'] = $_POST['disaster_id'];
-                }
-                
-                // Add special needs text to appropriate column
-                $needs_text = $_POST['special_needs'];
-                if (in_array('item_name', $columns)) {
-                    $needs_sql .= "item_name, ";
-                    $values_sql .= ":needs_text, ";
-                    $params[':needs_text'] = $needs_text;
-                } elseif (in_array('request_details', $columns)) {
-                    $needs_sql .= "request_details, ";
-                    $values_sql .= ":needs_text, ";
-                    $params[':needs_text'] = $needs_text;
-                } elseif (in_array('special_needs', $columns)) {
-                    $needs_sql .= "special_needs, ";
-                    $values_sql .= ":needs_text, ";
-                    $params[':needs_text'] = $needs_text;
-                } elseif (in_array('description', $columns)) {
-                    $needs_sql .= "description, ";
-                    $values_sql .= ":needs_text, ";
-                    $params[':needs_text'] = $needs_text;
-                }
-                
-                // Add status if column exists
-                if (in_array('status', $columns)) {
-                    $needs_sql .= "status, ";
-                    $values_sql .= "'Pending', ";
-                }
-                
-                // Add created_at if column exists
-                if (in_array('created_at', $columns)) {
-                    $needs_sql .= "created_at";
-                    $values_sql .= "NOW()";
-                } else {
-                    // Remove trailing comma and space
-                    $needs_sql = rtrim($needs_sql, ", ");
-                    $values_sql = rtrim($values_sql, ", ");
-                }
-                
-                $needs_sql .= ") " . $values_sql . ")";
-                
-                // Debug: Show the SQL
-                error_log("Needs INSERT SQL: " . $needs_sql);
-                
-                // Execute the insert
-                $needs_stmt = $conn->prepare($needs_sql);
-                foreach ($params as $key => $value) {
-                    $needs_stmt->bindValue($key, $value);
-                }
-                $needs_stmt->execute();
-                $needs_inserted = true;
-                
-            } catch (Exception $e) {
-                // Log error but don't stop
-                error_log("Needs table error (will continue): " . $e->getMessage());
+        $needs_error = "";
+        
+        // Insert into needs table for ALL victims (with or without special needs)
+        try {
+            // Process selected resources
+            $special_items = $selected_resources;
+            
+            // Calculate quantities
+            $normal_qty = $family_members; // Each family member gets 1 basic need
+            $special_qty = count($special_items); // Number of special items requested
+            $total_qty = $normal_qty + $special_qty;
+            
+            // Set priority based on special needs
+            $priority = $has_special_person ? 'High' : 'Medium';
+            
+            // Prepare PostgreSQL array format
+            $special_requests_param = null;
+            if (!empty($special_items)) {
+                // Format array for PostgreSQL: {"item1","item2","item3"}
+                $escaped_items = array_map(function($item) {
+                    return '"' . str_replace('"', '\"', $item) . '"';
+                }, $special_items);
+                $special_requests_param = '{' . implode(',', $escaped_items) . '}';
+            } else {
+                $special_requests_param = '{}'; // Empty array
             }
+            
+            // Insert into needs table with shelter information
+            $needs_stmt = $conn->prepare("
+                INSERT INTO needs 
+                (victim_id, disaster_id, priority, status, 
+                 temp_resource_name, quantity_needed, normal_needs_quantity, 
+                 special_needs_quantity, special_needs_requests, created_at, selected_shelter)
+                VALUES 
+                (:victim_id, :disaster_id, :priority, 'Pending',
+                 :temp_resource_name, :quantity_needed, :normal_qty,
+                 :special_qty, :special_requests, NOW(), :selected_shelter)
+            ");
+            
+            $temp_resource_name = !empty($special_request) ? 
+                substr($special_request, 0, 100) : 'Basic Needs';
+            
+            $needs_stmt->bindValue(':victim_id', $victim_id, PDO::PARAM_INT);
+            $needs_stmt->bindValue(':disaster_id', $disaster_id, PDO::PARAM_INT);
+            $needs_stmt->bindValue(':priority', $priority);
+            $needs_stmt->bindValue(':temp_resource_name', $temp_resource_name);
+            $needs_stmt->bindValue(':quantity_needed', $total_qty, PDO::PARAM_INT);
+            $needs_stmt->bindValue(':normal_qty', $normal_qty, PDO::PARAM_INT);
+            $needs_stmt->bindValue(':special_qty', $special_qty, PDO::PARAM_INT);
+            $needs_stmt->bindValue(':special_requests', $special_requests_param);
+            $needs_stmt->bindValue(':selected_shelter', $selected_shelter);
+            
+            $needs_stmt->execute();
+            $needs_inserted = true;
+            
+        } catch (Exception $e) {
+            // Don't rollback if needs insert fails
+            $needs_error = $e->getMessage();
+            error_log("Needs table insert failed: " . $needs_error);
         }
 
         $conn->commit();
@@ -178,11 +405,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
         }
-
+        
+        // ================= GET SHELTER INFO =================
+        $shelter_info = "Not selected";
+        $shelter_details = "";
+        if (!empty($selected_shelter) && $selected_shelter !== "No shelter needed - I will collect from another location") {
+            $shelter_info = $selected_shelter;
+            // Find shelter details
+            foreach ($shelters as $district => $district_shelters) {
+                foreach ($district_shelters as $shelter) {
+                    if ($shelter['name'] === $selected_shelter) {
+                        $shelter_details = "
+                        <div class='shelter-details-box'>
+                            <h5><i class='fas fa-info-circle'></i> Shelter Details</h5>
+                            <div class='shelter-details'>
+                                <p><strong>Address:</strong> {$shelter['address']}</p>
+                                <p><strong>Phone:</strong> {$shelter['phone']}</p>
+                                <p><strong>Email:</strong> {$shelter['email']}</p>
+                                <p><strong>Capacity:</strong> {$shelter['capacity']}</p>
+                                <p><strong>Facilities:</strong> {$shelter['facilities']}</p>
+                                <p><strong>Status:</strong> <span class='status-badge'>{$shelter['status']}</span></p>
+                            </div>
+                        </div>";
+                        break 2;
+                    }
+                }
+            }
+        } elseif ($selected_shelter === "No shelter needed - I will collect from another location") {
+            $shelter_info = "No shelter selected";
+        }
+        
         // ================= CREATE WHATSAPP LINK =================
         $clean_phone = preg_replace('/[^0-9]/', '', $_POST['phone']);
         if (substr($clean_phone, 0, 1) === '0') {
             $clean_phone = substr($clean_phone, 1);
+        }
+        
+        // Build WhatsApp message with shelter info
+        $whatsapp_shelter_info = "";
+        if (!empty($selected_shelter)) {
+            if ($selected_shelter === "No shelter needed - I will collect from another location") {
+                $whatsapp_shelter_info = "
+*Shelter Selection:* No shelter needed
+*Note:* You will be contacted for alternative collection arrangements";
+            } else {
+                $whatsapp_shelter_info = "
+*Selected Shelter:* $selected_shelter
+
+*Shelter Collection Instructions:*
+1. Bring your Reference Number and IC
+2. Go to your selected shelter during distribution hours
+3. Shelter operating hours: 8:00 AM - 8:00 PM
+4. Contact shelter if you cannot make it";
+            }
         }
         
         $whatsapp_message = "📋 *Melaka Disaster Assistance - Registration Confirmation*
@@ -195,8 +470,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 *Disaster:* $disaster_name
 *Date:* " . date('d/m/Y H:i') . "
 
-*Special Needs Request:*
-" . (!empty($_POST['special_needs']) ? $_POST['special_needs'] : 'No special needs requested') . "
+" . ($has_special_person ? "*Special Persons in Household:* " . 
+    ($has_baby ? "👶 Baby " : "") . 
+    ($has_elderly ? "👵 Elderly " : "") . 
+    ($has_disabled ? "♿ Disabled " : "") . "\n" : "") . "
+
+" . (!empty($special_request) ? 
+"*Special Needs Request:*
+" . $special_request . "\n" : 
+"*Special Needs Request:* No special needs requested\n") . "
+
+" . $whatsapp_shelter_info . "
 
 *Important Information:*
 1. Keep this Reference Number for all future communications
@@ -212,8 +496,38 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
         $db_status = "✅ Data saved to: <strong>victim table</strong>";
         if ($needs_inserted) {
             $db_status .= " and <strong>needs table</strong>";
-        } elseif (!empty($_POST['special_needs'])) {
-            $db_status .= " (needs table: skipped - table issue)";
+        } else {
+            $db_status .= " (needs table: error - " . htmlspecialchars($needs_error) . ")";
+        }
+        
+        // Format needs information for display
+        $special_needs_info = "";
+        if ($has_special_person && !empty($special_request)) {
+            $special_items = explode("\n", $special_request);
+            $special_items = array_map('trim', $special_items);
+            $special_items = array_filter($special_items);
+            $special_needs_count = min(count($special_items), 3);
+            $normal_qty = $family_members;
+            $total_qty = $normal_qty + $special_needs_count;
+            
+            $special_needs_info = "
+            <div class='details-card'>
+                <h4><i class='fas fa-calculator'></i> Needs Calculation</h4>
+                <div class='details-grid'>
+                    <div class='detail-item'>
+                        <span class='detail-label'>Normal Needs:</span>
+                        <span class='detail-value'>$normal_qty items (1 per family member)</span>
+                    </div>
+                    <div class='detail-item'>
+                        <span class='detail-label'>Special Needs:</span>
+                        <span class='detail-value'>$special_needs_count items (max 3)</span>
+                    </div>
+                    <div class='detail-item'>
+                        <span class='detail-label'>Total Needs:</span>
+                        <span class='detail-value highlight'>$total_qty items</span>
+                    </div>
+                </div>
+            </div>";
         }
         
         $message = "
@@ -267,18 +581,41 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
                             <span class='detail-label'>Date:</span>
                             <span class='detail-value'>" . date('d/m/Y H:i') . "</span>
                         </div>
+                        " . (!empty($selected_shelter) && $selected_shelter !== "No shelter needed - I will collect from another location" ? "
+                        <div class='detail-item'>
+                            <span class='detail-label'>Selected Shelter:</span>
+                            <span class='detail-value highlight'>" . htmlspecialchars($selected_shelter) . "</span>
+                        </div>
+                        " : "") . "
+                        " . ($selected_shelter === "No shelter needed - I will collect from another location" ? "
+                        <div class='detail-item'>
+                            <span class='detail-label'>Shelter:</span>
+                            <span class='detail-value'>No shelter selected - alternative arrangements</span>
+                        </div>
+                        " : "") . "
                     </div>
                 </div>
                 
-                " . (!empty($_POST['special_needs']) ? "
+                " . $special_needs_info . "
+                
+                " . (!empty($shelter_details) ? $shelter_details : "") . "
+                
+                " . (!empty($special_request) && $has_special_person ? "
                 <div class='special-needs-card'>
                     <h4><i class='fas fa-hand-holding-heart'></i> Special Needs Request</h4>
                     <div class='needs-box'>
-                        <p><strong>Your Request:</strong></p>
-                        <div class='needs-text'>" . nl2br(htmlspecialchars($_POST['special_needs'])) . "</div>
+                        <p><strong>Your Selected Items:</strong></p>
+                        <div class='needs-text'>" . nl2br(htmlspecialchars($special_request)) . "</div>
                         <p><strong>Status:</strong> <span class='status-badge'>Pending Review</span></p>
                         <p><strong>Database Status:</strong> " . ($needs_inserted ? "✅ Saved to needs table" : "⚠️ Not saved to needs table") . "</p>
                     </div>
+                </div>
+                " : "") . "
+                
+                " . ($has_special_person && empty($special_request) ? "
+                <div class='note' style='margin: 20px;'>
+                    <i class='fas fa-info-circle'></i> 
+                    <strong>Note:</strong> You have special persons in your household but did not select any special needs. If you need special assistance, please contact disaster management.
                 </div>
                 " : "") . "
                 
@@ -343,6 +680,7 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
+/* ALL YOUR EXISTING CSS REMAINS EXACTLY THE SAME - NO CHANGES */
 * {
     margin: 0;
     padding: 0;
@@ -1039,8 +1377,460 @@ select.form-control {
         font-size: 1.8rem;
     }
 }
+
+/* NEW: Special needs section visibility */
+.special-needs-hidden {
+    display: none;
+}
+
+/* NEW: Resource selection styles */
+.resource-options {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border: 1px solid #dee2e6;
+}
+
+.resource-options h5 {
+    margin-bottom: 15px;
+    color: #495057;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.resource-options h5 i {
+    color: #007bff;
+}
+
+.resource-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 8px;
+    background: white;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    transition: all 0.3s;
+}
+
+.resource-checkbox:hover {
+    border-color: #007bff;
+    background: #f0f8ff;
+}
+
+.resource-checkbox input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.resource-checkbox label {
+    cursor: pointer;
+    flex: 1;
+    margin: 0;
+    font-size: 14px;
+    color: #333;
+}
+
+.resource-checkbox.selected {
+    border-color: #28a745;
+    background: #f0fff4;
+}
+
+.selection-info {
+    background: #e7f3ff;
+    border: 1px solid #b3d7ff;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 10px;
+    font-size: 14px;
+    color: #004085;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.selection-info i {
+    color: #0056b3;
+}
+
+/* NEW: Shelter selection styles */
+.shelter-section {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border: 1px solid #dee2e6;
+}
+
+.shelter-options {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 10px;
+    background: white;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+}
+
+.shelter-option {
+    padding: 12px;
+    margin-bottom: 10px;
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+    background: white;
+}
+
+.shelter-option:hover {
+    border-color: #007bff;
+    background: #f0f8ff;
+    transform: translateY(-2px);
+}
+
+.shelter-option.selected {
+    border-color: #28a745;
+    background: #f0fff4;
+}
+
+.shelter-option input[type="radio"] {
+    display: none;
+}
+
+.shelter-option label {
+    display: block;
+    cursor: pointer;
+    margin: 0;
+}
+
+.shelter-name {
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 5px;
+    font-size: 16px;
+}
+
+.shelter-details {
+    font-size: 13px;
+    color: #6c757d;
+    line-height: 1.4;
+}
+
+.shelter-details p {
+    margin: 3px 0;
+}
+
+.shelter-details strong {
+    color: #495057;
+}
+
+.shelter-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 5px;
+}
+
+.shelter-status.available {
+    background: #d4edda;
+    color: #155724;
+}
+
+.shelter-status.full {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.shelter-status.limited {
+    background: #fff3cd;
+    color: #856404;
+}
+
+/* NEW: Shelter details in success message */
+.shelter-details-box {
+    background: #e8f4f8;
+    border: 1px solid #17a2b8;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 25px;
+}
+
+.shelter-details-box h5 {
+    color: #0c5460;
+    margin-top: 0;
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.shelter-details-box .shelter-details {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #17a2b8;
+}
 </style>
 <script>
+let selectedResources = [];
+let maxSelections = 3;
+
+function toggleSpecialNeeds() {
+    const hasBaby = document.getElementById('has_baby').checked;
+    const hasElderly = document.getElementById('has_elderly').checked;
+    const hasDisabled = document.getElementById('has_disabled').checked;
+    
+    const specialNeedsElements = document.querySelectorAll('.special-needs-section');
+    
+    if (hasBaby || hasElderly || hasDisabled) {
+        // Show special needs section
+        specialNeedsElements.forEach(element => {
+            element.classList.remove('special-needs-hidden');
+        });
+        
+        // Load appropriate resources
+        loadResourcesForSelection(hasBaby, hasElderly, hasDisabled);
+    } else {
+        // Hide special needs section
+        specialNeedsElements.forEach(element => {
+            element.classList.add('special-needs-hidden');
+        });
+        
+        // Clear all selections
+        clearResourceSelections();
+    }
+}
+
+function loadResourcesForSelection(hasBaby, hasElderly, hasDisabled) {
+    const container = document.getElementById('dynamic-resources');
+    container.innerHTML = '';
+    
+    // Add Medical/Basic resources (always shown)
+    addResourceGroup('basic', 'Basic Medical Resources', container);
+    
+    // Add Baby resources if selected
+    if (hasBaby) {
+        addResourceGroup('baby', 'Baby Resources', container);
+    }
+    
+    // Add Elderly resources if selected
+    if (hasElderly) {
+        addResourceGroup('elderly', 'Elderly Resources', container);
+    }
+    
+    // Add Disabled resources if selected
+    if (hasDisabled) {
+        addResourceGroup('disabled', 'Disabled Resources', container);
+    }
+}
+
+function addResourceGroup(type, title, container) {
+    const resources = <?php echo json_encode($resources); ?>;
+    const items = resources[type] || [];
+    
+    if (items.length > 0) {
+        const group = document.createElement('div');
+        group.className = 'resource-options';
+        group.innerHTML = `
+            <h5><i class="fas fa-${getIconForType(type)}"></i> ${title}</h5>
+            <div id="resources-${type}">
+                ${items.map((item, index) => `
+                    <div class="resource-checkbox">
+                        <input type="checkbox" 
+                               id="${type}-${index}" 
+                               data-type="${type}"
+                               value="${item}"
+                               onchange="toggleResourceSelection(this)">
+                        <label for="${type}-${index}">${item}</label>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        container.appendChild(group);
+    }
+}
+
+function getIconForType(type) {
+    switch(type) {
+        case 'baby': return 'baby';
+        case 'elderly': return 'user-friends';
+        case 'disabled': return 'wheelchair';
+        case 'basic': return 'first-aid';
+        default: return 'box';
+    }
+}
+
+function toggleResourceSelection(checkbox) {
+    const resourceValue = checkbox.value;
+    const resourceDiv = checkbox.closest('.resource-checkbox');
+    
+    if (checkbox.checked) {
+        if (selectedResources.length >= maxSelections) {
+            checkbox.checked = false;
+            showSelectionLimitWarning();
+            return;
+        }
+        selectedResources.push(resourceValue);
+        resourceDiv.classList.add('selected');
+    } else {
+        const index = selectedResources.indexOf(resourceValue);
+        if (index > -1) {
+            selectedResources.splice(index, 1);
+        }
+        resourceDiv.classList.remove('selected');
+    }
+    
+    updateSelectionCounter();
+    updateHiddenInput();
+}
+
+function clearResourceSelections() {
+    selectedResources = [];
+    document.querySelectorAll('.resource-checkbox input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+        cb.closest('.resource-checkbox').classList.remove('selected');
+    });
+    updateSelectionCounter();
+    updateHiddenInput();
+}
+
+function updateSelectionCounter() {
+    const counter = document.getElementById('selection-counter');
+    if (counter) {
+        counter.textContent = `${selectedResources.length}/${maxSelections}`;
+    }
+}
+
+function showSelectionLimitWarning() {
+    alert(`You can only select a maximum of ${maxSelections} items. Please deselect some items first.`);
+}
+
+function updateHiddenInput() {
+    const hiddenInput = document.getElementById('selected_resources_input');
+    if (hiddenInput) {
+        hiddenInput.value = JSON.stringify(selectedResources);
+    }
+}
+
+// NEW: Shelter selection functions
+function updateShelterOptions() {
+    const districtInput = document.getElementById('district');
+    const district = districtInput.value.trim();
+    const shelterSection = document.getElementById('shelter-section');
+    const shelterOptions = document.getElementById('shelter-options');
+    
+    if (!district) {
+        shelterSection.classList.add('special-needs-hidden');
+        return;
+    }
+    
+    // Find matching district (case-insensitive)
+    const shelters = <?php echo json_encode($shelters); ?>;
+    let matchedDistrict = null;
+    
+    for (const districtName in shelters) {
+        if (district.toLowerCase().includes(districtName.toLowerCase()) || 
+            districtName.toLowerCase().includes(district.toLowerCase())) {
+            matchedDistrict = districtName;
+            break;
+        }
+    }
+    
+    if (matchedDistrict && shelters[matchedDistrict].length > 0) {
+        shelterSection.classList.remove('special-needs-hidden');
+        
+        // Clear existing options
+        shelterOptions.innerHTML = '';
+        
+        // Add "No shelter needed" option
+        const noShelterOption = document.createElement('div');
+        noShelterOption.className = 'shelter-option';
+        noShelterOption.innerHTML = `
+            <input type="radio" name="selected_shelter" id="shelter-none" value="No shelter needed - I will collect from another location" onchange="toggleShelterSelection(this)">
+            <label for="shelter-none">
+                <div class="shelter-name">No shelter needed - I will collect from another location</div>
+                <div class="shelter-details">
+                    <p><strong>Note:</strong> If you don't need to collect goods from a shelter, select this option.</p>
+                </div>
+            </label>
+        `;
+        shelterOptions.appendChild(noShelterOption);
+        
+        // Add available shelters
+        shelters[matchedDistrict].forEach((shelter, index) => {
+            const option = document.createElement('div');
+            option.className = 'shelter-option';
+            option.innerHTML = `
+                <input type="radio" name="selected_shelter" id="shelter-${index}" value="${shelter.name}" onchange="toggleShelterSelection(this)">
+                <label for="shelter-${index}">
+                    <div class="shelter-name">${shelter.name}</div>
+                    <div class="shelter-details">
+                        <p><strong>📍 Address:</strong> ${shelter.address}</p>
+                        <p><strong>📞 Phone:</strong> ${shelter.phone}</p>
+                        <p><strong>👥 Capacity:</strong> ${shelter.capacity}</p>
+                        <p><strong>🏪 Facilities:</strong> ${shelter.facilities}</p>
+                        <span class="shelter-status ${shelter.status.toLowerCase().replace(' ', '-')}">${shelter.status}</span>
+                    </div>
+                </label>
+            `;
+            shelterOptions.appendChild(option);
+        });
+    } else {
+        shelterSection.classList.add('special-needs-hidden');
+    }
+}
+
+function toggleShelterSelection(radio) {
+    // Remove selected class from all options
+    document.querySelectorAll('.shelter-option').forEach(option => {
+        option.classList.remove('selected');
+    });
+    
+    // Add selected class to clicked option
+    if (radio.checked) {
+        radio.closest('.shelter-option').classList.add('selected');
+    }
+}
+
+function validateForm() {
+    const hasBaby = document.getElementById('has_baby').checked;
+    const hasElderly = document.getElementById('has_elderly').checked;
+    const hasDisabled = document.getElementById('has_disabled').checked;
+    
+    const hasSpecialPerson = hasBaby || hasElderly || hasDisabled;
+    
+    // If special person exists but no special needs selected, show warning
+    if (hasSpecialPerson && selectedResources.length === 0) {
+        if (!confirm('You have special persons in your household but didn\'t select any special needs. Are you sure you don\'t need any special assistance? Click OK to continue without special needs, or Cancel to go back and select items.')) {
+            return false;
+        }
+    }
+    
+    // Validate selection limit
+    if (selectedResources.length > maxSelections) {
+        alert(`You can only select up to ${maxSelections} items. Please deselect some items.`);
+        return false;
+    }
+    
+    // Validate shelter selection (optional)
+    const district = document.getElementById('district').value.trim();
+    const shelterSection = document.getElementById('shelter-section');
+    
+    if (district && !shelterSection.classList.contains('special-needs-hidden')) {
+        const selectedShelter = document.querySelector('input[name="selected_shelter"]:checked');
+        if (!selectedShelter) {
+            alert('Please select a shelter option or choose "No shelter needed".');
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 function copyReference() {
     const refElement = document.querySelector('.ref-highlight');
     if (refElement) {
@@ -1061,6 +1851,19 @@ function copyReference() {
         });
     }
 }
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    toggleSpecialNeeds();
+    updateSelectionCounter();
+    
+    // Add event listener to district input for real-time shelter updates
+    const districtInput = document.getElementById('district');
+    if (districtInput) {
+        districtInput.addEventListener('input', updateShelterOptions);
+        districtInput.addEventListener('change', updateShelterOptions);
+    }
+});
 </script>
 </head>
 <body>
@@ -1102,7 +1905,7 @@ function copyReference() {
             <?php if (empty($message) || str_contains($message, 'Registration Failed')): ?>
             <h2><i class="fas fa-user-plus"></i> Registration Details</h2>
             
-            <form method="POST">
+            <form method="POST" onsubmit="return validateForm()">
                 
                 <!-- Section 1: Disaster Information -->
                 <div class="section-title">
@@ -1165,12 +1968,33 @@ function copyReference() {
                 </div>
                 
                 <div class="form-group">
-                    <input type="text" name="district" class="form-control" placeholder="District" required>
+                    <input type="text" name="district" id="district" class="form-control" placeholder="District (e.g., Melaka Tengah, Alor Gajah, Jasin, Bandaraya Melaka)" required>
                 </div>
 
-                <!-- Section 4: Household Information -->
+                <!-- NEW: Section 4: Shelter Selection -->
                 <div class="section-title">
-                    <i class="fas fa-users"></i> 4. Household Information
+                    <i class="fas fa-house-user"></i> 4. Select Collection Shelter (Optional)
+                </div>
+                
+                <div class="note">
+                    <i class="fas fa-lightbulb"></i> 
+                    <strong>Important:</strong> Select a nearby shelter to collect your emergency goods. Shelters will appear based on your district.
+                </div>
+                
+                <div id="shelter-section" class="shelter-section special-needs-hidden">
+                    <h5><i class="fas fa-map-marker-alt"></i> Available Shelters in Your District</h5>
+                    <div id="shelter-options" class="shelter-options">
+                        <!-- Shelters will be dynamically loaded here -->
+                    </div>
+                    <div class="note" style="margin-top: 10px;">
+                        <i class="fas fa-info-circle"></i> 
+                        <strong>Note:</strong> If you don't need to collect from a shelter, select "No shelter needed". Goods will be available at your selected shelter during distribution hours (8:00 AM - 8:00 PM).
+                    </div>
+                </div>
+
+                <!-- Section 5: Household Information -->
+                <div class="section-title">
+                    <i class="fas fa-users"></i> 5. Household Information
                 </div>
                 
                 <div class="form-group">
@@ -1180,32 +2004,42 @@ function copyReference() {
                 
                 <div class="checkbox-group">
                     <div class="checkbox-item">
-                        <input type="checkbox" name="has_baby" id="has_baby">
+                        <input type="checkbox" name="has_baby" id="has_baby" onclick="toggleSpecialNeeds()">
                         <label for="has_baby">Household has baby (below 2 years)</label>
                     </div>
                     <div class="checkbox-item">
-                        <input type="checkbox" name="has_elderly" id="has_elderly">
+                        <input type="checkbox" name="has_elderly" id="has_elderly" onclick="toggleSpecialNeeds()">
                         <label for="has_elderly">Household has elderly (above 65 years)</label>
                     </div>
                     <div class="checkbox-item">
-                        <input type="checkbox" name="has_disabled" id="has_disabled">
+                        <input type="checkbox" name="has_disabled" id="has_disabled" onclick="toggleSpecialNeeds()">
                         <label for="has_disabled">Household has disabled member</label>
                     </div>
                 </div>
 
-                <!-- Section 5: Special Needs Request -->
-                <div class="section-title">
-                    <i class="fas fa-hand-holding-heart"></i> 5. Special Needs Request (Optional)
+                <!-- Section 6: Resource Selection - DYNAMIC -->
+                <div class="section-title special-needs-section special-needs-hidden">
+                    <i class="fas fa-hand-holding-heart"></i> 6. Select Special Needs Resources
                 </div>
                 
-                <div class="note">
+                <div class="note special-needs-section special-needs-hidden">
                     <i class="fas fa-lightbulb"></i> 
-                    <strong>Important:</strong> You can view the list of special needs on the victim homepage, but special needs assistance is provided only while stock is available.
+                    <strong>Important:</strong> Select up to 3 items from the available resources below. Resources are fetched live from our database.
                 </div>
                 
-                <div class="form-group">
-                    <textarea name="special_needs" class="form-control" placeholder="e.g. Pampers size M (2 packs), baby formula (Enfamil), specific medicine (Insulin), wheelchair" rows="3"></textarea>
+                <!-- Selection Limit Warning -->
+                <div class="selection-info special-needs-section special-needs-hidden">
+                    <i class="fas fa-info-circle"></i>
+                    Select up to 3 items. Currently selected: <span id="selection-counter">0/3</span>
                 </div>
+                
+                <!-- Dynamic Resources Container -->
+                <div id="dynamic-resources" class="special-needs-section special-needs-hidden">
+                    <!-- Resources will be dynamically loaded here -->
+                </div>
+                
+                <!-- Hidden input to store selected resources -->
+                <input type="hidden" name="selected_resources" id="selected_resources_input" value="">
 
                 <button type="submit" class="submit-btn">
                     <i class="fas fa-paper-plane"></i> Submit Registration
