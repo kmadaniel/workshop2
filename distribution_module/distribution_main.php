@@ -28,19 +28,6 @@ if (isset($_SESSION['admin_api_verified']) && $_SESSION['admin_api_verified'] ==
     $_SESSION['admin_api_verified'] = true;
 }
 
-// Check if API session is still valid (10 minutes)
-if ($is_api_authenticated) {
-    $auth_time = $_SESSION['auth_time'] ?? 0;
-    $current_time = time();
-    
-    if (($current_time - $auth_time) > 600) { // 10 minutes expiry
-        // Session expired
-        session_destroy();
-        header("Location: http://10.147.17.30:8000/login.php");
-        exit;
-    }
-}
-
 // ========================================
 // USER DETECTION WITH CORRECT ORDER - FIXED
 // ========================================
@@ -100,25 +87,16 @@ elseif (isset($_SESSION['user_id']) && !isset($_SESSION['volunteer_id'])) {
         'auth_source' => 'Local System'
     ];
 }
-// 3. THIRD PRIORITY: Check for volunteer (ONLY if no admin session exists)
-elseif (isset($_SESSION['volunteer_id']) && !$is_api_authenticated && !isset($_SESSION['user_id'])) {
-    $user_type = 'volunteer';
-    $current_user = [
-        'id' => $_SESSION['volunteer_id'],
-        'name' => $_SESSION['volunteer_name'] ?? 'Volunteer',
-        'role' => 'Volunteer',
-        'avatar' => substr($_SESSION['volunteer_name'] ?? 'V', 0, 2),
-        'email' => $_SESSION['volunteer_email'] ?? 'volunteer@disasterrelief.org',
-        'phone' => $_SESSION['volunteer_phone'] ?? '',
-        'address' => $_SESSION['volunteer_address'] ?? '',
-        'ngo_affiliation' => $_SESSION['volunteer_ngo'] ?? '',
-        'skill_category' => $_SESSION['volunteer_skills'] ?? ''
-    ];
+// 3. VOLUNTEER DETECTED - REDIRECT TO LOGIN (REMOVED ACCESS)
+elseif (isset($_SESSION['volunteer_id']) && !$is_api_authenticated) {
+    // VOLUNTEER DETECTED - REDIRECT TO LOGIN (NO ACCESS TO THIS PAGE)
+    header("Location: http://10.147.17.30:8000/login.php");
+    exit;
 }
 // 4. Fallback - no valid session
 else {
-    // If no session at all, redirect to main system login gateway
-    if (!$is_api_authenticated && !isset($_SESSION['volunteer_id']) && !isset($_SESSION['user_id'])) {
+    // If no session at all, redirect to main system login
+    if (!$is_api_authenticated && !isset($_SESSION['user_id'])) {
         header("Location: http://10.147.17.30:8000/login.php");
         exit;
     }
@@ -132,6 +110,15 @@ else {
         'email' => 'guest@example.com',
         'api_verified' => false
     ];
+}
+
+// ========================================
+// ACCESS CONTROL: ONLY ADMINS AND STAFF CAN ACCESS
+// VOLUNTEERS ARE NOT ALLOWED
+// ========================================
+if ($user_type === 'guest') {
+    header("Location: http://10.147.17.30:8000/login.php");
+    exit;
 }
 
 // ========================================
@@ -171,6 +158,22 @@ function fetchFromAPI($url) {
     }
 }
 
+// Function to build full location from victim data
+function buildFullLocation($victim) {
+    $address = $victim['address'] ?? '';
+    $city = $victim['city'] ?? '';
+    $district = $victim['district'] ?? '';
+    $postal_code = $victim['postal_code'] ?? '';
+    
+    $full_location = '';
+    if (!empty($address)) $full_location .= $address;
+    if (!empty($city)) $full_location .= ', ' . $city;
+    if (!empty($district)) $full_location .= ', ' . $district;
+    if (!empty($postal_code)) $full_location .= ' ' . $postal_code;
+    
+    return trim($full_location, ', ');
+}
+
 // Initialize variables
 $stats = [
     'total_distributions' => 0,
@@ -193,30 +196,13 @@ $disaster_filter = 0;
 $status_options = [];
 $disaster_options = [];
 $error = null;
-$notification_count = 0;
+
+// Fetch victim data early for location data
+$victim_data = fetchFromAPI($VICTIM_API_URL);
 
 try {
     $database = new Database();
     $db = $database->getConnection();
-
-    // ========================================
-    // GET NOTIFICATION COUNT
-    // ========================================
-    try {
-        $notif_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND read_status = 0";
-        $notif_stmt = $db->prepare($notif_query);
-        if ($notif_stmt) {
-            $notif_stmt->bind_param("i", $current_user['id']);
-            $notif_stmt->execute();
-            $notif_result = $notif_stmt->get_result();
-            $notif_row = $notif_result->fetch_assoc();
-            $notification_count = $notif_row ? $notif_row['count'] : 0;
-            $notif_stmt->close();
-        }
-    } catch (Exception $e) {
-        // Silently continue if notifications table doesn't exist
-        $notification_count = 0;
-    }
 
     // ========================================
     // PAGINATION & FILTER PARAMETERS
@@ -286,6 +272,60 @@ try {
     // If no disasters from API, use empty array
     if (empty($disaster_options)) {
         $disaster_options = [];
+    }
+
+    // ========================================
+    // CREATE VICTIM LOOKUP ARRAY WITH LOCATION DATA
+    // ========================================
+    $victim_lookup = [];
+    $victim_location_lookup = []; // Store location data
+    
+    if ($victim_data && is_array($victim_data)) {
+        // If it's already parsed as an array
+        if (isset($victim_data[0]['victim_id'])) {
+            // Direct array structure
+            foreach ($victim_data as $victim) {
+                if (isset($victim['victim_id'])) {
+                    $victim_id = $victim['victim_id'];
+                    $victim_lookup[$victim_id] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
+                    
+                    // Store location data
+                    $full_location = buildFullLocation($victim);
+                    
+                    $victim_location_lookup[$victim_id] = [
+                        'full_location' => $full_location,
+                        'address' => $victim['address'] ?? '',
+                        'city' => $victim['city'] ?? '',
+                        'district' => $victim['district'] ?? '',
+                        'postal_code' => $victim['postal_code'] ?? '',
+                        'country' => $victim['country'] ?? '',
+                        'phone' => $victim['phone'] ?? ''
+                    ];
+                }
+            }
+        } 
+        // If it's in a 'data' key
+        elseif (isset($victim_data['data']) && is_array($victim_data['data'])) {
+            foreach ($victim_data['data'] as $victim) {
+                if (isset($victim['victim_id'])) {
+                    $victim_id = $victim['victim_id'];
+                    $victim_lookup[$victim_id] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
+                    
+                    // Store location data
+                    $full_location = buildFullLocation($victim);
+                    
+                    $victim_location_lookup[$victim_id] = [
+                        'full_location' => $full_location,
+                        'address' => $victim['address'] ?? '',
+                        'city' => $victim['city'] ?? '',
+                        'district' => $victim['district'] ?? '',
+                        'postal_code' => $victim['postal_code'] ?? '',
+                        'country' => $victim['country'] ?? '',
+                        'phone' => $victim['phone'] ?? ''
+                    ];
+                }
+            }
+        }
     }
 
     // ========================================
@@ -399,11 +439,6 @@ try {
     $dist_result = $dist_stmt->get_result();
     $recent_distributions = $dist_result->fetch_all(MYSQLI_ASSOC);
     $dist_stmt->close();
-
-    // ========================================
-    // GET VICTIM DATA FROM API
-    // ========================================
-    $victim_data = fetchFromAPI($VICTIM_API_URL);
 
     // ========================================
     // GET STATUS OPTIONS
@@ -609,13 +644,37 @@ if (empty($disaster_options)) {
         
         /* Add new styles for location display */
         .location-cell {
-            max-width: 150px;
+            max-width: 180px;
+            min-width: 150px;
+        }
+        
+        .location-cell i {
+            color: #e74c3c;
+            margin-right: 5px;
         }
         
         .distribution-location {
             font-size: 0.9em;
             color: #666;
             margin-top: 2px;
+        }
+        
+        .location-details {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 3px;
+            max-height: 60px;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        
+        .location-details::-webkit-scrollbar {
+            width: 3px;
+        }
+        
+        .location-details::-webkit-scrollbar-thumb {
+            background: #ddd;
+            border-radius: 3px;
         }
         
         .api-status-indicator {
@@ -799,11 +858,6 @@ if (empty($disaster_options)) {
             border-top: 1px solid #dee2e6;
         }
         
-        .pagination {
-            display: flex;
-            gap: 5px;
-        }
-        
         .page-link {
             padding: 8px 12px;
             border: 1px solid #dee2e6;
@@ -857,43 +911,27 @@ if (empty($disaster_options)) {
             background: #c0392b;
         }
         
-        /* Debug panel - REMOVE AFTER TESTING */
-        .debug-panel {
-            position: fixed;
-            bottom: 10px;
-            right: 10px;
-            background: white;
-            padding: 15px;
-            border: 2px solid #d32f2f;
-            border-radius: 8px;
-            z-index: 9999;
-            font-size: 11px;
+        /* Location tooltip */
+        .location-tooltip {
+            position: relative;
+            cursor: help;
+        }
+        
+        .location-tooltip:hover::after {
+            content: attr(data-location);
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: #333;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            white-space: pre-line;
             max-width: 300px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.2);
-            font-family: monospace;
-        }
-        
-        .debug-panel h4 {
-            margin: 0 0 10px 0;
-            color: #d32f2f;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 5px;
-        }
-        
-        .debug-panel p {
-            margin: 5px 0;
+            z-index: 100;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
             line-height: 1.4;
-        }
-        
-        .debug-panel .label {
-            font-weight: bold;
-            color: #333;
-            min-width: 100px;
-            display: inline-block;
-        }
-        
-        .debug-panel .value {
-            color: #007bff;
         }
     </style>
 </head>
@@ -932,13 +970,6 @@ if (empty($disaster_options)) {
                           title="<?php echo ($disaster_data ? 'API Online' : 'API Offline'); ?>"></span>
                 </div>
                 
-                <div class="notifications" id="notificationsBtn">
-                    <i class="fas fa-bell"></i>
-                    <?php if ($notification_count > 0): ?>
-                    <span class="notification-badge"><?php echo $notification_count; ?></span>
-                    <?php endif; ?>
-                </div>
-                
                 <div class="user-profile" id="userProfile">
                     <div class="user-avatar">
                         <?php echo $current_user['avatar']; ?>
@@ -956,13 +987,20 @@ if (empty($disaster_options)) {
                     <i class="fas fa-chevron-down"></i>
                 </div>
                 
-                <!-- Logout Button -->
+                <!-- FIXED: Proper logout/back buttons with session handling -->
                 <div class="logout-section">
-                    <form method="POST" action="logout_api.php" style="display: inline;">
-                        <button type="submit" class="logout-btn" title="Logout">
-                            <i class="fas fa-sign-out-alt"></i>
-                        </button>
-                    </form>
+                    <?php if ($is_api_authenticated): ?>
+                        <!-- API Admin: Go back to main system WITH session parameter -->
+                        <a href="http://10.147.17.30:8000/admin_dashboard.php?from_distribution=1&admin_id=<?php echo $admin_id ?? 0; ?>" 
+                           class="logout-btn" title="Back to Main System">
+                            <i class="fas fa-arrow-left"></i> Back
+                        </a>
+                    <?php else: ?>
+                        <!-- Local admin/staff: Normal logout -->
+                        <a href="logout.php" class="logout-btn" title="Logout">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -998,7 +1036,7 @@ if (empty($disaster_options)) {
                 </a>
             </li>
 
-              <li class="nav-item">
+            <li class="nav-item">
                 <a href="manage_execution.php" class="nav-link">
                     <i class="fas fa-users"></i>
                     <span class="nav-text">Manage Execution</span>
@@ -1006,13 +1044,23 @@ if (empty($disaster_options)) {
                 </a>
             </li>
 
-            <!-- Logout Section at bottom -->
+            <!-- Logout Section at bottom - FIXED -->
             <li class="nav-divider"></li>
             <li class="nav-item logout-item">
-                <a href="logout_api.php" class="nav-link logout-link">
-                    <i class="fas fa-sign-out-alt"></i>
-                    <span class="nav-text">Logout</span>
-                </a>
+                <?php if ($is_api_authenticated): ?>
+                    <!-- API Admin: Go back to main system WITH session parameter -->
+                    <a href="http://10.147.17.30:8000/admin_dashboard.php?from_distribution=1&admin_id=<?php echo $admin_id ?? 0; ?>" 
+                       class="nav-link logout-link">
+                        <i class="fas fa-arrow-left"></i>
+                        <span class="nav-text">Back to Main System</span>
+                    </a>
+                <?php else: ?>
+                    <!-- Local admin/staff: Normal logout -->
+                    <a href="logout.php" class="nav-link logout-link">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span class="nav-text">Logout</span>
+                    </a>
+                <?php endif; ?>
             </li>
         </ul>
     </nav>
@@ -1046,7 +1094,9 @@ if (empty($disaster_options)) {
                         <span>Verified via Main System API</span>
                     </div>
                     
-                    <a href="http://10.147.17.30:8000/admin_profile.php" class="dropdown-item" target="_blank">
+                    <!-- Main System Profile Link with parameters -->
+                    <a href="http://10.147.17.30:8000/admin_profile.php?from_distribution=1&admin_id=<?php echo $admin_id ?? 0; ?>" 
+                       class="dropdown-item" target="_blank">
                         <i class="fas fa-user" style="color: #3498db;"></i>
                         <span>View Main Profile</span>
                     </a>
@@ -1058,22 +1108,22 @@ if (empty($disaster_options)) {
                     </a>
                 <?php endif; ?>
                 
-                <a href="notifications.php" class="dropdown-item">
-                    <i class="fas fa-bell" style="color: #f39c12;"></i>
-                    <span>Notifications</span>
-                    <?php if ($notification_count > 0): ?>
-                    <span class="badge" style="background: #f44336; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: auto;">
-                        <?php echo $notification_count; ?>
-                    </span>
-                    <?php endif; ?>
-                </a>
-                
                 <div style="height: 1px; background: #eee; margin: 10px 0;"></div>
                 
-                <a href="logout_api.php" class="dropdown-item">
-                    <i class="fas fa-sign-out-alt"></i>
-                    <span>Logout</span>
-                </a>
+                <?php if ($is_api_authenticated): ?>
+                    <!-- API Admin goes back to main system WITH parameters -->
+                    <a href="http://10.147.17.30:8000/admin_dashboard.php?from_distribution=1&admin_id=<?php echo $admin_id ?? 0; ?>" 
+                       class="dropdown-item">
+                        <i class="fas fa-arrow-left"></i>
+                        <span>Back to Main System</span>
+                    </a>
+                <?php else: ?>
+                    <!-- Local admin/staff uses normal logout -->
+                    <a href="logout.php" class="dropdown-item">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span>Logout</span>
+                    </a>
+                <?php endif; ?>
             </div>
             
             <div class="dropdown-footer">
@@ -1081,67 +1131,6 @@ if (empty($disaster_options)) {
                 <small>Authenticated via Main System API</small><br>
                 <?php endif; ?>
                 <small>Session started: <?php echo date('h:i A', $_SESSION['auth_time'] ?? time()); ?></small>
-            </div>
-        </div>
-
-        <!-- Notifications Dropdown -->
-        <div class="notifications-dropdown" id="notificationsDropdown">
-            <div class="dropdown-header" style="padding: 15px 20px; border-bottom: 1px solid #eee;">
-                <h4 style="margin: 0; font-size: 16px;">Notifications</h4>
-                <button id="markAllRead" style="background: none; border: none; color: #3498db; font-size: 12px; cursor: pointer;">Mark all as read</button>
-            </div>
-            
-            <div class="dropdown-menu">
-                <?php
-                // Fetch notifications from database
-                $notifications = [];
-                try {
-                    $notif_query = "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
-                    $notif_stmt = $db->prepare($notif_query);
-                    if ($notif_stmt) {
-                        $notif_stmt->bind_param("i", $current_user['id']);
-                        $notif_stmt->execute();
-                        $notif_result = $notif_stmt->get_result();
-                        while ($notif_row = $notif_result->fetch_assoc()) {
-                            $notifications[] = $notif_row;
-                        }
-                        $notif_stmt->close();
-                    }
-                } catch (Exception $e) {
-                    // Silently continue
-                }
-                
-                if (empty($notifications)): ?>
-                <div class="notification-item" style="padding: 20px; text-align: center; color: #95a5a6;">
-                    <i class="fas fa-bell-slash" style="font-size: 24px; margin-bottom: 10px;"></i>
-                    <p>No notifications</p>
-                </div>
-                <?php else: 
-                    foreach ($notifications as $notif): 
-                        $icon = 'fas fa-bell';
-                        $color = '#3498db';
-                        $bg_color = $notif['read_status'] == 0 ? '#f8fdff' : 'white';
-                ?>
-                <div class="notification-item <?php echo $notif['read_status'] == 0 ? 'unread' : ''; ?>" 
-                     style="padding: 15px 20px; border-bottom: 1px solid #f5f5f5; background: <?php echo $bg_color; ?>; cursor: pointer;"
-                     onclick="window.location.href='notifications.php'">
-                    <div style="display: flex; gap: 10px;">
-                        <div style="color: <?php echo $color; ?>; font-size: 18px;">
-                            <i class="<?php echo $icon; ?>"></i>
-                        </div>
-                        <div style="flex: 1;">
-                            <strong style="font-size: 14px;"><?php echo htmlspecialchars($notif['title']); ?></strong>
-                            <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;"><?php echo htmlspecialchars($notif['message']); ?></p>
-                            <small style="color: #95a5a6;"><?php echo date('M j, g:i A', strtotime($notif['created_at'])); ?></small>
-                        </div>
-                    </div>
-                </div>
-                <?php endforeach; 
-                endif; ?>
-            </div>
-            
-            <div class="dropdown-footer" style="padding: 12px 20px; text-align: center; background: #f8f9fa;">
-                <a href="notifications.php" style="color: #3498db; text-decoration: none; font-size: 13px;">View all notifications</a>
             </div>
         </div>
 
@@ -1301,7 +1290,7 @@ if (empty($disaster_options)) {
             </div>
         </div>
 
-        <!-- Recent Distributions Table - FIXED FOR CORRECT API STRUCTURE -->
+        <!-- Recent Distributions Table - WITH LOCATION DATA -->
         <div class="card animated-card">
             <div class="card-header">
                 <h2>
@@ -1357,28 +1346,6 @@ if (empty($disaster_options)) {
                             }
                         }
                         
-                        // Create a lookup array for victim names from API
-                        $victim_lookup = [];
-                        if (isset($victim_data) && is_array($victim_data)) {
-                            // If it's already parsed as an array
-                            if (isset($victim_data[0]['victim_id'])) {
-                                // Direct array structure
-                                foreach ($victim_data as $victim) {
-                                    if (isset($victim['victim_id'])) {
-                                        $victim_lookup[$victim['victim_id']] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
-                                    }
-                                }
-                            } 
-                            // If it's in a 'data' key
-                            elseif (isset($victim_data['data']) && is_array($victim_data['data'])) {
-                                foreach ($victim_data['data'] as $victim) {
-                                    if (isset($victim['victim_id'])) {
-                                        $victim_lookup[$victim['victim_id']] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
-                                    }
-                                }
-                            }
-                        }
-                        
                         foreach ($recent_distributions as $row): 
                             // Get disaster name from lookup array
                             $disaster_id = $row['disaster_id'];
@@ -1386,8 +1353,9 @@ if (empty($disaster_options)) {
                                 ? $disaster_lookup[$disaster_id] 
                                 : "Disaster #" . $disaster_id;
                             
-                            // Get victim names for this distribution
+                            // Get victim names and locations for this distribution
                             $victim_names_array = [];
+                            $victim_locations_array = [];
                             $victim_count = $row['victim_count'] ?? 0;
                             
                             if ($victim_count > 0) {
@@ -1418,6 +1386,14 @@ if (empty($disaster_options)) {
                                                 $victim_names_array[] = "Victim #" . $victim_id;
                                             }
                                         }
+                                        
+                                        // Get victim location if available
+                                        if (isset($victim_location_lookup[$victim_id])) {
+                                            $victim_location = $victim_location_lookup[$victim_id]['full_location'];
+                                            if (!empty($victim_location) && !in_array($victim_location, $victim_locations_array)) {
+                                                $victim_locations_array[] = $victim_location;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1430,6 +1406,17 @@ if (empty($disaster_options)) {
                                 $victim_names_display = implode(', ', array_slice($victim_names_array, 0, 3));
                                 if (count($victim_names_array) > 3) {
                                     $victim_names_display .= '... (+' . (count($victim_names_array) - 3) . ' more)';
+                                }
+                            }
+                            
+                            // Format victim locations for display
+                            $victim_locations_display = '';
+                            $victim_locations_full = '';
+                            if (!empty($victim_locations_array)) {
+                                $victim_locations_full = implode("\n", $victim_locations_array);
+                                $victim_locations_display = implode(', ', array_slice($victim_locations_array, 0, 2));
+                                if (count($victim_locations_array) > 2) {
+                                    $victim_locations_display .= '... (+' . (count($victim_locations_array) - 2) . ' more)';
                                 }
                             }
                         ?>
@@ -1480,7 +1467,23 @@ if (empty($disaster_options)) {
                             <td>
                                 <div class="location-cell">
                                     <i class="fas fa-map-marker-alt"></i>
-                                    <div><?php echo htmlspecialchars($row['distribution_location'] ?? 'N/A'); ?></div>
+                                    <div class="location-tooltip" data-location="<?php echo htmlspecialchars($victim_locations_full); ?>">
+                                        <?php 
+                                        // First check if there's a distribution location
+                                        if (!empty($row['distribution_location'])) {
+                                            echo htmlspecialchars($row['distribution_location']);
+                                        } elseif (!empty($victim_locations_display)) {
+                                            echo htmlspecialchars($victim_locations_display);
+                                        } else {
+                                            echo '<span style="color: #999; font-style: italic;">N/A</span>';
+                                        }
+                                        ?>
+                                    </div>
+                                    <?php if ($victim_count > 0 && !empty($victim_ids)): ?>
+                                    <div style="font-size: 0.8em; color: #666; margin-top: 3px;">
+                                        <i class="fas fa-users"></i> <?php echo $victim_count; ?> families
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
                             </td>
                             
@@ -1555,14 +1558,6 @@ if (empty($disaster_options)) {
                                             <i class="fas fa-user-plus"></i>
                                         </a>
                                     <?php endif; ?>
-                                    
-                                    <!-- Execute button -->
-                                    <?php if ($row['status'] == 'Assigned'): ?>
-                                        <a href="execute_distribution.php?distribution_id=<?php echo $row['distribution_id']; ?>" 
-                                           class="btn btn-orange btn-sm action-btn" title="Execute Distribution">
-                                            <i class="fas fa-play-circle"></i>
-                                        </a>
-                                    <?php endif; ?>
 
                                     <!-- Delete button (only for admins) -->
                                     <?php if ($is_api_authenticated && $row['status'] == 'Assigned'): ?>
@@ -1579,8 +1574,9 @@ if (empty($disaster_options)) {
                                             data-id="<?php echo $row['distribution_id']; ?>" 
                                             data-victims="<?php echo htmlspecialchars($victim_names_display); ?>"
                                             data-victims-full="<?php echo htmlspecialchars($victim_names_full); ?>"
+                                            data-locations="<?php echo htmlspecialchars($victim_locations_display); ?>"
+                                            data-locations-full="<?php echo htmlspecialchars($victim_locations_full); ?>"
                                             data-disaster="<?php echo htmlspecialchars($disaster_name); ?>"
-                                            data-location="<?php echo htmlspecialchars($row['distribution_location'] ?? ''); ?>"
                                             data-coordinator="<?php echo htmlspecialchars($row['coordinator_name'] ?? ''); ?>"
                                             data-status="<?php echo $row['status']; ?>"
                                             data-date="<?php echo date('Y-m-d', strtotime($row['date'])); ?>"
@@ -1716,12 +1712,9 @@ if (empty($disaster_options)) {
             // Initialize dropdowns
             const userProfile = document.getElementById('userProfile');
             const userDropdown = document.getElementById('userDropdown');
-            const notificationsBtn = document.getElementById('notificationsBtn');
-            const notificationsDropdown = document.getElementById('notificationsDropdown');
             
-            // Hide dropdowns initially
+            // Hide dropdown initially
             if (userDropdown) userDropdown.style.display = 'none';
-            if (notificationsDropdown) notificationsDropdown.style.display = 'none';
             
             // User profile dropdown functionality
             if (userProfile && userDropdown) {
@@ -1731,28 +1724,8 @@ if (empty($disaster_options)) {
                     // Toggle user dropdown
                     if (userDropdown.style.display === 'none' || userDropdown.style.display === '') {
                         userDropdown.style.display = 'block';
-                        if (notificationsDropdown) {
-                            notificationsDropdown.style.display = 'none';
-                        }
                     } else {
                         userDropdown.style.display = 'none';
-                    }
-                });
-            }
-            
-            // Notifications dropdown functionality
-            if (notificationsBtn && notificationsDropdown) {
-                notificationsBtn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    
-                    // Toggle notifications dropdown
-                    if (notificationsDropdown.style.display === 'none' || notificationsDropdown.style.display === '') {
-                        notificationsDropdown.style.display = 'block';
-                        if (userDropdown) {
-                            userDropdown.style.display = 'none';
-                        }
-                    } else {
-                        notificationsDropdown.style.display = 'none';
                     }
                 });
             }
@@ -1761,9 +1734,6 @@ if (empty($disaster_options)) {
             document.addEventListener('click', function(e) {
                 if (userDropdown && !userProfile.contains(e.target) && !userDropdown.contains(e.target)) {
                     userDropdown.style.display = 'none';
-                }
-                if (notificationsDropdown && !notificationsBtn.contains(e.target) && !notificationsDropdown.contains(e.target)) {
-                    notificationsDropdown.style.display = 'none';
                 }
             });
             
@@ -1784,40 +1754,6 @@ if (empty($disaster_options)) {
                             window.location.href = '?' + urlParams.toString();
                         }
                     }
-                });
-            }
-            
-            // Mark all notifications as read
-            const markAllReadBtn = document.getElementById('markAllRead');
-            if (markAllReadBtn) {
-                markAllReadBtn.addEventListener('click', function() {
-                    // Send AJAX request to mark all as read
-                    fetch('mark_notifications_read.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                        },
-                        body: 'user_id=<?php echo $current_user["id"]; ?>'
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            // Remove unread styles
-                            document.querySelectorAll('.notification-item.unread').forEach(item => {
-                                item.classList.remove('unread');
-                                item.style.background = 'white';
-                            });
-                            // Hide notification badge
-                            const notificationBadge = document.querySelector('.notification-badge');
-                            if (notificationBadge) {
-                                notificationBadge.style.display = 'none';
-                            }
-                            showToast('All notifications marked as read', 'success');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error marking notifications as read:', error);
-                    });
                 });
             }
             
@@ -1883,12 +1819,13 @@ if (empty($disaster_options)) {
                 quickViewButtons.forEach(button => {
                     button.addEventListener('click', function() {
                         const distributionId = this.getAttribute('data-id');
-                        // Use data-victims-full attribute for full list of victim names
                         const victimNames = this.getAttribute('data-victims-full') || 
                                           this.getAttribute('data-victims') || 
                                           'None';
+                        const victimLocations = this.getAttribute('data-locations-full') ||
+                                              this.getAttribute('data-locations') ||
+                                              'No location data';
                         const disasterName = this.getAttribute('data-disaster');
-                        const location = this.getAttribute('data-location');
                         const coordinator = this.getAttribute('data-coordinator');
                         const status = this.getAttribute('data-status');
                         const date = this.getAttribute('data-date');
@@ -1903,6 +1840,15 @@ if (empty($disaster_options)) {
                             victimNamesHTML = '<div><i>No victims assigned</i></div>';
                         }
                         
+                        // Create location HTML
+                        let locationHTML = '';
+                        if (victimLocations !== 'No location data') {
+                            const locationsArray = victimLocations.split('\n');
+                            locationHTML = locationsArray.map(location => `<div>📍 ${location}</div>`).join('');
+                        } else {
+                            locationHTML = '<div><i>No location data available</i></div>';
+                        }
+                        
                         modalContent.innerHTML = `
                             <div class="distribution-details">
                                 <div class="detail-row">
@@ -1912,10 +1858,6 @@ if (empty($disaster_options)) {
                                 <div class="detail-row">
                                     <div class="detail-label">Disaster</div>
                                     <div class="detail-value">${disasterName}</div>
-                                </div>
-                                <div class="detail-row">
-                                    <div class="detail-label">Location</div>
-                                    <div class="detail-value">📍 ${location}</div>
                                 </div>
                                 <div class="detail-row">
                                     <div class="detail-label">Date & Time</div>
@@ -1934,6 +1876,14 @@ if (empty($disaster_options)) {
                                     <div class="detail-value">
                                         <div style="margin-top: 5px; font-size: 0.9em; color: #666;">
                                             ${victimNamesHTML}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="detail-row">
+                                    <div class="detail-label">Locations</div>
+                                    <div class="detail-value">
+                                        <div style="margin-top: 5px; font-size: 0.9em; color: #666; max-height: 100px; overflow-y: auto;">
+                                            ${locationHTML}
                                         </div>
                                     </div>
                                 </div>
@@ -1990,7 +1940,8 @@ if (empty($disaster_options)) {
                     const row = document.querySelector(`#row-${distributionId}`);
                     if (row) {
                         const disasterName = row.querySelector('.disaster-cell strong').textContent;
-                        const location = row.querySelector('.location-cell').textContent.replace('📍', '').trim();
+                        const locationElement = row.querySelector('.location-tooltip');
+                        const location = locationElement ? locationElement.textContent.trim() : 'N/A';
                         const status = row.querySelector('.badge').textContent.trim();
                         const victimCount = row.querySelector('.victim-count-badge i').nextSibling.textContent.trim();
                         const coordinatorName = row.querySelector('td:nth-child(6) div')?.textContent || 'Not assigned';
@@ -2190,14 +2141,6 @@ if (empty($disaster_options)) {
             
             console.log('Dashboard initialization complete!');
         });
-        
-        // Auto-refresh every 60 seconds
-        let refreshInterval = setInterval(function() {
-            showToast('Auto-refreshing data...', 'info');
-            setTimeout(() => {
-                location.reload();
-            }, 1000);
-        }, 60000);
     </script>
 </body>
 </html>

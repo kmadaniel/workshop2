@@ -32,22 +32,7 @@ $create_cancellations_table = "
     )
 ";
 
-$create_coordinator_alerts_table = "
-    CREATE TABLE IF NOT EXISTS coordinator_alerts (
-        alert_id INT PRIMARY KEY AUTO_INCREMENT,
-        distribution_id INT NOT NULL,
-        message TEXT NOT NULL,
-        alert_type ENUM('volunteer_cancelled', 'status_change', 'new_volunteer', 'system') DEFAULT 'system',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX (distribution_id),
-        INDEX (is_read),
-        INDEX (created_at)
-    )
-";
-
 $db->query($create_cancellations_table);
-$db->query($create_coordinator_alerts_table);
 
 // Check if user is logged in
 if (!isset($_SESSION['volunteer_id'])) {
@@ -311,74 +296,66 @@ try {
 }
 
 /* ----------------------------------------
-   GET VOLUNTEER INFORMATION FROM API
+   GET VOLUNTEER INFORMATION FROM API - IMPROVED
 ---------------------------------------- */
 try {
-    // Fetch volunteer data from API
-    $apiResult = fetchDataFromAPI($API_URL, ['volunteer_id' => $volunteer_id]);
+    // Fetch all volunteers from API to find our specific volunteer
+    $apiResult = fetchAllFromAPI($API_URL);
     
     if (!$apiResult['success']) {
         throw new Exception($apiResult['error']);
     }
     
-    if (empty($apiResult['data'])) {
-        // Try fetching all volunteers and find the specific one
-        $all_volunteers_result = fetchAllFromAPI($API_URL);
-        if ($all_volunteers_result['success'] && !empty($all_volunteers_result['data'])) {
-            $foundVolunteer = null;
-            foreach ($all_volunteers_result['data'] as $volunteer) {
-                $apiVolunteerId = $volunteer['VolunteerID'] ?? $volunteer['volunteer_id'] ?? $volunteer['id'] ?? null;
-                if (intval($apiVolunteerId) == $volunteer_id) {
-                    $foundVolunteer = $volunteer;
-                    break;
-                }
-            }
-            
-            if (!$foundVolunteer) {
-                throw new Exception("Volunteer ID $volunteer_id not found in API data!");
-            }
-            
-            $apiVolunteer = $foundVolunteer;
-        } else {
-            throw new Exception("Volunteer not found in API!");
-        }
-    } else {
-        $apiVolunteer = $apiResult['data'];
+    $all_volunteers = $apiResult['data'];
+    
+    // Find the specific volunteer by ID
+    $foundVolunteer = null;
+    foreach ($all_volunteers as $volunteer) {
+        // Try different field names for volunteer ID
+        $apiVolunteerId = $volunteer['VolunteerID'] ?? 
+                         $volunteer['volunteer_id'] ?? 
+                         $volunteer['id'] ?? 
+                         $volunteer['Volunteer_ID'] ?? null;
         
-        // Check if data is nested
-        if (isset($apiVolunteer['data']) && is_array($apiVolunteer['data'])) {
-            $apiVolunteer = $apiVolunteer['data'];
+        // Convert to integer and compare
+        $apiVolunteerIdInt = intval($apiVolunteerId);
+        
+        if ($apiVolunteerIdInt === $volunteer_id) {
+            $foundVolunteer = $volunteer;
+            break;
+        }
+    }
+    
+    if (!$foundVolunteer) {
+        // If not found in the array, try fetching by specific ID
+        $specificResult = fetchDataFromAPI($API_URL, ['id' => $volunteer_id]);
+        if ($specificResult['success']) {
+            $foundVolunteer = $specificResult['data'];
+        } else {
+            throw new Exception("Volunteer ID $volunteer_id not found in API data!");
         }
     }
     
     // Map API fields to our expected format
     $volunteer_info = [
         'volunteer_id' => $volunteer_id,
-        'name' => $apiVolunteer['FullName'] ?? 
-                 $apiVolunteer['fullName'] ?? 
-                 $apiVolunteer['name'] ?? 
+        'name' => $foundVolunteer['FullName'] ?? 
+                 $foundVolunteer['full_name'] ?? 
+                 $foundVolunteer['name'] ?? 
                  'Volunteer ' . $volunteer_id,
-        'email' => $apiVolunteer['Email'] ?? 
-                  $apiVolunteer['email'] ?? 
-                  '',
-        'phone' => $apiVolunteer['Phone'] ?? 
-                  $apiVolunteer['phone'] ?? 
-                  $apiVolunteer['contact_number'] ?? 
-                  '',
-        'address' => $apiVolunteer['Address'] ?? 
-                    $apiVolunteer['address'] ?? 
-                    '',
-        'ngo_affiliation' => $apiVolunteer['AssignedNGO'] ?? 
-                           $apiVolunteer['assignedNGO'] ?? 
-                           $apiVolunteer['ngo'] ?? 
-                           '',
-        'skill_category' => $apiVolunteer['SkillCategory'] ?? 
-                          $apiVolunteer['skillCategory'] ?? 
-                          $apiVolunteer['skills'] ?? 
-                          $apiVolunteer['Role'] ?? 
-                          'Volunteer',
-        'status' => $apiVolunteer['Status'] ?? 
-                   $apiVolunteer['status'] ?? 
+        'email' => $foundVolunteer['Email'] ?? 
+                  $foundVolunteer['email'] ?? '',
+        'phone' => $foundVolunteer['Phone'] ?? 
+                  $foundVolunteer['phone'] ?? '',
+        'address' => $foundVolunteer['Address'] ?? 
+                    $foundVolunteer['address'] ?? '',
+        'ngo_affiliation' => $foundVolunteer['AssignedNGO'] ?? 
+                            $foundVolunteer['ngo_affiliation'] ?? '',
+        'skill_category' => $foundVolunteer['SkillCategory'] ?? 
+                           $foundVolunteer['skill_category'] ?? 
+                           'Volunteer',
+        'status' => $foundVolunteer['Status'] ?? 
+                   $foundVolunteer['status'] ?? 
                    'Active',
         'role' => 'Volunteer'
     ];
@@ -397,27 +374,26 @@ try {
 }
 
 /* ----------------------------------------
+   CHECK VOLUNTEER STATUS - IMPORTANT
+   If volunteer is inactive in API, don't show assignments
+---------------------------------------- */
+$is_volunteer_active = true;
+if (isset($volunteer_info['status']) && 
+    (strtolower($volunteer_info['status']) === 'inactive' || 
+     strtolower($volunteer_info['status']) === 'suspended' ||
+     strtolower($volunteer_info['status']) === 'pending')) {
+    $is_volunteer_active = false;
+    $error = "Your volunteer account is currently <strong>{$volunteer_info['status']}</strong>. You cannot access distribution assignments.";
+}
+
+/* ----------------------------------------
    GET VOLUNTEER'S DISTRIBUTION ASSIGNMENTS
    WITH LATEST TRACKING STATUS - IMPROVED
 ---------------------------------------- */
-if ($volunteer_info) {
+if ($volunteer_info && $is_volunteer_active) {
     try {
-        // Create distribution_volunteer table if it doesn't exist
-        $create_dv_table = "
-            CREATE TABLE IF NOT EXISTS distribution_volunteer (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                distribution_id INT NOT NULL,
-                volunteer_id INT NOT NULL,
-                status ENUM('Assigned', 'Active', 'In Progress', 'Completed', 'Cancelled') DEFAULT 'Assigned',
-                role VARCHAR(50),
-                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX (distribution_id),
-                INDEX (volunteer_id),
-                UNIQUE KEY unique_assignment (distribution_id, volunteer_id)
-            )
-        ";
-        $db->query($create_dv_table);
+        // Note: Using your existing distribution_volunteer table structure
+        // Your table has: id, volunteer_id, distribution_id, role, status, assigned_timestamp, completed_at
         
         // Get active assignments from distribution_volunteer table (excluding cancelled)
         $active_query = "
@@ -444,17 +420,16 @@ if ($volunteer_info) {
                 )
             ) dt ON dv.distribution_id = dt.distribution_id AND dv.volunteer_id = dt.volunteer_id
             WHERE dv.volunteer_id = ? 
-            AND dv.status IN ('Assigned', 'Active', 'In Progress')
+            AND dv.status IN ('Assigned', 'Active')
             AND d.status != 'Completed'
             AND dv.distribution_id NOT IN (
                 SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dv.volunteer_id
             )
             ORDER BY 
                 CASE dv.status
-                    WHEN 'In Progress' THEN 1
-                    WHEN 'Active' THEN 2
-                    WHEN 'Assigned' THEN 3
-                    ELSE 4
+                    WHEN 'Active' THEN 1
+                    WHEN 'Assigned' THEN 2
+                    ELSE 3
                 END,
                 d.date ASC
         ";
@@ -775,7 +750,7 @@ if ($volunteer_info) {
 /* ----------------------------------------
    GET STATISTICS
 ---------------------------------------- */
-if ($volunteer_info) {
+if ($volunteer_info && $is_volunteer_active) {
     $stats['active_assignments'] = count($upcoming_assignments);
     
     try {
@@ -887,7 +862,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 
                 // 1. Update distribution_volunteer status to 'Active'
-                $update_query = "UPDATE distribution_volunteer SET status = 'Active', updated_at = NOW() WHERE distribution_id = ? AND volunteer_id = ?";
+                $update_query = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
                 $stmt = $db->prepare($update_query);
                 if ($stmt) {
                     $stmt->bind_param("ii", $distribution_id, $volunteer_id);
@@ -915,33 +890,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // If distribution is still in 'Assigned' status, update it to 'In Progress'
                 if ($current_distribution_status === 'Assigned') {
-                    $update_dist_query = "UPDATE distribution SET status = 'In Progress', updated_at = NOW() WHERE distribution_id = ?";
+                    // CORRECTED: Your distribution table doesn't have updated_at column
+                    $update_dist_query = "UPDATE distribution SET status = 'In Progress' WHERE distribution_id = ?";
                     $dist_stmt = $db->prepare($update_dist_query);
                     if ($dist_stmt) {
                         $dist_stmt->bind_param("i", $distribution_id);
                         $dist_stmt->execute();
                         $dist_stmt->close();
                         
-                        // Log the status change - FIXED
+                        // Log the status change if table exists
                         $new_status = 'In Progress';
-                        $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'volunteer', 'Volunteer confirmed assignment')";
-                        $log_change_stmt = $db->prepare($log_change_query);
-                        if ($log_change_stmt) {
-                            $log_change_stmt->bind_param("iss", $distribution_id, $current_distribution_status, $new_status);
-                            $log_change_stmt->execute();
-                            $log_change_stmt->close();
+                        $table_check = $db->query("SHOW TABLES LIKE 'status_changes'");
+                        if ($table_check && $table_check->num_rows > 0) {
+                            $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'volunteer', 'Volunteer confirmed assignment')";
+                            $log_change_stmt = $db->prepare($log_change_query);
+                            if ($log_change_stmt) {
+                                $log_change_stmt->bind_param("iss", $distribution_id, $current_distribution_status, $new_status);
+                                $log_change_stmt->execute();
+                                $log_change_stmt->close();
+                            }
                         }
                     }
                 }
                 
-                // 3. Create volunteer alert/notification
+                // 3. Create volunteer alert/notification if table exists
                 $alert_message = "You have confirmed your assignment for Distribution #{$distribution_id}. You can now start the distribution when ready.";
-                $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message, created_at) VALUES (?, ?, ?, NOW())";
-                $alert_stmt = $db->prepare($alert_query);
-                if ($alert_stmt) {
-                    $alert_stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_message);
-                    $alert_stmt->execute();
-                    $alert_stmt->close();
+                $table_check = $db->query("SHOW TABLES LIKE 'volunteer_alerts'");
+                if ($table_check && $table_check->num_rows > 0) {
+                    $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message, created_at) VALUES (?, ?, ?, NOW())";
+                    $alert_stmt = $db->prepare($alert_query);
+                    if ($alert_stmt) {
+                        $alert_stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_message);
+                        $alert_stmt->execute();
+                        $alert_stmt->close();
+                    }
                 }
                 
                 $db->commit();
@@ -1044,6 +1026,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Only update if it's currently in a volunteer-assigned state
                     $volunteer_states = ['Assigned', 'In Transit', 'Active', 'In Progress'];
                     if (in_array($current_status, $volunteer_states)) {
+                        // CORRECTED: Your distribution table doesn't have updated_at column
                         $update_dist_query = "UPDATE distribution SET status = 'Volunteer Needed' WHERE distribution_id = ?";
                         $dist_stmt = $db->prepare($update_dist_query);
                         if ($dist_stmt) {
@@ -1051,14 +1034,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $dist_stmt->execute();
                             $dist_stmt->close();
                             
-                            // Log status change
+                            // Log status change if table exists
                             $new_status = 'Volunteer Needed';
-                            $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'system', 'All volunteers declined/cancelled')";
-                            $log_change_stmt = $db->prepare($log_change_query);
-                            if ($log_change_stmt) {
-                                $log_change_stmt->bind_param("iss", $distribution_id, $current_status, $new_status);
-                                $log_change_stmt->execute();
-                                $log_change_stmt->close();
+                            $table_check = $db->query("SHOW TABLES LIKE 'status_changes'");
+                            if ($table_check && $table_check->num_rows > 0) {
+                                $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'system', 'All volunteers declined/cancelled')";
+                                $log_change_stmt = $db->prepare($log_change_query);
+                                if ($log_change_stmt) {
+                                    $log_change_stmt->bind_param("iss", $distribution_id, $current_status, $new_status);
+                                    $log_change_stmt->execute();
+                                    $log_change_stmt->close();
+                                }
                             }
                         }
                     }
@@ -1071,16 +1057,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $log_stmt->bind_param("iis", $distribution_id, $volunteer_id, $reason);
                     $log_stmt->execute();
                     $log_stmt->close();
-                }
-                
-                // 7. Create notification for coordinator
-                $notification_message = "Volunteer ID {$volunteer_id} cancelled assignment for Distribution #{$distribution_id}. Reason: {$reason}";
-                $coordinator_notification = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type, created_at) VALUES (?, ?, 'volunteer_cancelled', NOW())";
-                $notif_stmt = $db->prepare($coordinator_notification);
-                if ($notif_stmt) {
-                    $notif_stmt->bind_param("is", $distribution_id, $notification_message);
-                    $notif_stmt->execute();
-                    $notif_stmt->close();
                 }
                 
                 $db->commit();
@@ -2049,6 +2025,21 @@ if (isset($_GET['success'])) {
             background-color: #ff7675;
             color: white;
         }
+        
+        /* Inactive volunteer warning */
+        .inactive-warning {
+            background: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+        
+        .inactive-warning i {
+            color: #ffc107;
+            font-size: 24px;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body>
@@ -2061,6 +2052,7 @@ if (isset($_GET['success'])) {
     </form>
     
     <!-- Notification Bell -->
+    <?php if ($is_volunteer_active): ?>
     <div class="notification-bell" id="notificationBell" onclick="toggleNotificationPanel()">
         <i class="fas fa-bell"></i>
         <?php if ($show_notification_badge): ?>
@@ -2099,8 +2091,10 @@ if (isset($_GET['success'])) {
             <?php endif; ?>
         </div>
     </div>
+    <?php endif; ?>
     
     <!-- Cancel Assignment Modal -->
+    <?php if ($is_volunteer_active): ?>
     <div class="modal" id="cancelModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -2137,6 +2131,7 @@ if (isset($_GET['success'])) {
             </div>
         </div>
     </div>
+    <?php endif; ?>
     
     <!-- Broadcast Message Area -->
     <div class="broadcast-message" id="broadcastMessage"></div>
@@ -2182,6 +2177,23 @@ if (isset($_GET['success'])) {
             </div>
         <?php endif; ?>
         
+        <!-- Inactive Volunteer Warning -->
+        <?php if (!$is_volunteer_active && $volunteer_info): ?>
+        <div class="inactive-warning">
+            <div style="display: flex; align-items: center;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div>
+                    <h3 style="margin: 0; color: #856404;">Account Status: <?php echo $volunteer_info['status']; ?></h3>
+                    <p style="margin: 5px 0 0 0; color: #856404;">
+                        Your volunteer account is currently <?php echo strtolower($volunteer_info['status']); ?>. 
+                        You cannot access distribution assignments. Please contact your coordinator to reactivate your account.
+                    </p>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+        
+        <?php if ($is_volunteer_active): ?>
         <!-- Stats Cards -->
         <div class="stats-section">
             <div class="stat-card active">
@@ -2270,19 +2282,9 @@ if (isset($_GET['success'])) {
                 
                 <div class="quick-actions">
                     <h3>Quick Actions</h3>
-                    <?php if (!empty($upcoming_assignments)): ?>
-                    <button class="action-btn" onclick="startNextDistribution()">
-                        <i class="fas fa-play-circle"></i> Start Next Distribution
-                    </button>
-                    <?php endif; ?>
-                    <button class="action-btn" onclick="window.location.href='emergency.php'">
-                        <i class="fas fa-exclamation-triangle"></i> Emergency Alert
-                    </button>
+                    <!-- Removed "Start Next Distribution" and "Emergency Alert" buttons -->
                     <button class="action-btn" onclick="window.open('http://10.147.17.30:8000/volunteer_dashboard.php?volunteer_id=<?php echo $_SESSION['volunteer_id']; ?>', '_blank')">
                         <i class="fas fa-external-link-alt"></i> Back to Main Dashboard 
-                    </button>
-                    <button class="action-btn" onclick="checkForNewAssignments()">
-                        <i class="fas fa-sync-alt"></i> Check for New Assignments
                     </button>
                 </div>
             </div>
@@ -2538,6 +2540,7 @@ if (isset($_GET['success'])) {
                 <?php endif; ?>
             </div>
         </div>
+        <?php endif; ?>
     </div>
 
     <script>
@@ -2582,16 +2585,6 @@ if (isset($_GET['success'])) {
         
         function viewTrackingHistory(distributionId) {
             window.location.href = 'execute_distribution.php?distribution_id=' + distributionId;
-        }
-        
-        function startNextDistribution() {
-            const firstAssignment = document.querySelector('.assignment-card:first-child');
-            if (firstAssignment) {
-                const startBtn = firstAssignment.querySelector('.start-btn');
-                if (startBtn) {
-                    startBtn.click();
-                }
-            }
         }
         
         // NOTIFICATION SYSTEM
@@ -2904,6 +2897,7 @@ if (isset($_GET['success'])) {
         
         // Check for new assignments on page load
         document.addEventListener('DOMContentLoaded', function() {
+            <?php if ($is_volunteer_active): ?>
             checkForNewAssignments();
             requestNotificationPermission();
             
@@ -2945,6 +2939,7 @@ if (isset($_GET['success'])) {
                     closeCancelModal();
                 }
             });
+            <?php endif; ?>
         });
         
         // Stop auto-refresh when page is not visible

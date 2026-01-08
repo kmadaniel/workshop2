@@ -395,78 +395,65 @@ if (isset($_GET['disaster_id']) && is_numeric($_GET['disaster_id'])) {
                         }
                         
                         if ($victimId && isset($victimIdMap[$victimId])) {
-                            $victimDisasterId = null;
-                            $disasterFields = ['disaster_id', 'Disaster_ID', 'disasterId', 'DisasterID'];
+                            $victimNeeds = $needsByVictim[$victimId] ?? [];
                             
-                            foreach ($disasterFields as $field) {
-                                if (isset($victim[$field]) && is_numeric($victim[$field])) {
-                                    $victimDisasterId = intval($victim[$field]);
+                            // Calculate overall priority based on needs
+                            $overallPriority = 'Medium';
+                            $hasHighPriority = false;
+                            foreach ($victimNeeds as $need) {
+                                if ($need['priority'] === 'High') {
+                                    $hasHighPriority = true;
                                     break;
                                 }
                             }
+                            $overallPriority = $hasHighPriority ? 'High' : 'Medium';
                             
-                            // Only add if disaster_id matches or if we can't verify
-                            if ($victimDisasterId === null || $victimDisasterId == $disaster_id) {
-                                $victimNeeds = $needsByVictim[$victimId] ?? [];
-                                
-                                // Calculate overall priority based on needs
-                                $overallPriority = 'Medium';
-                                $hasHighPriority = false;
-                                foreach ($victimNeeds as $need) {
-                                    if ($need['priority'] === 'High') {
-                                        $hasHighPriority = true;
-                                        break;
-                                    }
-                                }
-                                $overallPriority = $hasHighPriority ? 'High' : 'Medium';
-                                
-                                // Check for special needs
-                                $has_baby = $victim['has_baby'] ?? false;
-                                $has_elderly = $victim['has_elderly'] ?? false;
-                                $has_disabled = $victim['has_disabled'] ?? false;
-                                
-                                foreach ($victimNeeds as $need) {
-                                    $has_baby = $has_baby || $need['has_baby'];
-                                    $has_elderly = $has_elderly || $need['has_elderly'];
-                                    $has_disabled = $has_disabled || $need['has_disabled'];
-                                }
-                                
-                                $approved_victims[] = [
-                                    'victim_id' => $victimId,
-                                    'full_name' => $victim['full_name'] ?? 
-                                                 $victim['Full_Name'] ?? 
-                                                 $victim['fullName'] ?? 
-                                                 $victim['name'] ?? 'Unknown',
-                                    'ic_number' => $victim['ic_number'] ?? 
-                                                  $victim['IC_Number'] ?? 
-                                                  $victim['icNumber'] ?? 'N/A',
-                                    'email' => $victim['email'] ?? 
-                                              $victim['Email'] ?? 'N/A',
-                                    'phone' => $victim['phone'] ?? 
-                                              $victim['Phone'] ?? '',
-                                    'address' => $victim['address'] ?? 
-                                                $victim['Address'] ?? 'Unknown',
-                                    'city' => $victim['city'] ?? 
-                                             $victim['City'] ?? '',
-                                    'postal_code' => $victim['postal_code'] ?? 
-                                                   $victim['Postal_Code'] ?? 
-                                                   $victim['postalCode'] ?? '',
-                                    'district' => $victim['district'] ?? 
-                                                 $victim['District'] ?? 'N/A',
-                                    'family_members' => $victim['family_members'] ?? 
-                                                      $victim['Family_Members'] ?? 
-                                                      $victim['familyMembers'] ?? 1,
-                                    'has_baby' => $has_baby,
-                                    'has_elderly' => $has_elderly,
-                                    'has_disabled' => $has_disabled,
-                                    'priority' => $overallPriority,
-                                    'needs' => $victimNeeds,
-                                    'special_request' => '',
-                                    'approval_status' => 'Approved',
-                                    'approved_at' => $victimIdMap[$victimId]['approved_at'] ?? date('Y-m-d H:i:s'),
-                                    'is_distributed' => 0 // These victims are not distributed yet
-                                ];
+                            // Check for special needs
+                            $has_baby = $victim['has_baby'] ?? false;
+                            $has_elderly = $victim['has_elderly'] ?? false;
+                            $has_disabled = $victim['has_disabled'] ?? false;
+                            
+                            foreach ($victimNeeds as $need) {
+                                $has_baby = $has_baby || $need['has_baby'];
+                                $has_elderly = $has_elderly || $need['has_elderly'];
+                                $has_disabled = $has_disabled || $need['has_disabled'];
                             }
+                            
+                            $approved_victims[] = [
+                                'victim_id' => $victimId,
+                                'full_name' => $victim['full_name'] ?? 
+                                             $victim['Full_Name'] ?? 
+                                             $victim['fullName'] ?? 
+                                             $victim['name'] ?? 'Unknown',
+                                'ic_number' => $victim['ic_number'] ?? 
+                                              $victim['IC_Number'] ?? 
+                                              $victim['icNumber'] ?? 'N/A',
+                                'email' => $victim['email'] ?? 
+                                          $victim['Email'] ?? 'N/A',
+                                'phone' => $victim['phone'] ?? 
+                                          $victim['Phone'] ?? '',
+                                'address' => $victim['address'] ?? 
+                                            $victim['Address'] ?? 'Unknown',
+                                'city' => $victim['city'] ?? 
+                                         $victim['City'] ?? '',
+                                'postal_code' => $victim['postal_code'] ?? 
+                                               $victim['Postal_Code'] ?? 
+                                               $victim['postalCode'] ?? '',
+                                'district' => $victim['district'] ?? 
+                                             $victim['District'] ?? 'N/A',
+                                'family_members' => $victim['family_members'] ?? 
+                                                  $victim['Family_Members'] ?? 
+                                                  $victim['familyMembers'] ?? 1,
+                                'has_baby' => $has_baby,
+                                'has_elderly' => $has_elderly,
+                                'has_disabled' => $has_disabled,
+                                'priority' => $overallPriority,
+                                'needs' => $victimNeeds,
+                                'special_request' => '',
+                                'approval_status' => 'Approved',
+                                'approved_at' => $victimIdMap[$victimId]['approved_at'] ?? date('Y-m-d H:i:s'),
+                                'is_distributed' => 0 // These victims are not distributed yet
+                            ];
                         }
                     }
                     
@@ -483,6 +470,7 @@ if (isset($_GET['disaster_id']) && is_numeric($_GET['disaster_id'])) {
         }
     }
 }
+
 /* ----------------------------------------
    GET RESOURCES FOR DISTRIBUTION - IMPROVED PARSING
 ---------------------------------------- */
@@ -760,17 +748,6 @@ try {
 }
 
 /* ----------------------------------------
-   GET PPS LOCATIONS
----------------------------------------- */
-$pps_locations = [
-    'Dewan Serbaguna Masjid Tanah',
-    'Sekolah Kebangsaan Alor Gajah',
-    'Dewan Komuniti Taman Seri Bayu',
-    'Balai Raya Kampung Baru',
-    'Gelanggang Futsal Bandaraya'
-];
-
-/* ----------------------------------------
    FORM SUBMISSION: CREATE DISTRIBUTION PLAN
 ---------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution'])) {
@@ -780,7 +757,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
     $disaster_id = intval($_POST['disaster_id']);
     $distribution_date = $_POST['distribution_date'];
     $distribution_time = $_POST['distribution_time'];
-    $location = $_POST['location'];
     $coordinator_id = isset($_POST['coordinator_id']) ? intval($_POST['coordinator_id']) : 0;
     $coordinator_name = $_POST['coordinator_name'] ?? '';
     $coordinator_contact = $_POST['coordinator_contact'] ?? '';
@@ -908,7 +884,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
         $plan_details = "DISTRIBUTION PLAN\n";
         $plan_details .= "=================\n";
         $plan_details .= "Time: $distribution_date at $distribution_time\n";
-        $plan_details .= "Location: $location\n";
         $plan_details .= "Coordinator: $coordinator_name ($coordinator_contact)\n";
         $plan_details .= "Estimated Duration: {$estimated_duration} hours\n";
         $plan_details .= "Volunteers Needed: $volunteers_needed\n";
@@ -939,13 +914,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
 
         $first_victim_id = !empty($selected_victims) ? intval($selected_victims[0]) : 0;
 
-        // Insert into distribution table
+        // Insert into distribution table - REMOVED location parameter
         $distribution_query = "
             INSERT INTO distribution (
                 victim_id, disaster_id, resource_id, date, status, 
-                quantity_sent, comments, location, coordinator_name, 
+                quantity_sent, comments, coordinator_name, 
                 coordinator_contact, estimated_duration, volunteers_needed
-            ) VALUES (?, ?, ?, ?, 'Planning', 0, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'Planning', 0, ?, ?, ?, ?, ?)
         ";
 
         $dist_stmt = $db->prepare($distribution_query);
@@ -954,13 +929,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
         }
 
         $dist_stmt->bind_param(
-            "iiisssssii",
+            "iiissssii",
             $first_victim_id,
             $disaster_id,
             $first_resource_id,
             $combined_datetime,
             $plan_details,
-            $location,
             $coordinator_name,
             $coordinator_contact,
             $estimated_duration,
@@ -1041,7 +1015,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_distribution']
         $success = "✅ Distribution plan created successfully!";
         $success .= "<br><strong>Distribution ID: $display_id (Database ID: $distribution_id)</strong>";
         $success .= "<br><small>Date: $distribution_date at $distribution_time</small>";
-        $success .= "<br><small>Location: $location</small>";
         $success .= "<br><small>Coordinator: $coordinator_name</small>";
         $success .= "<br><small>Families: " . count($selected_victims) . "</small>";
         $success .= "<br><small>Resources allocated: " . count($resource_allocations) . " types</small>";
@@ -2093,18 +2066,6 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
                                 <label class="form-label">Distribution Time *</label>
                                 <input type="time" class="form-control" name="distribution_time" required 
                                        value="14:00">
-                            </div>
-                            
-                            <div class="form-group">
-                                <label class="form-label">Location *</label>
-                                <select class="form-control" name="location" required>
-                                    <option value="">Select distribution location...</option>
-                                    <?php foreach ($pps_locations as $loc): ?>
-                                    <option value="<?php echo htmlspecialchars($loc); ?>">
-                                        <?php echo $loc; ?>
-                                    </option>
-                                    <?php endforeach; ?>
-                                </select>
                             </div>
                             
                             <div class="form-group">

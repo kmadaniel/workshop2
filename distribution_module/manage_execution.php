@@ -80,16 +80,38 @@ function fetchFromAPI($url) {
 
 // Fetch all data from APIs
 $volunteers_data = fetchFromAPI($VOLUNTEER_API_URL);
-$api_volunteers = $volunteers_data['volunteers'] ?? $volunteers_data['data'] ?? [];
+$api_volunteers = is_array($volunteers_data) ? $volunteers_data : [];
 
 $disasters_data = fetchFromAPI($DISASTER_API_URL);
-$disasters = $disasters_data['disasters'] ?? $disasters_data['data'] ?? [];
+$disasters = is_array($disasters_data) ? $disasters_data : [];
 
 $victims_data = fetchFromAPI($VICTIM_API_URL);
-$api_victims = $victims_data['victims'] ?? $victims_data['data'] ?? [];
+$api_victims = is_array($victims_data) ? $victims_data : [];
 
 $needs_data = fetchFromAPI($NEEDS_API_URL);
-$api_needs = $needs_data['needs'] ?? $needs_data['data'] ?? [];
+$api_needs = isset($needs_data['data']) && is_array($needs_data['data']) ? $needs_data['data'] : (is_array($needs_data) ? $needs_data : []);
+
+// Create lookup arrays for fast access
+$volunteer_lookup = [];
+foreach ($api_volunteers as $volunteer) {
+    if (isset($volunteer['VolunteerID'])) {
+        $volunteer_lookup[$volunteer['VolunteerID']] = $volunteer;
+    }
+}
+
+$victim_lookup = [];
+foreach ($api_victims as $victim) {
+    if (isset($victim['victim_id'])) {
+        $victim_lookup[$victim['victim_id']] = $victim;
+    }
+}
+
+$needs_lookup = [];
+foreach ($api_needs as $need) {
+    if (isset($need['need_id'])) {
+        $needs_lookup[$need['need_id']] = $need;
+    }
+}
 
 // Get all distribution assignments (for statistics only)
 $assignments_query = "
@@ -136,44 +158,48 @@ if ($result = $db->query($execution_query)) {
     
     // Enhance execution data with API information
     foreach ($executions as &$exec) {
-        // Get victim info from API
-        $victim_name = 'Unknown';
+        // 1. Get VOLUNTEER info from API
+        $volunteer_name = 'Unknown Volunteer';
+        $volunteer_contact = 'N/A';
+        
+        if (isset($volunteer_lookup[$exec['volunteer_id']])) {
+            $volunteer = $volunteer_lookup[$exec['volunteer_id']];
+            $volunteer_name = $volunteer['FullName'] ?? 'Volunteer ' . $exec['volunteer_id'];
+            $volunteer_contact = $volunteer['Phone'] ?? $volunteer['Email'] ?? 'N/A';
+        }
+        
+        // 2. Get VICTIM info from API
+        $victim_name = 'Unknown Victim';
         $victim_contact = 'N/A';
         $family_size = 1;
         
-        foreach ($api_victims as $victim) {
-            $victim_id = $victim['victim_id'] ?? $victim['Victim_ID'] ?? $victim['id'] ?? 0;
-            if (intval($victim_id) == $exec['victim_id']) {
-                $victim_name = $victim['FullName'] ?? $victim['fullName'] ?? $victim['name'] ?? 'Unknown';
-                $victim_contact = $victim['ContactNumber'] ?? $victim['contact_number'] ?? $victim['phone'] ?? 'N/A';
-                $family_size = $victim['FamilyMembers'] ?? $victim['family_members'] ?? $victim['family_size'] ?? 1;
-                break;
-            }
+        if (isset($victim_lookup[$exec['victim_id']])) {
+            $victim = $victim_lookup[$exec['victim_id']];
+            $victim_name = $victim['full_name'] ?? 'Victim ' . $exec['victim_id'];
+            $victim_contact = $victim['phone'] ?? $victim['email'] ?? 'N/A';
+            $family_size = intval($victim['family_members'] ?? 1);
         }
         
-        // Get need/item info from API
-        $resource_name = 'Item';
+        // 3. Get NEEDS/ITEM info from API
+        $resource_name = 'Unknown Item';
         $quantity_needed = 1;
-        $unit = 'units';
         
-        foreach ($api_needs as $need) {
-            $need_id = $need['NeedID'] ?? $need['need_id'] ?? $need['id'] ?? 0;
-            if (intval($need_id) == $exec['need_id']) {
-                $resource_name = $need['ResourceName'] ?? $need['resource_name'] ?? $need['item_name'] ?? 'Item';
-                $quantity_needed = $need['QuantityNeeded'] ?? $need['quantity_needed'] ?? $need['quantity'] ?? 1;
-                $unit = $need['Unit'] ?? $need['unit'] ?? 'units';
-                break;
-            }
+        if (isset($needs_lookup[$exec['need_id']])) {
+            $need = $needs_lookup[$exec['need_id']];
+            $resource_name = $need['temp_resource_name'] ?? 'Item';
+            $quantity_needed = $need['quantity_needed'] ?? 1;
         }
         
+        $exec['volunteer_name'] = $volunteer_name;
+        $exec['volunteer_contact'] = $volunteer_contact;
         $exec['victim_name'] = $victim_name;
         $exec['victim_contact'] = $victim_contact;
         $exec['family_size'] = $family_size;
         $exec['resource_name'] = $resource_name;
         $exec['quantity_needed'] = $quantity_needed;
-        $exec['unit'] = $unit;
+        $exec['unit'] = 'units';
     }
-    unset($exec); // Unset reference
+    unset($exec);
 }
 
 // Get statistics - UPDATED to exclude cancelled volunteers
@@ -182,7 +208,7 @@ $stats_query = "
         (SELECT COUNT(DISTINCT assigned_volunteer_id) FROM distribution_items WHERE assigned_volunteer_id IS NOT NULL AND distribution_id NOT IN (
             SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = assigned_volunteer_id
         )) as active_volunteers,
-        (SELECT COUNT(*) FROM distribution WHERE status IN ('In Transit', 'In Progress', 'Assigned')) as active_distributions,
+        (SELECT COUNT(*) FROM distribution WHERE status IN ('In Transit', 'In Progress', 'Assigned', 'departed', 'in_transit', 'arrived')) as active_distributions,
         (SELECT COUNT(DISTINCT victim_id) FROM distribution_log WHERE status = 'completed' AND distribution_id NOT IN (
             SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = volunteer_id
         )) as families_served,
@@ -199,10 +225,9 @@ if ($result = $db->query($stats_query)) {
     $stats = $result->fetch_assoc();
 }
 
-// Get all unique volunteer IDs from distribution_items and distribution_log for dropdown (excluding cancelled)
+// Get all unique volunteer IDs from database for filter dropdown
 $volunteer_ids = [];
 
-// Get from distribution_items (excluding cancelled)
 $volunteer_items_query = "
     SELECT DISTINCT assigned_volunteer_id as volunteer_id 
     FROM distribution_items 
@@ -218,7 +243,6 @@ if ($result = $db->query($volunteer_items_query)) {
     }
 }
 
-// Get from distribution_log (excluding cancelled)
 $volunteer_log_query = "
     SELECT DISTINCT volunteer_id 
     FROM distribution_log 
@@ -234,41 +258,18 @@ if ($result = $db->query($volunteer_log_query)) {
     }
 }
 
-// Get from distribution_tracking (excluding cancelled)
-$volunteer_tracking_query = "
-    SELECT DISTINCT volunteer_id 
-    FROM distribution_tracking 
-    WHERE volunteer_id IS NOT NULL
-    AND distribution_id NOT IN (
-        SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = volunteer_id
-    )
-    ORDER BY volunteer_id
-";
-if ($result = $db->query($volunteer_tracking_query)) {
-    while ($row = $result->fetch_assoc()) {
-        $volunteer_ids[$row['volunteer_id']] = $row['volunteer_id'];
-    }
-}
-
 // Get volunteer names from API for the IDs we have
 $db_volunteers = [];
 foreach ($volunteer_ids as $volunteer_id) {
-    // Try to find volunteer in API data
-    foreach ($api_volunteers as $api_volunteer) {
-        $api_volunteer_id = $api_volunteer['volunteer_id'] ?? $api_volunteer['VolunteerID'] ?? $api_volunteer['id'] ?? 0;
-        if (intval($api_volunteer_id) == $volunteer_id) {
-            $db_volunteers[] = [
-                'volunteer_id' => $volunteer_id,
-                'name' => $api_volunteer['FullName'] ?? $api_volunteer['fullName'] ?? $api_volunteer['name'] ?? "Volunteer $volunteer_id",
-                'phone' => $api_volunteer['Phone'] ?? $api_volunteer['phone'] ?? $api_volunteer['contact_number'] ?? '',
-                'email' => $api_volunteer['Email'] ?? $api_volunteer['email'] ?? ''
-            ];
-            break;
-        }
-    }
-    
-    // If not found in API, create a basic entry
-    if (!in_array($volunteer_id, array_column($db_volunteers, 'volunteer_id'))) {
+    if (isset($volunteer_lookup[$volunteer_id])) {
+        $volunteer = $volunteer_lookup[$volunteer_id];
+        $db_volunteers[] = [
+            'volunteer_id' => $volunteer_id,
+            'name' => $volunteer['FullName'] ?? "Volunteer $volunteer_id",
+            'phone' => $volunteer['Phone'] ?? '',
+            'email' => $volunteer['Email'] ?? ''
+        ];
+    } else {
         $db_volunteers[] = [
             'volunteer_id' => $volunteer_id,
             'name' => "Volunteer $volunteer_id",
@@ -308,14 +309,10 @@ if ($filter_disaster) {
     $execution_types .= 'i';
 }
 
-if ($filter_status) {
-    if ($filter_status === 'need_volunteers') {
-        // Not applicable for execution log
-    } else {
-        $execution_where_conditions[] = "dl.status = ?";
-        $execution_params[] = $filter_status;
-        $execution_types .= 's';
-    }
+if ($filter_status && $filter_status !== 'need_volunteers') {
+    $execution_where_conditions[] = "dl.status = ?";
+    $execution_params[] = $filter_status;
+    $execution_types .= 's';
 }
 
 if ($filter_date) {
@@ -354,53 +351,49 @@ if (!empty($execution_where_conditions)) {
             }
             $stmt->execute();
             $result = $stmt->get_result();
-            $executions = $result->fetch_all(MYSQLI_ASSOC);
+            $filtered_executions = $result->fetch_all(MYSQLI_ASSOC);
             $stmt->close();
             
-            // Re-enhance execution data with API information after filtering
-            foreach ($executions as &$exec) {
-                // Get victim info from API
-                $victim_name = 'Unknown';
+            // Re-enhance execution data with API information
+            foreach ($filtered_executions as &$exec) {
+                $volunteer_name = 'Unknown Volunteer';
+                $volunteer_contact = 'N/A';
+                $victim_name = 'Unknown Victim';
                 $victim_contact = 'N/A';
                 $family_size = 1;
-                
-                foreach ($api_victims as $victim) {
-                    $victim_id = $victim['victim_id'] ?? $victim['Victim_ID'] ?? $victim['id'] ?? 0;
-                    if (intval($victim_id) == $exec['victim_id']) {
-                        $victim_name = $victim['FullName'] ?? $victim['fullName'] ?? $victim['name'] ?? 'Unknown';
-                        $victim_contact = $victim['ContactNumber'] ?? $victim['contact_number'] ?? $victim['phone'] ?? 'N/A';
-                        $family_size = $victim['FamilyMembers'] ?? $victim['family_members'] ?? $victim['family_size'] ?? 1;
-                        break;
-                    }
-                }
-                
-                // Get need/item info from API
-                $resource_name = 'Item';
+                $resource_name = 'Unknown Item';
                 $quantity_needed = 1;
-                $unit = 'units';
                 
-                foreach ($api_needs as $need) {
-                    $need_id = $need['NeedID'] ?? $need['need_id'] ?? $need['id'] ?? 0;
-                    if (intval($need_id) == $exec['need_id']) {
-                        $resource_name = $need['ResourceName'] ?? $need['resource_name'] ?? $need['item_name'] ?? 'Item';
-                        $quantity_needed = $need['QuantityNeeded'] ?? $need['quantity_needed'] ?? $need['quantity'] ?? 1;
-                        $unit = $need['Unit'] ?? $need['unit'] ?? 'units';
-                        break;
-                    }
+                if (isset($volunteer_lookup[$exec['volunteer_id']])) {
+                    $volunteer = $volunteer_lookup[$exec['volunteer_id']];
+                    $volunteer_name = $volunteer['FullName'] ?? 'Volunteer ' . $exec['volunteer_id'];
+                    $volunteer_contact = $volunteer['Phone'] ?? $volunteer['Email'] ?? 'N/A';
                 }
                 
+                if (isset($victim_lookup[$exec['victim_id']])) {
+                    $victim = $victim_lookup[$exec['victim_id']];
+                    $victim_name = $victim['full_name'] ?? 'Victim ' . $exec['victim_id'];
+                    $victim_contact = $victim['phone'] ?? $victim['email'] ?? 'N/A';
+                    $family_size = intval($victim['family_members'] ?? 1);
+                }
+                
+                if (isset($needs_lookup[$exec['need_id']])) {
+                    $need = $needs_lookup[$exec['need_id']];
+                    $resource_name = $need['temp_resource_name'] ?? 'Item';
+                    $quantity_needed = $need['quantity_needed'] ?? 1;
+                }
+                
+                $exec['volunteer_name'] = $volunteer_name;
+                $exec['volunteer_contact'] = $volunteer_contact;
                 $exec['victim_name'] = $victim_name;
                 $exec['victim_contact'] = $victim_contact;
                 $exec['family_size'] = $family_size;
                 $exec['resource_name'] = $resource_name;
                 $exec['quantity_needed'] = $quantity_needed;
-                $exec['unit'] = $unit;
+                $exec['unit'] = 'units';
             }
-            unset($exec); // Unset reference
-        }
-    } else {
-        if ($result = $db->query($filtered_execution_query)) {
-            $executions = $result->fetch_all(MYSQLI_ASSOC);
+            unset($exec);
+            $executions = $filtered_executions;
         }
     }
 }
@@ -415,14 +408,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $new_volunteer_id = $_POST['new_volunteer_id'] ?? 0;
         
         if ($new_volunteer_id) {
-            // Update distribution_items
             $update_query = "UPDATE distribution_items SET assigned_volunteer_id = ? WHERE distribution_id = ? AND assigned_volunteer_id = ?";
             $stmt = $db->prepare($update_query);
             $stmt->bind_param("iii", $new_volunteer_id, $distribution_id, $volunteer_id);
             $stmt->execute();
             $stmt->close();
             
-            // Redirect to refresh
             header("Location: manage_execution.php?success=reassigned");
             exit;
         }
@@ -433,23 +424,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $reason = $_POST['reason'] ?? '';
         
         if ($new_status) {
-            // Update distribution status
             $update_query = "UPDATE distribution SET status = ? WHERE distribution_id = ?";
             $stmt = $db->prepare($update_query);
             $stmt->bind_param("si", $new_status, $distribution_id);
             $stmt->execute();
             $stmt->close();
             
-            // If status is completed, also update distribution_items
-            if ($new_status === 'Completed') {
-                $update_items_query = "UPDATE distribution_items SET status = 'Delivered' WHERE distribution_id = ?";
-                $stmt = $db->prepare($update_items_query);
-                $stmt->bind_param("i", $distribution_id);
-                $stmt->execute();
-                $stmt->close();
-            }
-            
-            // Redirect to refresh
             header("Location: manage_execution.php?success=status_updated");
             exit;
         }
@@ -459,7 +439,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $volunteer_id = $_POST['volunteer_id'] ?? 0;
         
         if ($volunteer_id) {
-            // Check if distribution has items
             $check_items_query = "SELECT item_id FROM distribution_items WHERE distribution_id = ? LIMIT 1";
             $stmt = $db->prepare($check_items_query);
             $stmt->bind_param("i", $distribution_id);
@@ -467,14 +446,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result = $stmt->get_result();
             
             if ($result->num_rows > 0) {
-                // Add volunteer to first available distribution item
                 $add_query = "UPDATE distribution_items SET assigned_volunteer_id = ? WHERE distribution_id = ? AND assigned_volunteer_id IS NULL LIMIT 1";
                 $stmt = $db->prepare($add_query);
                 $stmt->bind_param("ii", $volunteer_id, $distribution_id);
                 $stmt->execute();
                 
                 if ($stmt->affected_rows > 0) {
-                    // Decrease volunteers_needed count
                     $update_count_query = "UPDATE distribution SET volunteers_needed = GREATEST(0, volunteers_needed - 1) WHERE distribution_id = ?";
                     $stmt = $db->prepare($update_count_query);
                     $stmt->bind_param("i", $distribution_id);
@@ -485,13 +462,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             
-            // If no existing items, create one
             $create_query = "INSERT INTO distribution_items (distribution_id, victim_id, status, assigned_volunteer_id) VALUES (?, 0, 'Scheduled', ?)";
             $stmt = $db->prepare($create_query);
             $stmt->bind_param("ii", $distribution_id, $volunteer_id);
             $stmt->execute();
             
-            // Decrease volunteers_needed count
             $update_count_query = "UPDATE distribution SET volunteers_needed = GREATEST(0, volunteers_needed - 1) WHERE distribution_id = ?";
             $stmt = $db->prepare($update_count_query);
             $stmt->bind_param("i", $distribution_id);
@@ -995,6 +970,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-radius: 6px;
             margin-bottom: 20px;
             border-left: 4px solid #ffc107;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         
         .empty-state {
@@ -1127,11 +1105,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .quick-message-btn:hover {
             background: #3498db;
             color: white;
-        }
-        
-        /* Map modal specific styles */
-        #mapContainer {
-            position: relative;
         }
         
         /* Status colors for tracking */
@@ -1302,37 +1275,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
         
-        <!-- Statistics -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['active_volunteers'] ?? 0; ?></div>
-                <div class="stat-label">Active Volunteers</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['active_distributions'] ?? 0; ?></div>
-                <div class="stat-label">Active Distributions</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['families_served'] ?? 0; ?></div>
-                <div class="stat-label">Families Served</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['items_delivered'] ?? 0; ?></div>
-                <div class="stat-label">Items Delivered</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['pending_assignments'] ?? 0; ?></div>
-                <div class="stat-label">Pending Assignments</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['need_volunteers'] ?? 0; ?></div>
-                <div class="stat-label">Need Volunteers</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['completed_distributions'] ?? 0; ?></div>
-                <div class="stat-label">Completed</div>
-            </div>
-        </div>
+        
         
         <!-- Filter Section -->
         <div class="filter-section">
@@ -1346,8 +1289,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <select id="disaster_id" name="disaster_id" class="filter-control">
                             <option value="">All Disasters</option>
                             <?php foreach ($disasters as $disaster): 
-                                $disaster_id = $disaster['disaster_id'] ?? $disaster['id'] ?? '';
-                                $disaster_name = $disaster['Disaster_Name'] ?? $disaster['name'] ?? 'Unknown';
+                                $disaster_id = $disaster['disaster_id'] ?? $disaster['id'] ?? $disaster['Disaster_ID'] ?? '';
+                                $disaster_name = $disaster['Disaster_Name'] ?? $disaster['name'] ?? $disaster['disaster_name'] ?? 'Unknown';
                             ?>
                                 <option value="<?php echo htmlspecialchars((string)$disaster_id); ?>" <?php echo $filter_disaster == $disaster_id ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars((string)$disaster_name); ?>
@@ -1365,6 +1308,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <option value="dispatched" <?php echo $filter_status == 'dispatched' ? 'selected' : ''; ?>>Dispatched</option>
                             <option value="delivered" <?php echo $filter_status == 'delivered' ? 'selected' : ''; ?>>Delivered</option>
                             <option value="completed" <?php echo $filter_status == 'completed' ? 'selected' : ''; ?>>Completed</option>
+                            <option value="departed" <?php echo $filter_status == 'departed' ? 'selected' : ''; ?>>Departed</option>
+                            <option value="in_transit" <?php echo $filter_status == 'in_transit' ? 'selected' : ''; ?>>In Transit</option>
+                            <option value="arrived" <?php echo $filter_status == 'arrived' ? 'selected' : ''; ?>>Arrived</option>
                         </select>
                     </div>
                     
@@ -1445,7 +1391,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <tr>
                                 <th>Timestamp</th>
                                 <th>Distribution</th>
-                                <th>Volunteer ID</th>
+                                <th>Volunteer</th>
                                 <th>Victim</th>
                                 <th>Item</th>
                                 <th>Quantity</th>
@@ -1455,15 +1401,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </thead>
                         <tbody>
                             <?php foreach ($executions as $exec): 
-                                // Get volunteer name from API data
-                                $volunteer_name = 'Unknown';
-                                foreach ($api_volunteers as $api_volunteer) {
-                                    $api_volunteer_id = $api_volunteer['volunteer_id'] ?? $api_volunteer['VolunteerID'] ?? $api_volunteer['id'] ?? 0;
-                                    if (intval($api_volunteer_id) == $exec['volunteer_id']) {
-                                        $volunteer_name = $api_volunteer['FullName'] ?? $api_volunteer['fullName'] ?? $api_volunteer['name'] ?? "Volunteer {$exec['volunteer_id']}";
-                                        break;
-                                    }
-                                }
+                                $volunteer_name = $exec['volunteer_name'] ?? 'Volunteer ' . $exec['volunteer_id'];
+                                $volunteer_contact = $exec['volunteer_contact'] ?? 'N/A';
+                                $victim_name = $exec['victim_name'] ?? 'Unknown';
+                                $family_size = $exec['family_size'] ?? 1;
+                                $victim_contact = $exec['victim_contact'] ?? 'N/A';
+                                $resource_name = $exec['resource_name'] ?? 'Item';
+                                $quantity_needed = $exec['quantity_needed'] ?? 1;
+                                $unit = $exec['unit'] ?? 'units';
                             ?>
                             <tr>
                                 <td><?php echo date('d/m/Y H:i', strtotime($exec['created_at'])); ?></td>
@@ -1474,26 +1419,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     </div>
                                 </td>
                                 <td>
-                                    <div><?php echo htmlspecialchars((string)$volunteer_name); ?></div>
+                                    <div><?php echo htmlspecialchars($volunteer_name); ?></div>
                                     <div style="font-size: 12px; color: #7f8c8d;">
                                         ID: VOL<?php echo str_pad($exec['volunteer_id'], 4, '0', STR_PAD_LEFT); ?>
+                                        <?php if (!empty($volunteer_contact) && $volunteer_contact !== 'N/A'): ?>
+                                            <br>Contact: <?php echo htmlspecialchars($volunteer_contact); ?>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <div><?php echo htmlspecialchars((string)($exec['victim_name'] ?? 'Unknown')); ?></div>
+                                    <div><?php echo htmlspecialchars($victim_name); ?></div>
                                     <div style="font-size: 12px; color: #7f8c8d;">
-                                        Family: <?php echo $exec['family_size'] ?? 1; ?> | <?php echo htmlspecialchars((string)($exec['victim_contact'] ?? 'N/A')); ?>
+                                        Family: <?php echo $family_size; ?> | <?php echo htmlspecialchars($victim_contact); ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <div><?php echo htmlspecialchars((string)($exec['resource_name'] ?? 'Item')); ?></div>
+                                    <div><?php echo htmlspecialchars($resource_name); ?></div>
                                     <div style="font-size: 12px; color: #7f8c8d;">
                                         ID: <?php echo $exec['need_id'] ?? 'N/A'; ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <?php echo $exec['quantity_distributed'] ?? 1; ?> 
-                                    <?php echo htmlspecialchars((string)($exec['unit'] ?? 'units')); ?>
+                                    <?php echo $exec['quantity_distributed'] ?? $quantity_needed; ?> 
+                                    <?php echo htmlspecialchars($unit); ?>
                                 </td>
                                 <td>
                                     <?php 
@@ -1506,7 +1454,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <td>
                                     <?php if (!empty($exec['remarks'])): ?>
                                         <div style="font-size: 12px; color: #7f8c8d; max-width: 200px;">
-                                            <?php echo htmlspecialchars(substr((string)$exec['remarks'], 0, 50)); ?>
+                                            <?php echo htmlspecialchars(substr($exec['remarks'], 0, 50)); ?>
                                             <?php if (strlen($exec['remarks']) > 50): ?>...<?php endif; ?>
                                         </div>
                                     <?php else: ?>
@@ -1543,9 +1491,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div style="display: flex; gap: 10px;">
                     <button class="export-btn" onclick="refreshTracking()">
                         <i class="fas fa-sync-alt"></i> Refresh
-                    </button>
-                    <button class="export-btn" style="background: #e74c3c; border-color: #e74c3c;" onclick="showAllVolunteersOnMap()">
-                        <i class="fas fa-map"></i> View All on Map
                     </button>
                 </div>
             </div>
@@ -1642,10 +1587,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <select id="trackingFilter" class="filter-control" style="flex: 1; min-width: 200px;" onchange="filterTracking()">
                         <option value="all">All Status</option>
                         <option value="active">Active (Last 1 hour)</option>
+                        <option value="departed">Departed</option>
                         <option value="in_transit">In Transit</option>
                         <option value="arrived">Arrived</option>
                         <option value="delayed">Delayed</option>
-                        <option value="departed">Departed</option>
                     </select>
                     
                     <select id="volunteerFilter" class="filter-control" style="flex: 1; min-width: 200px;" onchange="filterTracking()">
@@ -1730,36 +1675,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // Get volunteer name from API
                         $volunteer_name = "Volunteer {$track['volunteer_id']}";
                         $volunteer_phone = '';
-                        foreach ($api_volunteers as $api_volunteer) {
-                            $api_volunteer_id = $api_volunteer['volunteer_id'] ?? $api_volunteer['VolunteerID'] ?? $api_volunteer['id'] ?? 0;
-                            if (intval($api_volunteer_id) == $track['volunteer_id']) {
-                                $volunteer_name = $api_volunteer['FullName'] ?? $api_volunteer['fullName'] ?? $api_volunteer['name'] ?? $volunteer_name;
-                                $volunteer_phone = $api_volunteer['Phone'] ?? $api_volunteer['phone'] ?? $api_volunteer['contact_number'] ?? '';
-                                break;
-                            }
+                        if (isset($volunteer_lookup[$track['volunteer_id']])) {
+                            $volunteer = $volunteer_lookup[$track['volunteer_id']];
+                            $volunteer_name = $volunteer['FullName'] ?? $volunteer_name;
+                            $volunteer_phone = $volunteer['Phone'] ?? '';
                         }
                         
                         // Get disaster name
                         $disaster_name = '';
                         foreach ($disasters as $disaster) {
-                            $disaster_id = $disaster['disaster_id'] ?? $disaster['id'] ?? 0;
+                            $disaster_id = $disaster['disaster_id'] ?? $disaster['id'] ?? $disaster['Disaster_ID'] ?? 0;
                             if (intval($disaster_id) == $track['disaster_id']) {
-                                $disaster_name = $disaster['Disaster_Name'] ?? $disaster['name'] ?? '';
+                                $disaster_name = $disaster['Disaster_Name'] ?? $disaster['name'] ?? $disaster['disaster_name'] ?? '';
                                 break;
                             }
                         }
                         
                         // Get victim info if available
                         $victim_name = '';
-                        if ($track['victim_id']) {
-                            foreach ($api_victims as $victim) {
-                                $victim_id = $victim['victim_id'] ?? $victim['Victim_ID'] ?? $victim['id'] ?? 0;
-                                if (intval($victim_id) == $track['victim_id']) {
-                                    $victim_name = $victim['FullName'] ?? $victim['fullName'] ?? $victim['name'] ?? '';
-                                    break;
-                                }
-                            }
+                        if ($track['victim_id'] && isset($victim_lookup[$track['victim_id']])) {
+                            $victim = $victim_lookup[$track['victim_id']];
+                            $victim_name = $victim['full_name'] ?? '';
                         }
+                        
+                        // Status mapping for display
+                        $status_display_map = [
+                            'departed' => 'Departed',
+                            'in_transit' => 'In Transit',
+                            'arrived' => 'Arrived',
+                            'delayed' => 'Delayed',
+                            'completed' => 'Completed'
+                        ];
+                        
+                        $tracking_display = $status_display_map[$track['status']] ?? ucfirst($track['status']);
                 ?>
                 <div class="tracking-card" 
                      data-status="<?php echo $track['status']; ?>" 
@@ -1787,7 +1735,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                         <?php 
                         $tracking_class = strtolower($track['status']);
-                        $tracking_display = ucfirst(str_replace('_', ' ', $track['status']));
                         ?>
                         <span class="status-badge status-<?php echo $tracking_class; ?>">
                             <?php echo $tracking_display; ?>
@@ -1836,87 +1783,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     title="View detailed tracking">
                                 <i class="fas fa-location-arrow"></i> Track
                             </button>
-                            <button class="action-btn view" 
-                                    onclick="sendMessage(<?php echo $track['volunteer_id']; ?>, '<?php echo htmlspecialchars(addslashes($volunteer_name)); ?>')"
-                                    title="Send message to volunteer">
-                                <i class="fas fa-comment"></i>
-                            </button>
                         </div>
                     </div>
                 </div>
                 <?php endforeach; ?>
                 <?php endif; ?>
             </div>
-            
-            <!-- Map Modal -->
-            <div id="mapModal" class="modal">
-                <div class="modal-content" style="max-width: 800px;">
-                    <div class="modal-header">
-                        <h3><i class="fas fa-map"></i> All Volunteers on Map</h3>
-                        <button onclick="closeMapModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #7f8c8d;">&times;</button>
-                    </div>
-                    <div class="modal-body">
-                        <div id="mapContainer" style="height: 400px; background: #f8f9fa; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-                            <p style="color: #7f8c8d;"><i class="fas fa-map-marked-alt"></i> Interactive map would appear here</p>
-                            <!-- In a real implementation, you would integrate Google Maps or Leaflet here -->
-                        </div>
-                        <div id="mapLegend" style="margin-top: 15px; display: flex; gap: 15px; flex-wrap: wrap;">
-                            <div style="display: flex; align-items: center; gap: 5px;">
-                                <div style="width: 15px; height: 15px; background: #3498db; border-radius: 50%;"></div>
-                                <span style="font-size: 12px;">Departed</span>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 5px;">
-                                <div style="width: 15px; height: 15px; background: #e67e22; border-radius: 50%;"></div>
-                                <span style="font-size: 12px;">In Transit</span>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 5px;">
-                                <div style="width: 15px; height: 15px; background: #27ae60; border-radius: 50%;"></div>
-                                <span style="font-size: 12px;">Arrived</span>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 5px;">
-                                <div style="width: 15px; height: 15px; background: #e74c3c; border-radius: 50%;"></div>
-                                <span style="font-size: 12px;">Delayed</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Message Modal -->
-            <div id="messageModal" class="modal">
-                <div class="modal-content" style="max-width: 500px;">
-                    <div class="modal-header">
-                        <h3><i class="fas fa-comment"></i> Send Message</h3>
-                        <button onclick="closeMessageModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #7f8c8d;">&times;</button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="form-group">
-                            <label>To:</label>
-                            <input type="text" id="messageTo" class="form-control" readonly>
-                        </div>
-                        <div class="form-group">
-                            <label>Message:</label>
-                            <textarea id="messageContent" class="form-control" rows="4" placeholder="Type your message to the volunteer..."></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>Quick Messages:</label>
-                            <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px;">
-                                <button type="button" class="quick-message-btn" onclick="setQuickMessage('What is your current ETA?')">ETA?</button>
-                                <button type="button" class="quick-message-btn" onclick="setQuickMessage('Are you facing any issues?')">Issues?</button>
-                                <button type="button" class="quick-message-btn" onclick="setQuickMessage('Please update your location')">Update Location</button>
-                                <button type="button" class="quick-message-btn" onclick="setQuickMessage('Great job! Please proceed')">Encourage</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="modal-btn secondary" onclick="closeMessageModal()">Cancel</button>
-                        <button class="modal-btn primary" onclick="sendMessageNow()">Send Message</button>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
-    
+
     <script>
         // Tab switching
         function showTab(tabName) {
@@ -2086,58 +1961,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
         }
         
-        // Map modal functions
-        function showAllVolunteersOnMap() {
-            document.getElementById('mapModal').style.display = 'flex';
-            // In real implementation, you would initialize the map here
-            // Example: initMap();
-        }
-        
-        function closeMapModal() {
-            document.getElementById('mapModal').style.display = 'none';
-        }
-        
-        // Message modal functions
-        let currentVolunteerId = null;
-        let currentVolunteerName = null;
-        
-        function sendMessage(volunteerId, volunteerName) {
-            currentVolunteerId = volunteerId;
-            currentVolunteerName = volunteerName;
-            
-            document.getElementById('messageTo').value = volunteerName + ' (ID: VOL' + volunteerId.toString().padStart(4, '0') + ')';
-            document.getElementById('messageContent').value = '';
-            document.getElementById('messageModal').style.display = 'flex';
-        }
-        
-        function closeMessageModal() {
-            document.getElementById('messageModal').style.display = 'none';
-            currentVolunteerId = null;
-            currentVolunteerName = null;
-        }
-        
-        function setQuickMessage(message) {
-            document.getElementById('messageContent').value = message;
-        }
-        
-        function sendMessageNow() {
-            const message = document.getElementById('messageContent').value.trim();
-            
-            if (!message) {
-                alert('Please enter a message');
-                return;
-            }
-            
-            // In a real implementation, you would send this to your backend
-            // For now, just show a confirmation
-            alert(`Message sent to ${currentVolunteerName}: "${message}"`);
-            
-            // Simulate sending
-            console.log(`Sending to volunteer ${currentVolunteerId}: ${message}`);
-            
-            closeMessageModal();
-        }
-        
         // Auto-refresh tracking every 30 seconds
         setInterval(() => {
             if (document.getElementById('tracking-tab').classList.contains('active')) {
@@ -2231,27 +2054,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 trackingFilter.value = 'active';
                 filterTracking();
             }
-            
-            // Add quick message button styles
-            const style = document.createElement('style');
-            style.textContent = `
-                .quick-message-btn {
-                    background: #e8f4fc;
-                    border: 1px solid #3498db;
-                    color: #3498db;
-                    padding: 5px 10px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    cursor: pointer;
-                    transition: all 0.3s;
-                    margin: 2px;
-                }
-                .quick-message-btn:hover {
-                    background: #3498db;
-                    color: white;
-                }
-            `;
-            document.head.appendChild(style);
             
             // Start checking for cancellations
             checkForCancellations();

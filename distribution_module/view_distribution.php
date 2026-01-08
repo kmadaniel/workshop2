@@ -1,6 +1,7 @@
 <?php
 // ========================================
-// VIEW DISTRIBUTION DETAILS - FIXED VERSION
+// VIEW DISTRIBUTION DETAILS - USER FRIENDLY VERSION
+// Now shows resource names and volunteer names instead of IDs
 // ========================================
 
 // Enable error reporting
@@ -36,6 +37,7 @@ if (!$distribution_id) {
 $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
+$VOLUNTEER_API_URL = 'http://10.147.17.30:8000/api_volunteer.php';
 
 /* ----------------------------------------
    FETCH DATA FROM APIS
@@ -73,6 +75,7 @@ function fetchDataFromAPI($url, $timeout = 5) {
 $disasterApiResult = fetchDataFromAPI($DISASTER_API_URL);
 $victimApiResult = fetchDataFromAPI($VICTIM_API_URL);
 $needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
+$volunteerApiResult = fetchDataFromAPI($VOLUNTEER_API_URL);
 
 /* ----------------------------------------
    GET DISTRIBUTION BASIC DETAILS
@@ -101,11 +104,9 @@ if (!$distribution) {
     exit;
 }
 
-error_log("Distribution found: " . json_encode($distribution));
-
 // Get disaster details from API
 $disaster_info = null;
-if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])) {
+if ($disasterApiResult['success'] && isset($disasterApiResult['data']) && is_array($disasterApiResult['data'])) {
     $apiDisasters = $disasterApiResult['data'];
     $disaster_id_from_distribution = $distribution['disaster_id'];
     
@@ -165,8 +166,6 @@ $victims_query = "
     ORDER BY di.item_id
 ";
 
-error_log("Fetching victims for distribution ID: " . $distribution_id);
-
 $victims_stmt = $db->prepare($victims_query);
 if (!$victims_stmt) {
     die("Prepare failed for victims: " . $db->error);
@@ -177,20 +176,16 @@ $victims_result = $victims_stmt->get_result();
 $distribution_victim_ids = $victims_result->fetch_all(MYSQLI_ASSOC);
 $victims_stmt->close();
 
-error_log("Found " . count($distribution_victim_ids) . " victim IDs in distribution_items");
-
 /* ----------------------------------------
    GET VICTIM DETAILS FROM API
 ---------------------------------------- */
 $distribution_victims = [];
-if ($victimApiResult['success'] && is_array($victimApiResult['data']) && !empty($distribution_victim_ids)) {
+if ($victimApiResult['success'] && isset($victimApiResult['data']) && is_array($victimApiResult['data']) && !empty($distribution_victim_ids)) {
     $apiVictims = $victimApiResult['data'];
     
     foreach ($distribution_victim_ids as $victim_item) {
         $victimId = $victim_item['victim_id'];
         $found = false;
-        
-        error_log("Looking for victim ID: $victimId in API data");
         
         foreach ($apiVictims as $apiVictim) {
             // Check multiple possible field names for victim ID
@@ -235,7 +230,7 @@ if ($victimApiResult['success'] && is_array($victimApiResult['data']) && !empty(
                     'priority' => 'Medium'
                 ];
                 
-                if ($needsApiResult['success'] && is_array($needsApiResult['data'])) {
+                if ($needsApiResult['success'] && isset($needsApiResult['data']) && is_array($needsApiResult['data'])) {
                     foreach ($needsApiResult['data'] as $need) {
                         $needVictimId = null;
                         $needFields = ['victim_id', 'Victim_ID', 'victimId', 'VictimID', 'id'];
@@ -299,7 +294,6 @@ if ($victimApiResult['success'] && is_array($victimApiResult['data']) && !empty(
         }
         
         if (!$found) {
-            error_log("Victim ID $victimId not found in API data");
             // Add a placeholder if victim not found in API
             $distribution_victims[] = array_merge($victim_item, [
                 'victim_id' => $victimId,
@@ -323,11 +317,7 @@ if ($victimApiResult['success'] && is_array($victimApiResult['data']) && !empty(
             ]);
         }
     }
-} else {
-    error_log("Cannot fetch victims: API failed or no victim IDs");
 }
-
-error_log("Total victims prepared for display: " . count($distribution_victims));
 
 /* ----------------------------------------
    GET RESOURCE ALLOCATIONS
@@ -354,53 +344,77 @@ $resources_stmt->close();
    GET RESOURCE DETAILS
 ---------------------------------------- */
 $resources_summary = [];
-$local_resources = [];
-
-// Get local resources first
-$local_resources_query = "SELECT resource_id, name, type, unit FROM resource";
-$local_resources_result = $db->query($local_resources_query);
-if ($local_resources_result) {
-    while ($row = $local_resources_result->fetch_assoc()) {
-        $local_resources[$row['resource_id']] = $row;
-    }
-    $local_resources_result->free();
-}
 
 // Group resources from distribution_resources
 foreach ($distribution_resources as $resource) {
     $resource_id = $resource['resource_id'];
-    
-    // Try to get resource details
     $resource_name = 'Unknown Resource';
     $resource_type = 'General';
     $resource_unit = 'units';
     
-    // Check local resources first
-    if (isset($local_resources[$resource_id])) {
-        $resource_name = $local_resources[$resource_id]['name'];
-        $resource_type = $local_resources[$resource_id]['type'];
-        $resource_unit = $local_resources[$resource_id]['unit'];
-    } 
-    // Then check needs API
-    else if ($needsApiResult['success'] && is_array($needsApiResult['data'])) {
-        foreach ($needsApiResult['data'] as $need) {
-            $needResourceId = null;
-            $resourceFields = ['resource_id', 'Resource_ID', 'resourceId', 'ResourceID', 'id'];
+    // Try to get resource details from needs API
+    if ($needsApiResult['success'] && isset($needsApiResult['data']) && is_array($needsApiResult['data'])) {
+        // Check if data is in a nested array structure
+        $apiNeeds = $needsApiResult['data'];
+        if (isset($apiNeeds['data']) && is_array($apiNeeds['data'])) {
+            $apiNeeds = $apiNeeds['data'];
+        }
+        
+        foreach ($apiNeeds as $need) {
+            // Check multiple possible field names for resource ID
+            $apiResourceId = null;
+            $possibleFields = ['resource_id', 'Resource_ID', 'resourceId', 'ResourceID', 'id'];
             
-            foreach ($resourceFields as $field) {
+            foreach ($possibleFields as $field) {
                 if (isset($need[$field]) && intval($need[$field]) == $resource_id) {
-                    $needResourceId = intval($need[$field]);
+                    $apiResourceId = intval($need[$field]);
                     break;
                 }
             }
             
-            if ($needResourceId == $resource_id) {
-                $resource_name = $need['resource_name'] ?? $need['Resource_Name'] ?? $need['resourceName'] ?? 'Unknown Resource';
-                $resource_type = $need['resource_type'] ?? $need['Resource_Type'] ?? $need['resourceType'] ?? 'General';
-                $resource_unit = $need['unit'] ?? $need['Unit'] ?? 'units';
+            if ($apiResourceId == $resource_id) {
+                // Get resource name from various possible fields
+                $resource_name = $need['temp_resource_name'] ?? 
+                               $need['resource_name'] ?? 
+                               $need['Resource_Name'] ?? 
+                               $need['resourceName'] ?? 
+                               'Unknown Resource';
+                $resource_name = trim($resource_name);
+                
+                // Determine resource type based on name
+                $lowerName = strtolower($resource_name);
+                if (strpos($lowerName, 'disinfectant') !== false || 
+                    strpos($lowerName, 'sanitizer') !== false ||
+                    strpos($lowerName, 'alcohol') !== false ||
+                    strpos($lowerName, 'bandage') !== false ||
+                    strpos($lowerName, 'gauze') !== false ||
+                    strpos($lowerName, 'syringe') !== false ||
+                    strpos($lowerName, 'medicine') !== false ||
+                    strpos($lowerName, 'first aid') !== false) {
+                    $resource_type = 'Medical';
+                    $resource_unit = 'units';
+                } elseif (strpos($lowerName, 'blanket') !== false ||
+                         strpos($lowerName, 'towel') !== false ||
+                         strpos($lowerName, 'cloth') !== false ||
+                         strpos($lowerName, 'shirt') !== false ||
+                         strpos($lowerName, 'pant') !== false) {
+                    $resource_type = 'Clothing';
+                    $resource_unit = 'pieces';
+                } elseif (strpos($lowerName, 'rice') !== false ||
+                         strpos($lowerName, 'water') !== false ||
+                         strpos($lowerName, 'food') !== false ||
+                         strpos($lowerName, 'noodle') !== false) {
+                    $resource_type = 'Food';
+                    $resource_unit = 'units';
+                }
                 break;
             }
         }
+    }
+    
+    // If still unknown, create a better name
+    if ($resource_name == 'Unknown Resource') {
+        $resource_name = 'Resource #' . $resource_id;
     }
     
     if (!isset($resources_summary[$resource_id])) {
@@ -415,13 +429,42 @@ foreach ($distribution_resources as $resource) {
     }
     $resources_summary[$resource_id]['total_quantity'] += $resource['quantity_allocated'];
     $resources_summary[$resource_id]['allocated'] = $resource['quantity_allocated'];
-    $resources_summary[$resource_id]['distributed'] = $resource['quantity_distributed'];
+    $resources_summary[$resource_id]['distributed'] = $resource['quantity_distributed'] ?? 0;
 }
 
 /* ----------------------------------------
-   GET ASSIGNED VOLUNTEERS - SIMPLIFIED VERSION
+   GET ASSIGNED VOLUNTEERS
 ---------------------------------------- */
 $assigned_volunteers = [];
+
+// Create a mapping of volunteer ID to volunteer name
+$volunteerMap = [];
+if ($volunteerApiResult['success'] && isset($volunteerApiResult['data']) && is_array($volunteerApiResult['data'])) {
+    $apiVolunteers = $volunteerApiResult['data'];
+    
+    // Check if data is nested
+    if (isset($apiVolunteers['volunteers']) && is_array($apiVolunteers['volunteers'])) {
+        $apiVolunteers = $apiVolunteers['volunteers'];
+    } elseif (isset($apiVolunteers['data']) && is_array($apiVolunteers['data'])) {
+        $apiVolunteers = $apiVolunteers['data'];
+    }
+    
+    foreach ($apiVolunteers as $volunteer) {
+        // Extract volunteer ID
+        $volunteerId = $volunteer['VolunteerID'] ?? $volunteer['volunteer_id'] ?? $volunteer['id'] ?? null;
+        $volunteerName = $volunteer['FullName'] ?? $volunteer['fullName'] ?? $volunteer['name'] ?? null;
+        
+        if ($volunteerId && $volunteerName) {
+            $volunteerMap[intval($volunteerId)] = [
+                'name' => $volunteerName,
+                'phone' => $volunteer['Phone'] ?? $volunteer['phone'] ?? '',
+                'email' => $volunteer['Email'] ?? $volunteer['email'] ?? '',
+                'role' => $volunteer['SkillCategory'] ?? $volunteer['skill_category'] ?? $volunteer['Role'] ?? $volunteer['role'] ?? 'Volunteer',
+                'ngo' => $volunteer['AssignedNGO'] ?? $volunteer['assignedNGO'] ?? $volunteer['ngo'] ?? 'Various'
+            ];
+        }
+    }
+}
 
 // Check if distribution_volunteer table exists
 $check_table_query = "SHOW TABLES LIKE 'distribution_volunteer'";
@@ -445,27 +488,33 @@ if ($table_result && $table_result->num_rows > 0) {
         $assigned_volunteers_raw = $volunteers_result->fetch_all(MYSQLI_ASSOC);
         $volunteers_stmt->close();
         
-        // Format volunteer data
+        // Format volunteer data with names from API
         foreach ($assigned_volunteers_raw as $volunteer) {
+            $volunteerId = $volunteer['volunteer_id'];
+            $volunteerInfo = $volunteerMap[$volunteerId] ?? null;
+            
             $assigned_volunteers[] = [
-                'volunteer_id' => $volunteer['volunteer_id'],
-                'volunteer_name' => 'Volunteer #' . $volunteer['volunteer_id'],
-                'volunteer_role' => 'Volunteer',
+                'volunteer_id' => $volunteerId,
+                'volunteer_name' => $volunteerInfo['name'] ?? ('Volunteer #' . $volunteerId),
+                'phone' => $volunteerInfo['phone'] ?? '',
+                'email' => $volunteerInfo['email'] ?? '',
+                'volunteer_role' => $volunteer['role'] ?? ($volunteerInfo['role'] ?? 'Volunteer'),
+                'ngo' => $volunteerInfo['ngo'] ?? 'Various',
                 'status' => $volunteer['status'] ?? 'Active',
                 'assigned_timestamp' => $volunteer['assigned_timestamp'] ?? date('Y-m-d H:i:s')
             ];
         }
     }
-} else {
-    // Table doesn't exist, show sample data or empty
-    error_log("distribution_volunteer table doesn't exist");
 }
 
 /* ----------------------------------------
    CALCULATE STATISTICS
 ---------------------------------------- */
 $total_families = count($distribution_victims);
-$total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
+$total_resources_allocated = 0;
+if (!empty($distribution_resources)) {
+    $total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
+}
 
 /* ----------------------------------------
    PARSE PLAN DETAILS FROM COMMENTS
@@ -486,19 +535,6 @@ if ($distribution['comments']) {
         }
         if (strpos($line, 'Volunteers Needed:') !== false) {
             $plan_details['volunteers_needed'] = trim(str_replace('Volunteers Needed:', '', $line));
-        }
-        // Parse resource allocations from comments
-        if (strpos($line, '- ') === 0 && strpos($line, ':') !== false) {
-            $parts = explode(':', substr($line, 2));
-            if (count($parts) >= 2) {
-                if (!isset($plan_details['resources'])) {
-                    $plan_details['resources'] = [];
-                }
-                $plan_details['resources'][] = [
-                    'name' => trim($parts[0]),
-                    'amount' => trim($parts[1])
-                ];
-            }
         }
     }
 }
@@ -532,126 +568,157 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Distribution #<?php echo $distribution_id; ?> - Details</title>
+    <title>Distribution #<?php echo $distribution_id; ?> - Details | Disaster Relief System</title>
     <link rel="stylesheet" href="../css/style.css">
     <link rel="stylesheet" href="../css/main.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        .victim-group {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            border: 1px solid rgba(0,0,0,0.05);
-            border-radius: 12px;
+        /* ===== BASE STYLES ===== */
+        :root {
+            --primary: #3498db;
+            --secondary: #2c3e50;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --light: #f8f9fa;
+            --dark: #343a40;
+            --gray: #6c757d;
+            --light-gray: #e9ecef;
+            --border-radius: 12px;
+            --box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            --transition: all 0.3s ease;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
+            color: var(--dark);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .main-content {
             padding: 20px;
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* ===== HEADER ===== */
+        .page-header {
+            background: linear-gradient(135deg, var(--primary) 0%, #2980b9 100%);
+            color: white;
+            padding: 30px;
+            border-radius: var(--border-radius);
+            margin-bottom: 30px;
+            box-shadow: var(--box-shadow);
             position: relative;
             overflow: hidden;
         }
         
-        .victim-group:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-            border-color: #3498db;
-        }
-        
-        .victim-group::before {
+        .page-header::before {
             content: '';
             position: absolute;
             top: 0;
-            left: 0;
-            width: 100%;
-            height: 4px;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            right: 0;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 50%;
+            transform: translate(100px, -100px);
         }
         
-        .victim-header {
+        .page-header::after {
+            content: '';
+            position: absolute;
+            bottom: -50px;
+            left: -50px;
+            width: 200px;
+            height: 200px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+        }
+        
+        .header-content {
+            position: relative;
+            z-index: 2;
+        }
+        
+        .header-content h1 {
+            font-size: 2.2rem;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .header-content h1 i {
+            background: rgba(255,255,255,0.2);
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 1.5rem;
+        }
+        
+        .header-subtitle {
+            font-size: 1.1rem;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        /* ===== CARDS ===== */
+        .card {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 25px;
+            box-shadow: var(--box-shadow);
+            margin-bottom: 25px;
+            border: 1px solid var(--light-gray);
+            transition: var(--transition);
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
             padding-bottom: 15px;
-            border-bottom: 2px solid #3498db;
+            border-bottom: 2px solid var(--light-gray);
         }
         
-        .resource-summary-card {
-            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-            border: 1px solid rgba(0,0,0,0.05);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 15px;
-            transition: all 0.3s ease;
-        }
-        
-        .resource-summary-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-        }
-        
-        .plan-detail-box {
-            background: linear-gradient(135deg, #e8f4f8 0%, #d1ecf1 100%);
-            border-left: 4px solid #3498db;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-        
-        .plan-detail-box:hover {
-            transform: translateX(5px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-        }
-        
-        .victim-header h3 {
-            font-size: 1.2rem;
-            color: #2c3e50;
-            margin: 0;
+        .card-header h2 {
+            font-size: 1.5rem;
+            color: var(--secondary);
             display: flex;
             align-items: center;
             gap: 10px;
         }
         
-        .victim-header h3::before {
-            content: '👤';
+        .card-header h2 i {
+            color: var(--primary);
         }
         
-        .priority-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 5px 15px;
-            border-radius: 50px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: white;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .priority-badge::before {
-            content: '';
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: currentColor;
-            animation: pulse 2s infinite;
-        }
-        
-        .badge-urgent {
-            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-        }
-        
-        .badge-high {
-            background: linear-gradient(135deg, #f39c12 0%, #d35400 100%);
-        }
-        
-        .badge-medium {
-            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
-        }
-        
-        .badge-low {
-            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
-        }
-        
+        /* ===== STATUS BADGES ===== */
         .status-badge {
             display: inline-flex;
             align-items: center;
@@ -664,363 +731,547 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
             letter-spacing: 0.5px;
         }
         
-        .status-badge.large {
-            padding: 10px 25px;
-            font-size: 1rem;
-        }
-        
-        .status-badge::before {
-            content: '';
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: currentColor;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
-        
-        .status-planned {
-            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
-            color: white;
-        }
-        
-        .status-assigned {
-            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
-            color: white;
-        }
-        
-        .status-active {
-            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
-            color: white;
-        }
-        
-        .status-completed {
-            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
-            color: white;
-        }
-        
-        .status-cancelled {
-            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-            color: white;
-        }
+        .status-planned { background: var(--warning); color: white; }
+        .status-scheduled { background: #3498db; color: white; }
+        .status-active { background: var(--success); color: white; }
+        .status-completed { background: #9b59b6; color: white; }
+        .status-cancelled { background: var(--danger); color: white; }
         
         .severity-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 20px;
-            border-radius: 50px;
-            font-weight: 600;
+            padding: 6px 16px;
+            border-radius: 20px;
             font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .severity-badge::before {
-            content: '';
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: currentColor;
-        }
-        
-        .severity-low {
-            background: rgba(46, 204, 113, 0.1);
-            color: #27ae60;
-            border: 1px solid rgba(46, 204, 113, 0.3);
-        }
-        
-        .severity-medium {
-            background: rgba(243, 156, 18, 0.1);
-            color: #f39c12;
-            border: 1px solid rgba(243, 156, 18, 0.3);
-        }
-        
-        .severity-high {
-            background: rgba(231, 76, 60, 0.1);
-            color: #e74c3c;
-            border: 1px solid rgba(231, 76, 60, 0.3);
-        }
-        
-        .severity-critical {
-            background: rgba(192, 57, 43, 0.1);
-            color: #c0392b;
-            border: 1px solid rgba(192, 57, 43, 0.3);
-        }
-        
-        .badge-count {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 8px 20px;
-            border-radius: 50px;
             font-weight: 600;
-            font-size: 0.9rem;
+        }
+        
+        .severity-low { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .severity-medium { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .severity-high { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        
+        /* ===== BUTTONS ===== */
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95rem;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            margin-right: 15px;
+            text-decoration: none;
+            transition: var(--transition);
         }
         
-        .badge-count::before {
-            content: '🎯';
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
         
-        .progress-bar-container {
-            width: 100%;
-            background: #e9ecef;
-            border-radius: 10px;
-            margin: 20px 0;
-            overflow: hidden;
-        }
-        
-        .progress-bar {
-            height: 20px;
-            border-radius: 10px;
-            text-align: center;
-            line-height: 20px;
+        .btn-primary {
+            background: var(--primary);
             color: white;
-            font-weight: bold;
-            transition: width 0.5s ease;
         }
         
-        .progress-planned { background: linear-gradient(90deg, #f39c12, #e67e22); }
-        .progress-assigned { background: linear-gradient(90deg, #3498db, #2980b9); }
-        .progress-active { background: linear-gradient(90deg, #2ecc71, #27ae60); }
-        .progress-completed { background: linear-gradient(90deg, #9b59b6, #8e44ad); }
-        
-        .qr-section {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            text-align: center;
-            margin-top: 20px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        .btn-secondary {
+            background: var(--gray);
+            color: white;
         }
         
-        .qr-code {
-            width: 150px;
-            height: 150px;
-            margin: 15px auto;
-            background: #f8f9fa;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 3rem;
-            color: #667eea;
+        .btn-success {
+            background: var(--success);
+            color: white;
         }
         
-        .special-needs-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.75em;
-            font-weight: 600;
-            margin: 2px;
+        .btn-warning {
+            background: var(--warning);
+            color: white;
         }
         
-        .badge-baby { background: #fff3cd; color: #856404; }
-        .badge-elderly { background: #d1ecf1; color: #0c5460; }
-        .badge-disabled { background: #f8d7da; color: #721c24; }
-        
-        .api-missing {
-            background: #fff3cd;
-            color: #856404;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-size: 0.9em;
-            margin-top: 10px;
-            border-left: 3px solid #ffc107;
+        .btn-outline {
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
         }
         
-        @media (max-width: 768px) {
-            .victim-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 10px;
-            }
+        .btn-outline:hover {
+            background: var(--primary);
+            color: white;
         }
         
-        @media print {
-            .btn, .action-buttons { 
-                display: none !important; 
-            }
-            
-            .card-3d {
-                box-shadow: none !important;
-                border: 1px solid #ddd !important;
-            }
-        }
-        
-        .main-content {
-            padding: 20px;
-            background: #f8f9fa;
-            min-height: 100vh;
-        }
-        
-        .api-status {
-            padding: 10px 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .api-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .api-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        .grid-2 {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 15px;
-        }
-        
-        .grid-4 {
+        /* ===== STATS GRID ===== */
+        .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin: 30px 0;
         }
         
-        .card-3d {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-            margin-bottom: 25px;
-            border: 1px solid #e1e1e1;
-        }
-        
-        .section-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #f0f2f5;
-        }
-        
-        .alert {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .alert-warning {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
-        }
-        
-        .btn {
-            padding: 10px 20px;
-            border-radius: 5px;
-            border: none;
-            cursor: pointer;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            text-decoration: none;
-            font-size: 0.95em;
-        }
-        
-        .btn-success {
-            background: #27ae60;
-            color: white;
-        }
-        
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-        
-        .btn-primary {
-            background: #3498db;
-            color: white;
-        }
-        
-        .btn-warning {
-            background: #ffc107;
-            color: #212529;
-        }
-        
         .stat-card {
             background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
-            transition: transform 0.3s ease;
+            padding: 25px;
+            border-radius: var(--border-radius);
+            text-align: center;
+            box-shadow: var(--box-shadow);
+            transition: var(--transition);
+            border-top: 4px solid var(--primary);
         }
         
         .stat-card:hover {
             transform: translateY(-5px);
         }
         
-        .stat-label {
-            color: #7f8c8d;
-            font-size: 0.9em;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 10px;
+        .stat-card i {
+            font-size: 2.5rem;
+            color: var(--primary);
+            margin-bottom: 15px;
         }
         
         .stat-number {
-            font-size: 2.2em;
+            font-size: 2.8rem;
             font-weight: 700;
-            color: #2c3e50;
+            color: var(--secondary);
+            line-height: 1;
+            margin: 10px 0;
         }
         
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
+        .stat-label {
+            color: var(--gray);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        /* ===== INFO GRIDS ===== */
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .info-item {
+            background: var(--light);
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .info-item label {
+            display: block;
+            color: var(--gray);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        
+        .info-item .value {
+            font-size: 1.1rem;
+            color: var(--secondary);
+            font-weight: 500;
+        }
+        
+        /* ===== RESOURCE CARDS ===== */
+        .resource-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        
+        .resource-card {
+            background: white;
             border-radius: 12px;
-            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid var(--light-gray);
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
         }
         
-        .header-actions {
+        .resource-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+            border-color: var(--primary);
+        }
+        
+        .resource-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary), #9b59b6);
+        }
+        
+        .resource-name {
+            font-weight: 600;
+            color: var(--secondary);
+            font-size: 1.1rem;
+            margin-bottom: 5px;
+        }
+        
+        .resource-meta {
+            color: var(--gray);
+            font-size: 0.9rem;
+            margin-bottom: 15px;
             display: flex;
+            align-items: center;
             gap: 10px;
         }
         
-        .fade-in {
-            animation: fadeIn 0.8s ease-out;
+        .resource-type {
+            background: var(--light-gray);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
         }
         
+        .resource-stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-top: 15px;
+        }
+        
+        .resource-amount {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .resource-unit {
+            font-size: 0.9rem;
+            color: var(--gray);
+        }
+        
+        /* ===== VICTIM CARDS ===== */
+        .victim-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        
+        .victim-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--light-gray);
+            transition: var(--transition);
+        }
+        
+        .victim-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        
+        .victim-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        
+        .victim-avatar {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--primary), #9b59b6);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.5rem;
+        }
+        
+        .victim-info h3 {
+            font-size: 1.1rem;
+            color: var(--secondary);
+            margin-bottom: 5px;
+        }
+        
+        .priority-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .priority-high { background: #f8d7da; color: #721c24; }
+        .priority-medium { background: #fff3cd; color: #856404; }
+        .priority-low { background: #d1ecf1; color: #0c5460; }
+        
+        .victim-details {
+            font-size: 0.9rem;
+            color: var(--gray);
+        }
+        
+        .victim-details p {
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .victim-details i {
+            width: 20px;
+            color: var(--primary);
+        }
+        
+        .special-needs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        .needs-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .needs-baby { background: #fff3cd; color: #856404; }
+        .needs-elderly { background: #d1ecf1; color: #0c5460; }
+        .needs-disabled { background: #f8d7da; color: #721c24; }
+        
+        /* ===== VOLUNTEER CARDS ===== */
+        .volunteer-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        
+        .volunteer-card {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--light-gray);
+            transition: var(--transition);
+        }
+        
+        .volunteer-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        
+        .volunteer-avatar {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, var(--primary), #3498db);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-right: 15px;
+        }
+        
+        .volunteer-role {
+            background: var(--primary);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        /* ===== PROGRESS BARS ===== */
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: var(--gray);
+        }
+        
+        .progress-bar {
+            height: 10px;
+            background: var(--light-gray);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #9b59b6);
+            border-radius: 5px;
+            transition: width 0.5s ease;
+        }
+        
+        /* ===== ALERTS ===== */
+        .alert {
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-left: 4px solid;
+        }
+        
+        .alert i {
+            font-size: 1.5rem;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left-color: #3498db;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left-color: #ffc107;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left-color: #28a745;
+        }
+        
+        /* ===== API STATUS ===== */
+        .api-status-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        
+        .api-status {
+            padding: 15px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: white;
+            box-shadow: var(--box-shadow);
+        }
+        
+        .api-status i {
+            font-size: 1.5rem;
+        }
+        
+        .api-connected i { color: var(--success); }
+        .api-disconnected i { color: var(--danger); }
+        
+        .api-status-content h4 {
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+        
+        .api-status-content p {
+            font-size: 0.8rem;
+            color: var(--gray);
+        }
+        
+        /* ===== EMPTY STATES ===== */
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: var(--gray);
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            color: var(--light-gray);
+            margin-bottom: 20px;
+        }
+        
+        .empty-state h3 {
+            font-size: 1.3rem;
+            margin-bottom: 10px;
+            color: var(--secondary);
+        }
+        
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .page-header {
+                padding: 20px;
+            }
+            
+            .header-content h1 {
+                font-size: 1.8rem;
+            }
+            
+            .stats-grid,
+            .info-grid,
+            .resource-grid,
+            .victim-grid,
+            .volunteer-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header-actions {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        /* ===== ANIMATIONS ===== */
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-20px); }
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        /* ===== LOADING SCREEN ===== */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease;
+        }
+        
+        .loading-content {
+            text-align: center;
+        }
+        
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid var(--light-gray);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -1030,7 +1281,7 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
         <div class="loading-content">
             <div class="loading-spinner"></div>
             <h3>Loading Distribution Details</h3>
-            <p>Please wait while we load distribution data...</p>
+            <p>Please wait while we gather all the information...</p>
         </div>
     </div>
 
@@ -1038,181 +1289,155 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
     <main class="main-content" id="mainContent">
         <div class="container">
             <!-- API Status -->
-            <div class="api-status <?php echo $disasterApiResult['success'] ? 'api-success' : 'api-error'; ?>">
-                <i class="fas <?php echo $disasterApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
-                <div>
-                    <strong>Disaster API:</strong> 
-                    <?php echo $disasterApiResult['success'] ? 'Connected' : 'Failed'; ?>
-                    <?php if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])): ?>
-                        <br><small><?php echo count($disasterApiResult['data']); ?> disasters loaded</small>
-                    <?php endif; ?>
-                </div>
-            </div>
-            
-            <div class="api-status <?php echo $victimApiResult['success'] ? 'api-success' : 'api-error'; ?>">
-                <i class="fas <?php echo $victimApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
-                <div>
-                    <strong>Victim API:</strong> 
-                    <?php echo $victimApiResult['success'] ? 'Connected' : 'Failed'; ?>
-                    <?php if ($victimApiResult['success'] && is_array($victimApiResult['data'])): ?>
-                        <br><small><?php echo count($victimApiResult['data']); ?> victims loaded</small>
-                    <?php endif; ?>
-                </div>
-            </div>
-            
-            <div class="api-status <?php echo $needsApiResult['success'] ? 'api-success' : 'api-error'; ?>">
-                <i class="fas <?php echo $needsApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
-                <div>
-                    <strong>Needs API:</strong> 
-                    <?php echo $needsApiResult['success'] ? 'Connected' : 'Failed'; ?>
-                    <?php if ($needsApiResult['success'] && is_array($needsApiResult['data'])): ?>
-                        <br><small><?php echo count($needsApiResult['data']); ?> needs loaded</small>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <!-- Debug information -->
-            <div style="background: #f8f9fa; padding: 10px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #ddd;">
-                <strong>Debug Info:</strong> 
-                Distribution ID: <?php echo $distribution_id; ?> | 
-                Disaster ID: <?php echo $distribution['disaster_id'] ?? 'N/A'; ?> | 
-                Found <?php echo $total_families; ?> families | 
-                Found <?php echo count($resources_summary); ?> resource types
-            </div>
-
-            <!-- Enhanced Header with Gradient -->
-            <div class="header fade-in">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
-                    <div>
-                        <h1 style="margin: 0; display: flex; align-items: center; gap: 15px;">
-                            <span style="background: rgba(255,255,255,0.2); padding: 10px; border-radius: 12px;">📦</span>
-                            Distribution Plan Details
-                        </h1>
-                        <p style="margin: 10px 0 0 0; opacity: 0.9; font-size: 1.1rem;">
-                            <strong>ID:</strong> DIST<?php echo str_pad($distribution_id, 3, '0', STR_PAD_LEFT); ?>
-                            • <strong>Status:</strong> <?php echo ucfirst($distribution['status'] ?? 'Unknown'); ?>
-                            • <strong>Date:</strong> <?php echo date('F j, Y', strtotime($distribution['date'] ?? 'now')); ?>
-                        </p>
+            <div class="api-status-container">
+                <div class="api-status <?php echo $disasterApiResult['success'] ? 'api-connected' : 'api-disconnected'; ?>">
+                    <i class="fas <?php echo $disasterApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
+                    <div class="api-status-content">
+                        <h4>Disaster API</h4>
+                        <p><?php echo $disasterApiResult['success'] ? 'Connected' : 'Disconnected'; ?></p>
                     </div>
+                </div>
+                
+                <div class="api-status <?php echo $victimApiResult['success'] ? 'api-connected' : 'api-disconnected'; ?>">
+                    <i class="fas <?php echo $victimApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
+                    <div class="api-status-content">
+                        <h4>Victim API</h4>
+                        <p><?php echo $victimApiResult['success'] ? 'Connected' : 'Disconnected'; ?></p>
+                    </div>
+                </div>
+                
+                <div class="api-status <?php echo $needsApiResult['success'] ? 'api-connected' : 'api-disconnected'; ?>">
+                    <i class="fas <?php echo $needsApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
+                    <div class="api-status-content">
+                        <h4>Needs API</h4>
+                        <p><?php echo $needsApiResult['success'] ? 'Connected' : 'Disconnected'; ?></p>
+                    </div>
+                </div>
+                
+                <div class="api-status <?php echo $volunteerApiResult['success'] ? 'api-connected' : 'api-disconnected'; ?>">
+                    <i class="fas <?php echo $volunteerApiResult['success'] ? 'fa-check-circle' : 'fa-times-circle'; ?>"></i>
+                    <div class="api-status-content">
+                        <h4>Volunteer API</h4>
+                        <p><?php echo $volunteerApiResult['success'] ? 'Connected' : 'Disconnected'; ?></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page Header -->
+            <div class="page-header fade-in">
+                <div class="header-content">
+                    <h1>
+                        <i class="fas fa-box-open"></i>
+                        Distribution Plan Details
+                    </h1>
+                    <p class="header-subtitle">
+                        <strong>ID:</strong> DIST<?php echo str_pad($distribution_id, 3, '0', STR_PAD_LEFT); ?>
+                        • <strong>Status:</strong> <?php echo ucfirst($distribution['status'] ?? 'Unknown'); ?>
+                        • <strong>Date:</strong> <?php echo date('F j, Y', strtotime($distribution['date'] ?? 'now')); ?>
+                    </p>
+                    
                     <div class="header-actions">
                         <?php if (($distribution['status'] ?? '') == 'Planning' || ($distribution['status'] ?? '') == 'Scheduled'): ?>
                             <a href="assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>" class="btn btn-success">
                                 <i class="fas fa-users"></i> Assign Volunteers
                             </a>
                         <?php endif; ?>
-                        <a href="distribution_main.php" class="btn btn-secondary">
+                        <a href="distribution_main.php" class="btn btn-outline">
                             <i class="fas fa-arrow-left"></i> Back to Dashboard
                         </a>
+                        <a href="create_distribution_plan.php" class="btn btn-primary">
+                            <i class="fas fa-plus-circle"></i> Create New Distribution
+                        </a>
+                        <?php if (($distribution['status'] ?? '') == 'Scheduled' && !empty($assigned_volunteers)): ?>
+                            <a href="execute_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-success">
+                                <i class="fas fa-play-circle"></i> Start Distribution
+                            </a>
+                        <?php endif; ?>
+                        <button onclick="window.print()" class="btn btn-warning">
+                            <i class="fas fa-print"></i> Print Report
+                        </button>
                     </div>
                 </div>
             </div>
 
+            <!-- Quick Stats -->
+            <div class="stats-grid fade-in">
+                <div class="stat-card">
+                    <i class="fas fa-users"></i>
+                    <div class="stat-number"><?php echo $total_families; ?></div>
+                    <div class="stat-label">Families Assisted</div>
+                </div>
+                
+                <div class="stat-card">
+                    <i class="fas fa-boxes"></i>
+                    <div class="stat-number"><?php echo count($resources_summary); ?></div>
+                    <div class="stat-label">Resource Types</div>
+                </div>
+                
+                <div class="stat-card">
+                    <i class="fas fa-cubes"></i>
+                    <div class="stat-number"><?php echo $total_resources_allocated; ?></div>
+                    <div class="stat-label">Total Resources</div>
+                </div>
+                
+                <div class="stat-card">
+                    <i class="fas fa-hands-helping"></i>
+                    <div class="stat-number"><?php echo count($assigned_volunteers); ?></div>
+                    <div class="stat-label">Volunteers</div>
+                </div>
+            </div>
+
             <!-- Main Information Grid -->
-            <div class="grid-2">
-                <!-- Distribution Overview Card -->
-                <div class="card-3d">
-                    <div class="section-header">
-                        <h2 style="display: flex; align-items: center; gap: 10px;">
-                            <i class="fas fa-chart-bar"></i> Distribution Overview
-                        </h2>
+            <div class="info-grid fade-in">
+                <!-- Distribution Overview -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-info-circle"></i> Distribution Overview</h2>
+                        <span class="status-badge status-<?php echo strtolower($distribution['status'] ?? 'unknown'); ?>">
+                            <?php echo ucfirst($distribution['status'] ?? 'Unknown'); ?>
+                        </span>
                     </div>
                     
-                    <div class="overview-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Distribution ID</label>
-                            <div class="value" style="font-size: 1.5rem; font-weight: 700; color: #2c3e50;">
-                                DIST<?php echo str_pad($distribution['distribution_id'], 3, '0', STR_PAD_LEFT); ?>
-                            </div>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>Distribution ID</label>
+                            <div class="value">DIST<?php echo str_pad($distribution['distribution_id'], 3, '0', STR_PAD_LEFT); ?></div>
                         </div>
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Status</label>
-                            <div class="value">
-                                <?php 
-                                $status = $distribution['status'] ?? 'Unknown';
-                                $statusClass = 'status-' . strtolower($status);
-                                ?>
-                                <span class="status-badge <?php echo $statusClass; ?>">
-                                    <?php echo ucfirst($status); ?>
-                                </span>
-                            </div>
+                        
+                        <div class="info-item">
+                            <label>Distribution Date</label>
+                            <div class="value"><?php echo date('F j, Y g:i A', strtotime($distribution['date'] ?? 'now')); ?></div>
                         </div>
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Distribution Date</label>
-                            <div class="value" style="font-size: 1.2rem; color: #2c3e50; font-weight: 500;">
-                                <?php echo date('F j, Y g:i A', strtotime($distribution['date'] ?? 'now')); ?>
-                            </div>
+                        
+                        <?php if (!empty($plan_details['location'])): ?>
+                        <div class="info-item">
+                            <label>Location</label>
+                            <div class="value"><?php echo htmlspecialchars($plan_details['location']); ?></div>
                         </div>
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Total Families</label>
-                            <div class="value" style="font-size: 1.5rem; font-weight: 700; color: #3498db;">
-                                <?php echo $total_families; ?> <span style="font-size: 1rem; color: #7f8c8d;">families</span>
-                            </div>
+                        <?php endif; ?>
+                        
+                        <?php if (!empty($plan_details['coordinator'])): ?>
+                        <div class="info-item">
+                            <label>Coordinator</label>
+                            <div class="value"><?php echo htmlspecialchars($plan_details['coordinator']); ?></div>
                         </div>
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Resource Types</label>
-                            <div class="value" style="font-size: 1.5rem; font-weight: 700; color: #2ecc71;">
-                                <?php echo count($resources_summary); ?> <span style="font-size: 1rem; color: #7f8c8d;">types</span>
-                            </div>
-                        </div>
-                        <div class="overview-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Total Resources</label>
-                            <div class="value" style="font-size: 1.5rem; font-weight: 700; color: #9b59b6;">
-                                <?php echo $total_resources_allocated; ?> <span style="font-size: 1rem; color: #7f8c8d;">units</span>
-                            </div>
-                        </div>
+                        <?php endif; ?>
                     </div>
-
-                    <?php if (!empty($plan_details)): ?>
-                    <div style="margin-top: 25px; padding-top: 20px; border-top: 2px solid #ecf0f1;">
-                        <h3 style="font-size: 1.2em; margin-bottom: 15px; color: #2c3e50; display: flex; align-items: center; gap: 10px;">
-                            <i class="fas fa-clipboard-list"></i> Plan Details
-                        </h3>
-                        <?php if (isset($plan_details['location'])): ?>
-                        <div class="plan-detail-box">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                                <i class="fas fa-map-marker-alt"></i>
-                                <strong style="color: #2c3e50;">Location:</strong>
-                            </div>
-                            <div style="color: #34495e; padding-left: 30px;">
-                                <?php echo htmlspecialchars($plan_details['location']); ?>
-                            </div>
-                        </div>
-                        <?php endif; ?>
-                        
-                        <?php if (isset($plan_details['coordinator'])): ?>
-                        <div class="plan-detail-box">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                                <i class="fas fa-user-tie"></i>
-                                <strong style="color: #2c3e50;">Coordinator:</strong>
-                            </div>
-                            <div style="color: #34495e; padding-left: 30px;">
-                                <?php echo htmlspecialchars($plan_details['coordinator']); ?>
-                            </div>
-                        </div>
-                        <?php endif; ?>
-                        
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
-                            <?php if (isset($plan_details['duration'])): ?>
-                            <div class="plan-detail-box">
-                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                                    <i class="fas fa-clock"></i>
-                                    <strong style="color: #2c3e50;">Duration:</strong>
-                                </div>
-                                <div style="color: #34495e; padding-left: 30px;">
-                                    <?php echo htmlspecialchars($plan_details['duration']); ?>
-                                </div>
+                    
+                    <?php if (!empty($plan_details['duration']) || !empty($plan_details['volunteers_needed'])): ?>
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--light-gray);">
+                        <div class="info-grid">
+                            <?php if (!empty($plan_details['duration'])): ?>
+                            <div class="info-item">
+                                <label><i class="fas fa-clock"></i> Estimated Duration</label>
+                                <div class="value"><?php echo htmlspecialchars($plan_details['duration']); ?></div>
                             </div>
                             <?php endif; ?>
                             
-                            <?php if (isset($plan_details['volunteers_needed'])): ?>
-                            <div class="plan-detail-box">
-                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                                    <i class="fas fa-users"></i>
-                                    <strong style="color: #2c3e50;">Volunteers Needed:</strong>
-                                </div>
-                                <div style="color: #34495e; padding-left: 30px;">
-                                    <?php echo htmlspecialchars($plan_details['volunteers_needed']); ?>
-                                </div>
+                            <?php if (!empty($plan_details['volunteers_needed'])): ?>
+                            <div class="info-item">
+                                <label><i class="fas fa-users"></i> Volunteers Needed</label>
+                                <div class="value"><?php echo htmlspecialchars($plan_details['volunteers_needed']); ?></div>
                             </div>
                             <?php endif; ?>
                         </div>
@@ -1220,319 +1445,240 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
                     <?php endif; ?>
                 </div>
 
-                <!-- Disaster Information Card -->
-                <div class="card-3d">
-                    <div class="section-header">
-                        <h2 style="display: flex; align-items: center; gap: 10px;">
-                            <i class="fas fa-exclamation-triangle"></i> Disaster Information
-                        </h2>
+                <!-- Disaster Information -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-exclamation-triangle"></i> Disaster Information</h2>
                         <?php if ($disaster_info && !empty($disaster_info['Severity_level'])): ?>
                         <?php 
                         $severity = strtolower($disaster_info['Severity_level']);
-                        $severityClass = 'severity-' . $severity;
                         ?>
-                        <span class="severity-badge <?php echo $severityClass; ?>">
-                            <?php echo htmlspecialchars($disaster_info['Severity_level']); ?> Severity
+                        <span class="severity-badge severity-<?php echo $severity; ?>">
+                            <?php echo htmlspecialchars($disaster_info['Severity_level']); ?>
                         </span>
                         <?php endif; ?>
                     </div>
                     
                     <?php if ($disaster_info): ?>
-                    <div class="info-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
-                        <?php if (!empty($disaster_info['Disaster_Name'])): ?>
-                        <div class="info-item full-width">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Disaster Name</label>
-                            <div class="value" style="font-size: 1.3rem; color: #2c3e50; font-weight: 600;">
+                    <div class="info-grid">
+                        <div class="info-item" style="grid-column: span 2;">
+                            <label>Disaster Name</label>
+                            <div class="value" style="font-size: 1.2rem; font-weight: 600;">
                                 <?php echo htmlspecialchars($disaster_info['Disaster_Name']); ?>
                             </div>
                         </div>
-                        <?php endif; ?>
                         
-                        <?php if (!empty($disaster_info['Disaster_Type'])): ?>
                         <div class="info-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Type</label>
-                            <div class="value" style="font-size: 1.1rem; color: #2c3e50; font-weight: 500;">
-                                <?php echo htmlspecialchars($disaster_info['Disaster_Type']); ?>
-                            </div>
+                            <label>Type</label>
+                            <div class="value"><?php echo htmlspecialchars($disaster_info['Disaster_Type']); ?></div>
                         </div>
-                        <?php endif; ?>
                         
-                        <?php if (!empty($disaster_info['Severity_level'])): ?>
                         <div class="info-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Severity</label>
-                            <div class="value">
-                                <span class="severity-badge severity-<?php echo strtolower($disaster_info['Severity_level']); ?>">
-                                    <?php echo htmlspecialchars($disaster_info['Severity_level']); ?>
-                                </span>
-                            </div>
+                            <label>Date</label>
+                            <div class="value"><?php echo date('F j, Y', strtotime($disaster_info['Disaster_Date'])); ?></div>
                         </div>
-                        <?php endif; ?>
                         
-                        <?php if (!empty($disaster_info['Disaster_Date'])): ?>
                         <div class="info-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Date</label>
-                            <div class="value" style="font-size: 1.1rem; color: #2c3e50; font-weight: 500;">
-                                <?php echo date('F j, Y', strtotime($disaster_info['Disaster_Date'])); ?>
-                            </div>
+                            <label>Location</label>
+                            <div class="value"><?php echo htmlspecialchars($disaster_info['Location']); ?></div>
                         </div>
-                        <?php endif; ?>
-                        
-                        <?php if (!empty($disaster_info['Location'])): ?>
-                        <div class="info-item">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Location</label>
-                            <div class="value" style="font-size: 1.1rem; color: #2c3e50; font-weight: 500;">
-                                <?php echo htmlspecialchars($disaster_info['Location']); ?>
-                            </div>
-                        </div>
-                        <?php endif; ?>
                         
                         <?php if (!empty($disaster_info['Description'])): ?>
-                        <div class="info-item full-width">
-                            <label style="font-weight: 600; color: #7f8c8d; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;">Description</label>
-                            <div class="value" style="font-size: 1rem; color: #34495e; font-weight: 400; margin-top: 5px;">
-                                <?php echo htmlspecialchars($disaster_info['Description']); ?>
-                            </div>
+                        <div class="info-item" style="grid-column: span 2;">
+                            <label>Description</label>
+                            <div class="value"><?php echo htmlspecialchars($disaster_info['Description']); ?></div>
                         </div>
                         <?php endif; ?>
                     </div>
                     <?php else: ?>
                     <div class="alert alert-warning">
                         <i class="fas fa-exclamation-triangle"></i>
-                        <strong>Disaster information not available</strong>
-                        <p>Could not fetch disaster details from API.</p>
-                        <p>Disaster ID: <?php echo $distribution['disaster_id'] ?? 'Unknown'; ?></p>
+                        <div>
+                            <h4>Disaster Information Unavailable</h4>
+                            <p>Could not fetch disaster details from the API. The disaster might have been removed or the API is temporarily unavailable.</p>
+                        </div>
                     </div>
                     <?php endif; ?>
                 </div>
             </div>
 
-            <!-- Resources Summary Card -->
-            <?php if (!empty($resources_summary)): ?>
-            <div class="card-3d">
-                <div class="section-header">
-                    <h2 style="display: flex; align-items: center; gap: 10px;">
-                        <i class="fas fa-boxes"></i> Resources Allocated
-                        <span style="background: #e3f2fd; color: #1976d2; padding: 5px 15px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
-                            <?php echo count($resources_summary); ?> types • <?php echo $total_resources_allocated; ?> units
-                        </span>
-                    </h2>
+            <!-- Resources Section -->
+            <div class="card fade-in">
+                <div class="card-header">
+                    <h2><i class="fas fa-boxes"></i> Allocated Resources</h2>
+                    <span style="background: var(--light-gray); padding: 6px 16px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
+                        <?php echo count($resources_summary); ?> types • <?php echo $total_resources_allocated; ?> units
+                    </span>
                 </div>
                 
-                <div class="grid-3">
-                    <?php foreach ($resources_summary as $resource_id => $resource): ?>
-                    <div class="resource-summary-card">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                <?php if (!empty($resources_summary)): ?>
+                <div class="resource-grid">
+                    <?php foreach ($resources_summary as $resource_id => $resource): 
+                        $progress = $resource['allocated'] > 0 ? ($resource['distributed'] / $resource['allocated']) * 100 : 0;
+                    ?>
+                    <div class="resource-card">
+                        <div class="resource-name"><?php echo htmlspecialchars($resource['name']); ?></div>
+                        <div class="resource-meta">
+                            <span class="resource-type"><?php echo htmlspecialchars($resource['type']); ?></span>
+                            <span class="resource-unit"><?php echo htmlspecialchars($resource['unit']); ?></span>
+                        </div>
+                        
+                        <div class="progress-container">
+                            <div class="progress-label">
+                                <span>Allocated: <?php echo $resource['allocated']; ?></span>
+                                <span>Distributed: <?php echo $resource['distributed']; ?></span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: <?php echo $progress; ?>%"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="resource-stats">
                             <div>
-                                <div style="font-weight: 600; color: #2c3e50; font-size: 1.1em;">
-                                    <?php echo htmlspecialchars($resource['name']); ?>
-                                </div>
-                                <div style="color: #7f8c8d; font-size: 0.9em; margin-top: 5px;">
-                                    <span style="background: #f0f4f8; padding: 3px 10px; border-radius: 12px;">
-                                        <?php echo htmlspecialchars($resource['type']); ?>
-                                    </span>
-                                </div>
+                                <div class="resource-amount"><?php echo $resource['allocated']; ?></div>
+                                <div class="resource-unit">total allocated</div>
                             </div>
+                            <?php if ($resource['distributed'] > 0): ?>
                             <div style="text-align: right;">
-                                <div style="font-size: 1.8em; font-weight: bold; color: #3498db;">
-                                    <?php echo $resource['allocated']; ?>
+                                <div style="color: var(--success); font-weight: 600; font-size: 1.1rem;">
+                                    <?php echo $resource['distributed']; ?> distributed
                                 </div>
-                                <div style="font-size: 0.9em; color: #7f8c8d; margin-top: 5px;">
-                                    <?php echo htmlspecialchars($resource['unit']); ?>
+                                <div style="color: var(--gray); font-size: 0.8rem;">
+                                    <?php echo round($progress, 1); ?>% complete
                                 </div>
-                                <?php if ($resource['distributed'] > 0): ?>
-                                <div style="font-size: 0.8em; color: #27ae60; margin-top: 3px;">
-                                    <i class="fas fa-check"></i> <?php echo $resource['distributed']; ?> distributed
-                                </div>
-                                <?php endif; ?>
                             </div>
+                            <?php endif; ?>
                         </div>
-                        <?php if ($resource['distributed'] < $resource['allocated'] && $resource['distributed'] > 0): ?>
-                        <div style="margin-top: 10px;">
-                            <div style="height: 5px; background: #e9ecef; border-radius: 3px; overflow: hidden;">
-                                <div style="height: 100%; width: <?php echo ($resource['distributed'] / $resource['allocated']) * 100; ?>%; background: #27ae60; border-radius: 3px;"></div>
-                            </div>
-                            <div style="font-size: 0.8em; color: #7f8c8d; margin-top: 5px; text-align: center;">
-                                <?php echo round(($resource['distributed'] / $resource['allocated']) * 100, 1); ?>% distributed
-                            </div>
-                        </div>
-                        <?php endif; ?>
                     </div>
                     <?php endforeach; ?>
                 </div>
-            </div>
-            <?php else: ?>
-            <div class="card-3d">
-                <div class="alert alert-warning">
-                    <h3><i class="fas fa-exclamation-triangle"></i> No Resources Allocated</h3>
+                <?php else: ?>
+                <div class="empty-state">
+                    <i class="fas fa-box-open"></i>
+                    <h3>No Resources Allocated</h3>
                     <p>This distribution plan doesn't have any resources allocated yet.</p>
-                    <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-warning">
+                    <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-primary" style="margin-top: 20px;">
                         <i class="fas fa-edit"></i> Add Resources
                     </a>
                 </div>
+                <?php endif; ?>
             </div>
-            <?php endif; ?>
 
-            <!-- Families Card -->
-            <?php if (!empty($distribution_victims)): ?>
-            <div class="card-3d">
-                <div class="section-header">
-                    <h2 style="display: flex; align-items: center; gap: 10px;">
-                        <i class="fas fa-users"></i> Families in This Distribution
-                        <span style="background: #ffeaa7; color: #856404; padding: 5px 15px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
-                            <?php echo $total_families; ?> families
-                        </span>
-                    </h2>
+            <!-- Families Section -->
+            <div class="card fade-in">
+                <div class="card-header">
+                    <h2><i class="fas fa-users"></i> Beneficiary Families</h2>
+                    <span style="background: var(--light-gray); padding: 6px 16px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
+                        <?php echo $total_families; ?> families
+                    </span>
                 </div>
                 
-                <div class="grid-3">
-                    <?php foreach ($distribution_victims as $victim): ?>
-                    <div class="victim-group">
+                <?php if (!empty($distribution_victims)): ?>
+                <div class="victim-grid">
+                    <?php foreach ($distribution_victims as $victim): 
+                        $first_letter = substr($victim['full_name'] ?? 'V', 0, 1);
+                        $priority = strtolower($victim['priority'] ?? 'medium');
+                    ?>
+                    <div class="victim-card">
                         <div class="victim-header">
-                            <div style="flex-grow: 1;">
-                                <h3>
-                                    <?php echo htmlspecialchars($victim['full_name'] ?? 'Victim #' . ($victim['victim_id'] ?? 'Unknown')); ?>
-                                    <?php if (!empty($victim['priority'])): ?>
-                                    <?php 
-                                    $priorityClass = 'badge-' . strtolower($victim['priority']);
-                                    ?>
-                                    <span class="priority-badge <?php echo $priorityClass; ?>" style="font-size: 0.7em; margin-left: 10px;">
-                                        <?php echo $victim['priority']; ?> Priority
+                            <div class="victim-avatar"><?php echo $first_letter; ?></div>
+                            <div class="victim-info">
+                                <h3><?php echo htmlspecialchars($victim['full_name'] ?? 'Victim #' . ($victim['victim_id'] ?? 'Unknown')); ?></h3>
+                                <div>
+                                    <span class="priority-badge priority-<?php echo $priority; ?>">
+                                        <?php echo $victim['priority'] ?? 'Medium'; ?> Priority
                                     </span>
-                                    <?php endif; ?>
-                                </h3>
-                                <div style="font-size: 0.9em; color: #7f8c8d; margin-top: 5px;">
-                                    <?php if (!empty($victim['ic_number'])): ?>
-                                    <div style="margin-bottom: 3px;">
-                                        <strong>IC:</strong> <?php echo htmlspecialchars($victim['ic_number']); ?>
-                                    </div>
-                                    <?php endif; ?>
-                                    <div style="margin-bottom: 3px;">
-                                        <strong>Status:</strong> 
-                                        <span style="background: #d4edda; color: #155724; padding: 2px 8px; border-radius: 12px; font-size: 0.85em;">
-                                            <?php echo $victim['status'] ?? 'Scheduled'; ?>
-                                        </span>
-                                    </div>
                                 </div>
                             </div>
                         </div>
                         
-                        <div style="margin-top: 10px;">
-                            <div style="font-size: 0.9em; color: #5d6d7e;">
-                                <?php 
-                                $address_parts = [];
-                                if (!empty($victim['address'])) $address_parts[] = $victim['address'];
-                                if (!empty($victim['city'])) $address_parts[] = $victim['city'];
-                                if (!empty($victim['postal_code'])) $address_parts[] = $victim['postal_code'];
-                                if (!empty($victim['district'])) $address_parts[] = $victim['district'];
-                                
-                                if (!empty($address_parts)): ?>
-                                <div style="margin-bottom: 5px;">
-                                    <strong>Address:</strong> <?php echo htmlspecialchars(implode(', ', $address_parts)); ?>
-                                </div>
+                        <div class="victim-details">
+                            <?php if (!empty($victim['ic_number'])): ?>
+                            <p><i class="fas fa-id-card"></i> IC: <?php echo htmlspecialchars($victim['ic_number']); ?></p>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($victim['district'])): ?>
+                            <p><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($victim['district']); ?></p>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($victim['phone'])): ?>
+                            <p><i class="fas fa-phone"></i> <?php echo htmlspecialchars($victim['phone']); ?></p>
+                            <?php endif; ?>
+                            
+                            <p><i class="fas fa-home"></i> Family Members: <?php echo $victim['family_members']; ?></p>
+                            
+                            <?php if ($victim['has_baby'] || $victim['has_elderly'] || $victim['has_disabled']): ?>
+                            <div class="special-needs">
+                                <?php if ($victim['has_baby']): ?>
+                                <span class="needs-badge needs-baby"><i class="fas fa-baby"></i> Has Baby</span>
                                 <?php endif; ?>
-                                
-                                <?php if (!empty($victim['phone'])): ?>
-                                <div style="margin-bottom: 5px;">
-                                    <strong>Phone:</strong> <?php echo htmlspecialchars($victim['phone']); ?>
-                                </div>
+                                <?php if ($victim['has_elderly']): ?>
+                                <span class="needs-badge needs-elderly"><i class="fas fa-walking-cane"></i> Has Elderly</span>
                                 <?php endif; ?>
-                                
-                                <?php if (!empty($victim['email'])): ?>
-                                <div style="margin-bottom: 5px;">
-                                    <strong>Email:</strong> <?php echo htmlspecialchars($victim['email']); ?>
-                                </div>
-                                <?php endif; ?>
-                                
-                                <div style="margin-top: 10px;">
-                                    <?php if ($victim['has_baby']): ?>
-                                        <span class="special-needs-badge badge-baby">
-                                            <i class="fas fa-baby"></i> Has Baby
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php if ($victim['has_elderly']): ?>
-                                        <span class="special-needs-badge badge-elderly">
-                                            <i class="fas fa-walking-cane"></i> Has Elderly
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php if ($victim['has_disabled']): ?>
-                                        <span class="special-needs-badge badge-disabled">
-                                            <i class="fas fa-wheelchair"></i> Has Disabled
-                                        </span>
-                                    <?php endif; ?>
-                                    <?php if (!$victim['has_baby'] && !$victim['has_elderly'] && !$victim['has_disabled']): ?>
-                                        <span style="color: #bdc3c7; font-size: 0.9em;">No special needs</span>
-                                    <?php endif; ?>
-                                </div>
-                                
-                                <?php if (!empty($victim['family_members'])): ?>
-                                <div style="margin-top: 8px;">
-                                    <strong>Family Members:</strong> <?php echo $victim['family_members']; ?>
-                                </div>
-                                <?php endif; ?>
-                                
-                                <?php if (!empty($victim['approved_at'])): ?>
-                                <div style="margin-top: 8px; font-size: 0.85em; color: #27ae60;">
-                                    <i class="fas fa-check-circle"></i> Approved on: <?php echo date('M j, Y', strtotime($victim['approved_at'])); ?>
-                                </div>
-                                <?php endif; ?>
-                                
-                                <?php if (!empty($victim['api_missing'])): ?>
-                                <div class="api-missing">
-                                    <i class="fas fa-exclamation-triangle"></i> Victim data not available in API
-                                </div>
+                                <?php if ($victim['has_disabled']): ?>
+                                <span class="needs-badge needs-disabled"><i class="fas fa-wheelchair"></i> Has Disabled</span>
                                 <?php endif; ?>
                             </div>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($victim['approved_at'])): ?>
+                            <p style="margin-top: 10px; color: var(--success); font-size: 0.85rem;">
+                                <i class="fas fa-check-circle"></i> Approved on <?php echo date('M j, Y', strtotime($victim['approved_at'])); ?>
+                            </p>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <?php endforeach; ?>
                 </div>
-            </div>
-            <?php else: ?>
-            <div class="card-3d">
-                <div class="alert alert-warning">
-                    <h3><i class="fas fa-exclamation-triangle"></i> No Families Selected</h3>
+                <?php else: ?>
+                <div class="empty-state">
+                    <i class="fas fa-users-slash"></i>
+                    <h3>No Families Selected</h3>
                     <p>This distribution plan doesn't have any families assigned yet.</p>
-                    <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-warning">
+                    <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-primary" style="margin-top: 20px;">
                         <i class="fas fa-edit"></i> Add Families
                     </a>
                 </div>
+                <?php endif; ?>
             </div>
-            <?php endif; ?>
 
-            <!-- Volunteers Card -->
+            <!-- Volunteers Section -->
             <?php if (!empty($assigned_volunteers)): ?>
-            <div class="card-3d">
-                <div class="section-header">
-                    <h2 style="display: flex; align-items: center; gap: 10px;">
-                        <i class="fas fa-hands-helping"></i> Assigned Volunteers
-                        <span style="background: #d4edda; color: #155724; padding: 5px 15px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
-                            <?php echo count($assigned_volunteers); ?> volunteers
-                        </span>
-                    </h2>
+            <div class="card fade-in">
+                <div class="card-header">
+                    <h2><i class="fas fa-hands-helping"></i> Assigned Volunteers</h2>
+                    <span style="background: var(--light-gray); padding: 6px 16px; border-radius: 20px; font-size: 0.9rem; font-weight: 600;">
+                        <?php echo count($assigned_volunteers); ?> volunteers
+                    </span>
                 </div>
                 
-                <div class="grid-3">
-                    <?php foreach ($assigned_volunteers as $volunteer): ?>
-                    <div class="victim-group" style="background: linear-gradient(135deg, #f0f8ff 0%, #e6f7ff 100%);">
-                        <div style="display: flex; align-items: center; gap: 15px;">
-                            <div style="width: 50px; height: 50px; background: #3498db; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.2em;">
-                                <?php echo substr($volunteer['volunteer_name'] ?? 'V', 0, 1); ?>
-                            </div>
+                <div class="volunteer-grid">
+                    <?php foreach ($assigned_volunteers as $volunteer): 
+                        $first_letter = substr($volunteer['volunteer_name'] ?? 'V', 0, 1);
+                    ?>
+                    <div class="volunteer-card">
+                        <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                            <div class="volunteer-avatar"><?php echo $first_letter; ?></div>
                             <div style="flex-grow: 1;">
-                                <div style="font-weight: 600; color: #2c3e50; font-size: 1.1em;">
-                                    <?php echo htmlspecialchars($volunteer['volunteer_name'] ?? 'Unknown Volunteer'); ?>
-                                </div>
-                                <div style="font-size: 0.9em; color: #7f8c8d; margin-top: 3px;">
-                                    <span style="background: #e3f2fd; color: #1976d2; padding: 2px 8px; border-radius: 12px; font-size: 0.85em;">
-                                        <?php echo htmlspecialchars($volunteer['volunteer_role'] ?? 'Volunteer'); ?>
-                                    </span>
-                                </div>
-                                <?php if (!empty($volunteer['assigned_timestamp'])): ?>
-                                <div style="font-size: 0.8em; color: #95a5a6; margin-top: 5px;">
-                                    <i class="fas fa-calendar-alt"></i> Assigned: <?php echo date('M j, Y', strtotime($volunteer['assigned_timestamp'])); ?>
-                                </div>
-                                <?php endif; ?>
+                                <h3 style="margin-bottom: 5px;"><?php echo htmlspecialchars($volunteer['volunteer_name']); ?></h3>
+                                <span class="volunteer-role"><?php echo htmlspecialchars($volunteer['volunteer_role']); ?></span>
                             </div>
+                        </div>
+                        
+                        <div style="font-size: 0.9rem; color: var(--gray);">
+                            <?php if (!empty($volunteer['phone'])): ?>
+                            <p style="margin-bottom: 5px;"><i class="fas fa-phone"></i> <?php echo htmlspecialchars($volunteer['phone']); ?></p>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($volunteer['ngo']) && $volunteer['ngo'] !== 'Various'): ?>
+                            <p style="margin-bottom: 5px;"><i class="fas fa-hands-helping"></i> <?php echo htmlspecialchars($volunteer['ngo']); ?></p>
+                            <?php endif; ?>
+                            
+                            <?php if (!empty($volunteer['assigned_timestamp'])): ?>
+                            <p style="font-size: 0.8rem; margin-top: 10px;">
+                                <i class="fas fa-calendar-alt"></i> Assigned: <?php echo date('M j, Y', strtotime($volunteer['assigned_timestamp'])); ?>
+                            </p>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -1540,47 +1686,29 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
             </div>
             <?php endif; ?>
 
-            <!-- Quick Stats Cards -->
-            <div class="grid-4">
-                <div class="stat-card" style="border-left: 4px solid #667eea;">
-                    <div class="stat-label">Total Families</div>
-                    <div class="stat-number"><?php echo $total_families; ?></div>
-                    <div style="font-size: 0.9em; color: #7f8c8d;">Families Assisted</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #2ecc71;">
-                    <div class="stat-label">Resource Types</div>
-                    <div class="stat-number"><?php echo count($resources_summary); ?></div>
-                    <div style="font-size: 0.9em; color: #7f8c8d;">Different Resources</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #9b59b6;">
-                    <div class="stat-label">Total Resources</div>
-                    <div class="stat-number"><?php echo $total_resources_allocated; ?></div>
-                    <div style="font-size: 0.9em; color: #7f8c8d;">Units Allocated</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #f39c12;">
-                    <div class="stat-label">Volunteers</div>
-                    <div class="stat-number"><?php echo count($assigned_volunteers); ?></div>
-                    <div style="font-size: 0.9em; color: #7f8c8d;">Assigned</div>
-                </div>
-            </div>
-
             <!-- Footer Actions -->
-            <div class="card-3d" style="margin-top: 30px; text-align: center;">
+            <div class="card fade-in" style="text-align: center; margin-top: 30px;">
+                <h3 style="margin-bottom: 20px; color: var(--secondary);">Need to make changes?</h3>
                 <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                    <a href="edit_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-outline">
+                        <i class="fas fa-edit"></i> Edit Distribution
+                    </a>
                     <a href="distribution_main.php" class="btn btn-secondary">
-                        <i class="fas fa-chart-bar"></i> Back to Dashboard
+                        <i class="fas fa-chart-bar"></i> View All Distributions
                     </a>
                     <a href="create_distribution_plan.php" class="btn btn-primary">
-                        <i class="fas fa-plus-circle"></i> Create New Distribution
+                        <i class="fas fa-plus-circle"></i> Create New Plan
                     </a>
-                    <?php if (($distribution['status'] ?? '') == 'Scheduled' && !empty($assigned_volunteers)): ?>
-                        <a href="execute_distribution.php?id=<?php echo $distribution_id; ?>" class="btn btn-success">
-                            <i class="fas fa-play-circle"></i> Start Distribution
-                        </a>
-                    <?php endif; ?>
-                    <button onclick="window.print()" class="btn btn-warning">
-                        <i class="fas fa-print"></i> Print Report
-                    </button>
+                </div>
+                
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--light-gray);">
+                    <p style="color: var(--gray); font-size: 0.9rem;">
+                        <i class="fas fa-info-circle"></i> Distribution ID: DIST<?php echo str_pad($distribution_id, 3, '0', STR_PAD_LEFT); ?> 
+                        • Created: <?php echo date('F j, Y', strtotime($distribution['date'] ?? 'now')); ?>
+                        <?php if (!empty($distribution['last_updated'])): ?>
+                        • Last Updated: <?php echo date('F j, Y', strtotime($distribution['last_updated'])); ?>
+                        <?php endif; ?>
+                    </p>
                 </div>
             </div>
         </div>
@@ -1597,8 +1725,67 @@ if (empty($plan_details['volunteers_needed']) && !empty($distribution['volunteer
                         loadingScreen.style.display = 'none';
                     }, 500);
                 }
-            }, 800);
+            }, 500);
         });
+
+        // Add smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href');
+                if(targetId === '#') return;
+                
+                const targetElement = document.querySelector(targetId);
+                if(targetElement) {
+                    window.scrollTo({
+                        top: targetElement.offsetTop - 100,
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        });
+
+        // Add hover effects for cards
+        document.querySelectorAll('.card, .stat-card, .resource-card, .victim-card, .volunteer-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.transition = 'all 0.3s ease';
+            });
+        });
+
+        // Print functionality
+        function printPage() {
+            const originalContent = document.body.innerHTML;
+            const printContent = document.querySelector('.container').innerHTML;
+            
+            document.body.innerHTML = `
+                <html>
+                    <head>
+                        <title>Distribution Report - DIST<?php echo str_pad($distribution_id, 3, '0', STR_PAD_LEFT); ?></title>
+                        <style>
+                            body { font-family: Arial, sans-serif; padding: 20px; }
+                            .page-header { background: #f0f0f0; padding: 20px; margin-bottom: 20px; }
+                            .card { border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; }
+                            .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+                            @media print {
+                                .btn { display: none; }
+                                .no-print { display: none; }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="page-header">
+                            <h1>Distribution Report - DIST<?php echo str_pad($distribution_id, 3, '0', STR_PAD_LEFT); ?></h1>
+                            <p>Generated on: <?php echo date('F j, Y g:i A'); ?></p>
+                        </div>
+                        ${printContent}
+                    </body>
+                </html>
+            `;
+            
+            window.print();
+            document.body.innerHTML = originalContent;
+            location.reload();
+        }
     </script>
 </body>
 </html>

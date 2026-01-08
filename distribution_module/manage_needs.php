@@ -1,7 +1,7 @@
 <?php
 // ========================================
 // MANAGE NEEDS - APPROVAL SYSTEM WITH API INTEGRATION
-// manage_needs.php - UPDATED WITH NEEDS API INTEGRATION
+// manage_needs.php - UPDATED TO SEND TO YOUR API
 // ========================================
 
 require_once 'config.php';
@@ -24,6 +24,55 @@ $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 
+// YOUR API to send status updates to your friend
+$YOUR_API_URL = 'http://10.147.17.154:8000/distribution_module/api_victim_approve.php';
+
+// Function to send status update to YOUR API
+function sendStatusToYourAPI($victim_id, $disaster_id, $status) {
+    global $YOUR_API_URL;
+    
+    // Prepare the data to send
+    $data = [
+        'victim_id' => $victim_id,
+        'disaster_id' => $disaster_id,
+        'approval_status' => $status,
+        'approved_at' => date('Y-m-d H:i:s')
+    ];
+    
+    // Initialize cURL
+    $ch = curl_init();
+    
+    // Set cURL options
+    curl_setopt($ch, CURLOPT_URL, $YOUR_API_URL);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Accept: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    
+    // Execute and get response
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    
+    curl_close($ch);
+    
+    // Log the attempt
+    error_log("Sending to YOUR API: Victim $victim_id, Disaster $disaster_id, Status $status");
+    error_log("API Response Code: $httpCode");
+    error_log("API Response: $response");
+    
+    return [
+        'success' => ($httpCode >= 200 && $httpCode < 300),
+        'http_code' => $httpCode,
+        'response' => $response,
+        'error' => $error
+    ];
+}
+
 // Create a table to track processed disasters if it doesn't exist
 $create_processed_disasters_table = "
     CREATE TABLE IF NOT EXISTS processed_disasters (
@@ -42,7 +91,7 @@ if (!$db->query($create_processed_disasters_table)) {
 }
 
 /* ----------------------------------------
-   FETCH ALL DATA
+   FETCH ALL DATA FROM FRIEND'S API
 ---------------------------------------- */
 function fetchDataFromAPI($url, $timeout = 5) {
     $context = stream_context_create([
@@ -145,7 +194,14 @@ if (isset($_GET['update_status']) && isset($_GET['victim_id']) && isset($_GET['n
         }
         
         if ($stmt->execute()) {
-            $success = "Victim #$victim_id status updated to $new_status";
+            // SEND STATUS UPDATE TO YOUR API (for your friend to get)
+            $apiResult = sendStatusToYourAPI($victim_id, $selected_disaster_id, $new_status);
+            
+            if ($apiResult['success']) {
+                $success = "✅ Victim #$victim_id status updated to $new_status and sent to your API!";
+            } else {
+                $success = "✅ Victim #$victim_id status updated to $new_status (but failed to send to API: " . $apiResult['error'] . ")";
+            }
             
             // Check if all victims are approved and mark disaster as processed
             checkAndMarkDisasterAsProcessed($db, $selected_disaster_id);
@@ -238,6 +294,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action']) && iss
     
     if (!empty($selected_victims) && $selected_disaster_id > 0) {
         $new_status = ($action === 'approve') ? 'Approved' : 'Rejected';
+        $successCount = 0;
+        $apiSuccessCount = 0;
+        $apiFailCount = 0;
         
         try {
             // Update approval status in local database
@@ -268,9 +327,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action']) && iss
                 }
                 
                 $check_stmt->close();
+                $successCount++;
+                
+                // Send to YOUR API
+                $apiResult = sendStatusToYourAPI($victim_id, $selected_disaster_id, $new_status);
+                if ($apiResult['success']) {
+                    $apiSuccessCount++;
+                } else {
+                    $apiFailCount++;
+                }
             }
             
-            $success = "Successfully updated " . count($selected_victims) . " victim(s) to " . $new_status;
+            $success = "✅ Successfully updated $successCount victim(s) to $new_status";
+            if ($apiSuccessCount > 0) {
+                $success .= " ($apiSuccessCount sent to API)";
+            }
+            if ($apiFailCount > 0) {
+                $success .= " ($apiFailCount failed to send to API)";
+            }
             
             // Check if all victims are approved and mark disaster as processed
             if ($action === 'approve') {
