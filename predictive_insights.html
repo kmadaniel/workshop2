@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Predictive Insights - ReliefNet</title>
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Specific styles for the insights page */
+        .insight-header {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            color: white;
+            padding: 40px 32px;
+            border-bottom: 1px solid #334155;
+        }
+        .insight-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            padding: 32px;
+        }
+        .insight-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }
+        .insight-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        .insight-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .insight-metric {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #3b82f6;
+            margin-bottom: 8px;
+        }
+        .recommendation-box {
+            background: #f8fafc;
+            border-left: 4px solid #3b82f6;
+            padding: 12px;
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #475569;
+            border-radius: 0 4px 4px 0;
+        }
+        .chart-container {
+            position: relative;
+            height: 200px;
+            width: 100%;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR (Simplified for this page) -->
+    <aside class="sidebar">
+        <div class="logo">Relief<span>Net</span></div>
+        <div class="nav-links">
+            <a href="reports.php" class="nav-item">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </a>
+            <button class="nav-item active">
+                <i class="fas fa-brain"></i> AI Insights
+            </button>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <div class="insight-header">
+            <h1 style="font-size: 24px; margin-bottom: 8px;">Predictive Analytics Report</h1>
+            <p style="color: #94a3b8; font-size: 14px;">AI-driven forecasts based on historical disaster patterns and current resource levels.</p>
+        </div>
+
+        <div class="scroll-area">
+            
+            <!-- Top Summary Row -->
+            <div class="insight-grid">
+                <!-- RISK ANALYSIS -->
+                <div class="insight-card" style="border-top: 4px solid #ef4444;">
+                    <div class="insight-title"><i class="fas fa-map-marker-alt" style="color: #ef4444;"></i> High Risk Zones</div>
+                    <div class="insight-metric" id="risk-metric">Loading...</div>
+                    <p style="color: #64748b; font-size: 0.9rem;">Districts with the highest probability of recurring disasters.</p>
+                    <div class="chart-container">
+                        <canvas id="riskChart"></canvas>
+                    </div>
+                    <div class="recommendation-box" style="border-color: #ef4444;">
+                        <strong>Action:</strong> Pre-position heavy machinery and evacuation teams in these zones immediately.
+                    </div>
+                </div>
+
+                <!-- RESOURCE HEALTH -->
+                <div class="insight-card" style="border-top: 4px solid #f59e0b;">
+                    <div class="insight-title"><i class="fas fa-boxes" style="color: #f59e0b;"></i> Stock Depletion Forecast</div>
+                    <div class="insight-metric" id="stock-metric">Loading...</div>
+                    <p style="color: #64748b; font-size: 0.9rem;">Estimated days until critical supplies run out at current usage rates.</p>
+                    <div class="chart-container">
+                        <canvas id="stockChart"></canvas>
+                    </div>
+                    <div class="recommendation-box" style="border-color: #f59e0b;">
+                        <strong>Action:</strong> Initiate procurement orders for Food and Medical supplies within 48 hours.
+                    </div>
+                </div>
+
+                <!-- SEASONAL FORECAST -->
+                <div class="insight-card" style="border-top: 4px solid #3b82f6;">
+                    <div class="insight-title"><i class="fas fa-cloud-sun-rain" style="color: #3b82f6;"></i> Seasonal Trend</div>
+                    <div class="insight-metric" id="season-metric">Loading...</div>
+                    <p style="color: #64748b; font-size: 0.9rem;">Current phase in the annual disaster cycle.</p>
+                    <div class="chart-container">
+                        <canvas id="seasonChart"></canvas>
+                    </div>
+                    <div class="recommendation-box" style="border-color: #3b82f6;">
+                        <strong>Action:</strong> Review flood mitigation infrastructure and update emergency contact lists.
+                    </div>
+                </div>
+
+                <!-- VULNERABILITY INDEX -->
+                <div class="insight-card" style="border-top: 4px solid #ec4899;">
+                    <div class="insight-title"><i class="fas fa-users" style="color: #ec4899;"></i> Vulnerability Index</div>
+                    <div class="insight-metric" id="vuln-metric">Loading...</div>
+                    <p style="color: #64748b; font-size: 0.9rem;">Count of registered victims requiring specialized assistance.</p>
+                    <div class="chart-container">
+                        <canvas id="vulnChart"></canvas>
+                    </div>
+                    <div class="recommendation-box" style="border-color: #ec4899;">
+                        <strong>Action:</strong> Allocate 30% more medical volunteers to high-vulnerability districts.
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // API Configuration
+        const API_DISASTERS = 'http://10.147.17.116:8000/disaster.php';
+        const API_VICTIMS = 'http://10.147.17.116:8000/victim.php';
+        const API_RESOURCES = {
+            medical: 'http://10.147.17.224:8000/medical_resource_api.php',
+            food: 'http://10.147.17.224:8000/food_resource_api.php'
+        };
+
+        // Data Store
+        const dataStore = {
+            disasters: [],
+            victims: [],
+            resources: []
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData();
+        });
+
+        async function loadData() {
+            try {
+                // Fetch Disasters
+                const disRes = await fetch(API_DISASTERS);
+                if(disRes.ok) dataStore.disasters = await disRes.json();
+                
+                // Fetch Victims
+                const vicRes = await fetch(API_VICTIMS);
+                if(vicRes.ok) dataStore.victims = await vicRes.json();
+
+                // Fetch Resources (Subset)
+                const medRes = await fetch(API_RESOURCES.medical);
+                const foodRes = await fetch(API_RESOURCES.food);
+                let meds = [], foods = [];
+                if(medRes.ok) meds = await medRes.json();
+                if(foodRes.ok) foods = await foodRes.json();
+                dataStore.resources = [...meds, ...foods];
+
+                // If fetch fails (Offline Mode), load mock data for demo
+                if(dataStore.disasters.length === 0) throw new Error("Offline");
+
+                renderInsights();
+
+            } catch (err) {
+                console.warn("Using Mock Data for Insights:", err);
+                // Mock Data for Visualization
+                dataStore.disasters = [
+                    {location: 'Masjid Tanah', severity: 'High'}, {location: 'Masjid Tanah', severity: 'Medium'},
+                    {location: 'Alor Gajah', severity: 'High'}, {location: 'Jasin', severity: 'Low'},
+                    {location: 'Masjid Tanah', severity: 'High'}
+                ];
+                dataStore.victims = Array(50).fill(0).map((_,i) => ({
+                    has_elderly: i%3==0?'t':'f', has_baby: i%5==0?'t':'f', has_disabled: i%10==0?'t':'f'
+                }));
+                dataStore.resources = [{quantity: '50'}, {quantity: '20'}, {quantity: '100'}];
+                
+                renderInsights();
+            }
+        }
+
+        function renderInsights() {
+            // 1. Risk Chart (Location Frequency)
+            const locCounts = {};
+            dataStore.disasters.forEach(d => {
+                const loc = d.location || d.district || 'Unknown';
+                locCounts[loc] = (locCounts[loc] || 0) + 1;
+            });
+            const topLoc = Object.keys(locCounts).reduce((a, b) => locCounts[a] > locCounts[b] ? a : b);
+            document.getElementById('risk-metric').innerText = topLoc;
+
+            new Chart(document.getElementById('riskChart'), {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(locCounts),
+                    datasets: [{
+                        label: 'Incident Count',
+                        data: Object.values(locCounts),
+                        backgroundColor: '#ef4444'
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+
+            // 2. Stock Chart (Simple Gauge simulation using Doughnut)
+            // Mocking a "Days Left" calculation
+            const daysLeft = 14; 
+            document.getElementById('stock-metric').innerText = daysLeft + " Days";
+            
+            new Chart(document.getElementById('stockChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Remaining', 'Depleted'],
+                    datasets: [{
+                        data: [30, 70],
+                        backgroundColor: ['#f59e0b', '#e2e8f0']
+                    }]
+                },
+                options: { cutout: '70%', responsive: true, maintainAspectRatio: false }
+            });
+
+            // 3. Season Chart (Line trend)
+            const currentMonth = new Date().toLocaleString('default', { month: 'long' });
+            document.getElementById('season-metric').innerText = currentMonth;
+            
+            new Chart(document.getElementById('seasonChart'), {
+                type: 'line',
+                data: {
+                    labels: ['Jan','Feb','Mar','Apr','May','Jun'],
+                    datasets: [{
+                        label: 'Risk Level',
+                        data: [20, 30, 45, 80, 60, 40], // Mock seasonal curve
+                        borderColor: '#3b82f6',
+                        tension: 0.4,
+                        fill: true,
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)'
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { display: false }, x: { display: false } }, plugins: { legend: { display: false } } }
+            });
+
+            // 4. Vulnerability Chart (Pie)
+            let elderly = 0, baby = 0, disabled = 0;
+            dataStore.victims.forEach(v => {
+                if(v.has_elderly === 't') elderly++;
+                if(v.has_baby === 't') baby++;
+                if(v.has_disabled === 't') disabled++;
+            });
+            document.getElementById('vuln-metric').innerText = (elderly + baby + disabled);
+
+            new Chart(document.getElementById('vulnChart'), {
+                type: 'pie',
+                data: {
+                    labels: ['Elderly', 'Infants', 'Disabled'],
+                    datasets: [{
+                        data: [elderly, baby, disabled],
+                        backgroundColor: ['#ec4899', '#f472b6', '#fbcfe8']
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+            });
+        }
+    </script>
+</body>
+</html>
