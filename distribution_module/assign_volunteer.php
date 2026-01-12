@@ -2,6 +2,7 @@
 // ========================================
 // ASSIGN VOLUNTEERS TO DISTRIBUTION
 // Directly uses external API data without local volunteer table
+// Enhanced with cancellation sync and notifications
 // ========================================
 
 require_once 'config.php';
@@ -86,8 +87,7 @@ function freeUpCancelledVolunteerNeeds($db, $distribution_id, $volunteer_id) {
                 $free_needs_query = "
                     UPDATE distribution_log 
                     SET status = 'available', 
-                        volunteer_id = NULL,
-                        updated_at = NOW()
+                        volunteer_id = NULL
                     WHERE distribution_id = ? 
                     AND volunteer_id = ?
                     AND status IN ('in_transit', 'assigned')
@@ -123,7 +123,7 @@ function cleanupCancelledVolunteers($db, $distribution_id = null) {
         $query = "
             SELECT dv.distribution_id, dv.volunteer_id 
             FROM distribution_volunteer dv
-            WHERE dv.status IN ('Completed')  -- Completed status is treated as cancelled for cleanup
+            WHERE dv.status IN ('Completed', 'Cancelled')
             " . ($distribution_id ? "AND dv.distribution_id = ?" : "") . "
             AND EXISTS (
                 SELECT 1 FROM distribution_log dl 
@@ -157,8 +157,115 @@ function cleanupCancelledVolunteers($db, $distribution_id = null) {
 }
 
 /* ========================================
+   SYNC CANCELLED VOLUNTEERS FROM VOLUNTEER_DISTRIBUTION.PHP
+   FIXED: Only update status, don't delete records
+======================================== */
+function syncCancelledVolunteersFromDistribution($db, $distribution_id) {
+    try {
+        // Check for volunteers who cancelled via volunteer_distribution.php
+        $query = "
+            SELECT dv.volunteer_id, dv.status as volunteer_status
+            FROM distribution_volunteer dv
+            WHERE dv.distribution_id = ?
+            AND dv.status IN ('Completed', 'Cancelled')
+        ";
+        
+        $stmt = $db->prepare($query);
+        if (!$stmt) {
+            error_log("Error preparing sync cancelled volunteers query: " . $db->error);
+            return 0;
+        }
+        
+        $stmt->bind_param("i", $distribution_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $cancelled_volunteers = $result->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        
+        $processed_count = 0;
+        
+        foreach ($cancelled_volunteers as $cancelled) {
+            $volunteer_id = $cancelled['volunteer_id'];
+            $status = $cancelled['volunteer_status'];
+            
+            // 1. Free up their needs in distribution_log
+            $freed_needs = freeUpCancelledVolunteerNeeds($db, $distribution_id, $volunteer_id);
+            
+            // 2. Update distribution_volunteer table - DON'T DELETE!
+            $update_query = "
+                UPDATE distribution_volunteer 
+                SET status = ?,
+                    updated_at = NOW()
+                WHERE distribution_id = ? 
+                AND volunteer_id = ?
+            ";
+            
+            $update_stmt = $db->prepare($update_query);
+            if ($update_stmt) {
+                $update_stmt->bind_param("sii", $status, $distribution_id, $volunteer_id);
+                if ($update_stmt->execute()) {
+                    error_log("SYNC: Updated volunteer $volunteer_id status to '$status' in distribution_volunteer for distribution $distribution_id");
+                    $processed_count++;
+                }
+                $update_stmt->close();
+            }
+            
+            // 3. Update volunteer_distribution_assignments table if exists (for volunteer_distribution.php)
+            $check_vda_table = $db->query("SHOW TABLES LIKE 'volunteer_distribution_assignments'");
+            if ($check_vda_table && $check_vda_table->num_rows > 0) {
+                $update_vda_query = "
+                    UPDATE volunteer_distribution_assignments 
+                    SET status = ?,
+                        updated_at = NOW()
+                    WHERE distribution_id = ? 
+                    AND volunteer_id = ?
+                ";
+                
+                $update_vda_stmt = $db->prepare($update_vda_query);
+                if ($update_vda_stmt) {
+                    $update_vda_stmt->bind_param("sii", $status, $distribution_id, $volunteer_id);
+                    $update_vda_stmt->execute();
+                    $update_vda_stmt->close();
+                    error_log("Updated volunteer_distribution_assignments for volunteer $volunteer_id");
+                }
+            }
+            
+            // 4. Clear items assignment but keep record
+            $check_items_table = $db->query("SHOW TABLES LIKE 'distribution_items'");
+            if ($check_items_table && $check_items_table->num_rows > 0) {
+                $check_column = $db->query("SHOW COLUMNS FROM distribution_items LIKE 'assigned_volunteer_id'");
+                if ($check_column && $check_column->num_rows > 0) {
+                    $clear_items_query = "
+                        UPDATE distribution_items 
+                        SET assigned_volunteer_id = NULL,
+                            status = 'available'
+                        WHERE distribution_id = ?
+                        AND assigned_volunteer_id = ?
+                    ";
+                    
+                    $clear_items_stmt = $db->prepare($clear_items_query);
+                    if ($clear_items_stmt) {
+                        $clear_items_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                        $clear_items_stmt->execute();
+                        $cleared_items = $clear_items_stmt->affected_rows;
+                        $clear_items_stmt->close();
+                        error_log("Cleared $cleared_items items from distribution_items for cancelled volunteer $volunteer_id");
+                    }
+                }
+            }
+        }
+        
+        return $processed_count;
+        
+    } catch (Exception $e) {
+        error_log("Error syncing cancelled volunteers: " . $e->getMessage());
+        return 0;
+    }
+}
+
+/* ========================================
    CHECK VOLUNTEER AVAILABILITY FOR DATE
-   NEW FUNCTION: Checks if volunteer is already assigned on the same date
+   Checks if volunteer is already assigned on the same date
 ======================================== */
 function checkVolunteerDateAvailability($db, $volunteer_id, $distribution_date, $exclude_distribution_id = null) {
     try {
@@ -234,6 +341,7 @@ function syncDistributionItemsToLog($db, $distribution_id, $volunteer_id) {
             SELECT di.victim_id, di.need_id 
             FROM distribution_items di
             WHERE di.distribution_id = ?
+            AND (di.assigned_volunteer_id IS NULL OR di.assigned_volunteer_id = ?)
             GROUP BY di.victim_id, di.need_id
         ";
         
@@ -243,7 +351,7 @@ function syncDistributionItemsToLog($db, $distribution_id, $volunteer_id) {
             return false;
         }
         
-        $stmt->bind_param("i", $distribution_id);
+        $stmt->bind_param("ii", $distribution_id, $volunteer_id);
         if (!$stmt->execute()) {
             error_log("Failed to execute items query: " . $stmt->error);
             $stmt->close();
@@ -284,11 +392,11 @@ function syncDistributionItemsToLog($db, $distribution_id, $volunteer_id) {
                     $check_stmt->close();
                     
                     if (!$exists) {
-                        // Insert into distribution_log with 'in_transit' status
+                        // Insert into distribution_log with 'assigned' status
                         $insert_query = "
                             INSERT INTO distribution_log 
                             (distribution_id, volunteer_id, victim_id, need_id, status) 
-                            VALUES (?, ?, ?, ?, 'in_transit')
+                            VALUES (?, ?, ?, ?, 'assigned')
                         ";
                         
                         $insert_stmt = $db->prepare($insert_query);
@@ -305,10 +413,42 @@ function syncDistributionItemsToLog($db, $distribution_id, $volunteer_id) {
                             error_log("ERROR: Failed to prepare insert statement: " . $db->error);
                         }
                     } else {
-                        error_log("INFO: Already exists in distribution_log - distribution=$distribution_id, volunteer=$volunteer_id, victim=$victim_id, need=$need_id");
+                        // Update existing record status
+                        $update_query = "
+                            UPDATE distribution_log 
+                            SET status = 'assigned'
+                            WHERE distribution_id = ? 
+                            AND volunteer_id = ? 
+                            AND victim_id = ? 
+                            AND need_id = ?
+                        ";
+                        
+                        $update_stmt = $db->prepare($update_query);
+                        if ($update_stmt) {
+                            $update_stmt->bind_param("iiii", $distribution_id, $volunteer_id, $victim_id, $need_id);
+                            $update_stmt->execute();
+                            $update_stmt->close();
+                            $inserted_count++;
+                        }
+                        error_log("INFO: Updated existing distribution_log record");
                     }
                 }
             }
+        }
+        
+        // Update distribution_items with volunteer assignment
+        $update_items_query = "
+            UPDATE distribution_items 
+            SET assigned_volunteer_id = ?
+            WHERE distribution_id = ?
+            AND (assigned_volunteer_id IS NULL OR assigned_volunteer_id = ?)
+        ";
+        
+        $update_stmt = $db->prepare($update_items_query);
+        if ($update_stmt) {
+            $update_stmt->bind_param("iii", $volunteer_id, $distribution_id, $volunteer_id);
+            $update_stmt->execute();
+            $update_stmt->close();
         }
         
         error_log("SYNC COMPLETE: Synced " . $inserted_count . " items to distribution_log for distribution $distribution_id, volunteer $volunteer_id");
@@ -321,8 +461,125 @@ function syncDistributionItemsToLog($db, $distribution_id, $volunteer_id) {
 }
 
 /* ========================================
-   ALERT SERVICE CLASS
-   Simplified - Just handles assignment logging
+   SYNC WITH VOLUNTEER_DISTRIBUTION SYSTEM
+   Ensures both systems have the same data
+======================================== */
+function syncWithVolunteerDistribution($db, $distribution_id) {
+    try {
+        // Get all assigned volunteers from distribution_volunteer
+        $query = "
+            SELECT dv.volunteer_id, dv.role, dv.status
+            FROM distribution_volunteer dv
+            WHERE dv.distribution_id = ?
+        ";
+        
+        $stmt = $db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+        
+        $stmt->bind_param("i", $distribution_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $assigned_volunteers = $result->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        
+        // Check if volunteer_distribution_assignments table exists
+        $check_table = $db->query("SHOW TABLES LIKE 'volunteer_distribution_assignments'");
+        if (!$check_table || $check_table->num_rows == 0) {
+            // Create table if it doesn't exist
+            $create_table_query = "
+                CREATE TABLE IF NOT EXISTS volunteer_distribution_assignments (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    distribution_id INT NOT NULL,
+                    volunteer_id INT NOT NULL,
+                    role VARCHAR(100) NOT NULL DEFAULT 'Volunteer',
+                    status VARCHAR(50) NOT NULL DEFAULT 'Assigned',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY unique_assignment (distribution_id, volunteer_id),
+                    FOREIGN KEY (distribution_id) REFERENCES distribution(distribution_id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ";
+            
+            if ($db->query($create_table_query)) {
+                error_log("Created volunteer_distribution_assignments table");
+            }
+        }
+        
+        // Sync each volunteer
+        foreach ($assigned_volunteers as $volunteer) {
+            $check_vda_query = "
+                SELECT id FROM volunteer_distribution_assignments 
+                WHERE distribution_id = ? 
+                AND volunteer_id = ?
+            ";
+            
+            $check_stmt = $db->prepare($check_vda_query);
+            if ($check_stmt) {
+                $check_stmt->bind_param("ii", $distribution_id, $volunteer['volunteer_id']);
+                $check_stmt->execute();
+                $check_stmt->store_result();
+                $exists = ($check_stmt->num_rows > 0);
+                $check_stmt->close();
+                
+                if ($exists) {
+                    // Update existing record
+                    $update_query = "
+                        UPDATE volunteer_distribution_assignments 
+                        SET role = ?,
+                            status = ?,
+                            updated_at = NOW()
+                        WHERE distribution_id = ? 
+                        AND volunteer_id = ?
+                    ";
+                    
+                    $update_stmt = $db->prepare($update_query);
+                    if ($update_stmt) {
+                        $update_stmt->bind_param("ssii", 
+                            $volunteer['role'], 
+                            $volunteer['status'], 
+                            $distribution_id, 
+                            $volunteer['volunteer_id']
+                        );
+                        $update_stmt->execute();
+                        $update_stmt->close();
+                    }
+                } else {
+                    // Insert new record
+                    $insert_query = "
+                        INSERT INTO volunteer_distribution_assignments 
+                        (distribution_id, volunteer_id, role, status, created_at, updated_at) 
+                        VALUES (?, ?, ?, ?, NOW(), NOW())
+                    ";
+                    
+                    $insert_stmt = $db->prepare($insert_query);
+                    if ($insert_stmt) {
+                        $insert_stmt->bind_param("iiss", 
+                            $distribution_id, 
+                            $volunteer['volunteer_id'], 
+                            $volunteer['role'], 
+                            $volunteer['status']
+                        );
+                        $insert_stmt->execute();
+                        $insert_stmt->close();
+                    }
+                }
+            }
+        }
+        
+        error_log("Synced " . count($assigned_volunteers) . " volunteers with volunteer_distribution system");
+        return true;
+        
+    } catch (Exception $e) {
+        error_log("Error syncing with volunteer_distribution: " . $e->getMessage());
+        return false;
+    }
+}
+
+/* ========================================
+   ENHANCED ALERT SERVICE CLASS
+   Handles assignment logging and notifications
 ======================================== */
 class AlertService {
     private $db;
@@ -336,18 +593,24 @@ class AlertService {
      * Create alert for volunteer when assigned
      */
     public function createVolunteerAlert($volunteer_id, $distribution_id, $role) {
-        $message = $this->generateAlertMessage($distribution_id, $role);
-        $alert_type = 'assignment';
-        
         try {
-            // Check if we have a valid database connection
-            if ($this->db && is_object($this->db)) {
+            // Get distribution details for the alert message
+            $distribution_details = $this->getDistributionDetails($distribution_id);
+            
+            if (!$distribution_details) {
+                throw new Exception("Distribution not found for alert creation");
+            }
+            
+            $message = $this->generateAssignmentMessage($distribution_details, $role);
+            $alert_type = 'assignment';
+            
+            // Check if alert already exists to avoid duplicates
+            if (!$this->alertExists($volunteer_id, $distribution_id, 'assignment')) {
                 // Insert alert into volunteer_alerts table
                 $query = "INSERT INTO volunteer_alerts 
-                         (volunteer_id, distribution_id, alert_type, message, is_read, created_at) 
-                         VALUES (?, ?, ?, ?, 0, NOW())";
+                         (volunteer_id, distribution_id, alert_type, message, is_read) 
+                         VALUES (?, ?, ?, ?, 0)";
                 
-                // Use $this->db instead of $db
                 $stmt = $this->db->prepare($query);
                 if ($stmt) {
                     $stmt->bind_param("iiss", $volunteer_id, $distribution_id, $alert_type, $message);
@@ -355,22 +618,27 @@ class AlertService {
                         $alert_id = $stmt->insert_id;
                         $stmt->close();
                         
+                        // Also update distribution_items with volunteer assignment
+                        $this->updateDistributionItems($distribution_id, $volunteer_id);
+                        
                         return [
                             'success' => true,
                             'alert_id' => $alert_id,
                             'message' => 'Volunteer alert created successfully'
                         ];
                     } else {
-                        error_log("Error executing alert query: " . $this->db->error);
+                        error_log("Error executing alert query: " . $stmt->error);
                     }
                 } else {
                     error_log("Error preparing alert query: " . $this->db->error);
                 }
             } else {
-                error_log("Database connection not available for alert creation");
+                return [
+                    'success' => false,
+                    'message' => 'Alert already exists for this assignment'
+                ];
             }
         } catch (Exception $e) {
-            // Log error but continue
             error_log("Error creating volunteer alert: " . $e->getMessage());
         }
         
@@ -378,10 +646,159 @@ class AlertService {
     }
     
     /**
-     * Generate alert message for volunteer
+     * Get distribution details for alert message
      */
-    private function generateAlertMessage($distribution_id, $role) {
-        return "You have been assigned to a new distribution task (ID: DIST" . str_pad($distribution_id, 7, '0', STR_PAD_LEFT) . ") as a {$role}. Please check your dashboard for details.";
+    private function getDistributionDetails($distribution_id) {
+        $query = "SELECT * FROM distribution WHERE distribution_id = ?";
+        $stmt = $this->db->prepare($query);
+        
+        if (!$stmt) {
+            return null;
+        }
+        
+        $stmt->bind_param("i", $distribution_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $distribution = $result->fetch_assoc();
+        $stmt->close();
+        
+        return $distribution;
+    }
+    
+    /**
+     * Generate alert message for volunteer assignment
+     */
+    private function generateAssignmentMessage($distribution, $role) {
+        $distribution_id_padded = str_pad($distribution['distribution_id'], 7, '0', STR_PAD_LEFT);
+        $date = date('d/m/Y', strtotime($distribution['date']));
+        $location = $distribution['location'] ?? 'Unknown Location';
+        $time = $distribution['time'] ?? 'To be confirmed';
+        
+        return "📋 NEW DISTRIBUTION ASSIGNMENT\n" .
+               "────────────────────────────\n" .
+               "📅 Date: $date\n" .
+               "⏰ Time: $time\n" .
+               "📍 Location: $location\n" .
+               "👤 Your Role: $role\n" .
+               "🔢 Distribution ID: DIST$distribution_id_padded\n\n" .
+               "Please check your Volunteer Distribution page for details and prepare accordingly. " .
+               "You can view and manage this assignment in your dashboard.";
+    }
+    
+    /**
+     * Check if alert already exists
+     */
+    private function alertExists($volunteer_id, $distribution_id, $alert_type) {
+        $query = "SELECT id FROM volunteer_alerts 
+                 WHERE volunteer_id = ? 
+                 AND distribution_id = ? 
+                 AND alert_type = ? 
+                 AND DATE(created_at) = CURDATE()";
+        
+        $stmt = $this->db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+        
+        $stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_type);
+        $stmt->execute();
+        $stmt->store_result();
+        $exists = ($stmt->num_rows > 0);
+        $stmt->close();
+        
+        return $exists;
+    }
+    
+    /**
+     * Update distribution_items with volunteer assignment
+     */
+    private function updateDistributionItems($distribution_id, $volunteer_id) {
+        try {
+            // Check if distribution_items table exists
+            $table_check = $this->db->query("SHOW TABLES LIKE 'distribution_items'");
+            if (!$table_check || $table_check->num_rows == 0) {
+                return false;
+            }
+            
+            // Update distribution_items to mark them as assigned to this volunteer
+            $update_query = "
+                UPDATE distribution_items 
+                SET assigned_volunteer_id = ?
+                WHERE distribution_id = ?
+                AND (assigned_volunteer_id IS NULL OR assigned_volunteer_id = ?)
+            ";
+            
+            $stmt = $this->db->prepare($update_query);
+            if (!$stmt) {
+                error_log("Failed to prepare update distribution_items query: " . $this->db->error);
+                return false;
+            }
+            
+            $stmt->bind_param("iii", $volunteer_id, $distribution_id, $volunteer_id);
+            if ($stmt->execute()) {
+                $affected_rows = $stmt->affected_rows;
+                $stmt->close();
+                error_log("Updated $affected_rows distribution_items for volunteer $volunteer_id");
+                return true;
+            }
+            
+            $stmt->close();
+            return false;
+            
+        } catch (Exception $e) {
+            error_log("Error updating distribution_items: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Create cancellation alert when volunteer cancels assignment
+     */
+    public function createCancellationAlert($volunteer_id, $distribution_id) {
+        try {
+            $message = $this->generateCancellationMessage($distribution_id, $volunteer_id);
+            $alert_type = 'cancellation';
+            
+            $query = "INSERT INTO volunteer_alerts 
+                     (volunteer_id, distribution_id, alert_type, message, is_read) 
+                     VALUES (?, ?, ?, ?, 0)";
+            
+            $stmt = $this->prepare($query);
+            if ($stmt) {
+                $stmt->bind_param("iiss", $volunteer_id, $distribution_id, $alert_type, $message);
+                if ($stmt->execute()) {
+                    $alert_id = $stmt->insert_id;
+                    $stmt->close();
+                    
+                    return [
+                        'success' => true,
+                        'alert_id' => $alert_id,
+                        'message' => 'Cancellation alert created successfully'
+                    ];
+                }
+            }
+        } catch (Exception $e) {
+            error_log("Error creating cancellation alert: " . $e->getMessage());
+        }
+        
+        return ['success' => false];
+    }
+    
+    /**
+     * Generate cancellation message for admin/coordinator
+     */
+    private function generateCancellationMessage($distribution_id, $volunteer_id) {
+        return "🚫 VOLUNTEER CANCELLATION\n" .
+               "────────────────────────\n" .
+               "Volunteer ID: $volunteer_id\n" .
+               "Distribution ID: $distribution_id\n" .
+               "Status: Cancelled\n\n" .
+               "This volunteer has cancelled their assignment. " .
+               "They are now available to be reassigned to other distributions.";
+    }
+    
+    private function prepare($query) {
+        return $this->db->prepare($query);
     }
 }
 
@@ -468,9 +885,35 @@ function fetchWithCURL($url) {
 // Create alert service instance with database connection
 $alert_service = new AlertService($db);
 
+// Force sync with volunteer_distribution system
+if (isset($_GET['force_sync']) && $_GET['force_sync'] == '1' && $distribution_id) {
+    $sync_result = syncWithVolunteerDistribution($db, $distribution_id);
+    if ($sync_result) {
+        $success = "✅ Successfully synchronized with Volunteer Distribution system.";
+    } else {
+        $error = "⚠️ Unable to sync with Volunteer Distribution system.";
+    }
+}
+
+/* ========================================
+   SYNC CANCELLATIONS FIRST
+   Check for volunteers who cancelled in volunteer_distribution.php
+======================================== */
+if ($distribution_id) {
+    $synced = syncCancelledVolunteersFromDistribution($db, $distribution_id);
+    if ($synced > 0) {
+        error_log("SYNC: Updated $synced cancelled volunteers for distribution $distribution_id");
+    }
+    
+    // Run cleanup for cancelled volunteers
+    $cleaned = cleanupCancelledVolunteers($db, $distribution_id);
+    if ($cleaned > 0) {
+        error_log("Cleaned up $cleaned cancelled volunteer assignments for distribution $distribution_id");
+    }
+}
+
 /* ========================================
    FETCH NGOS FROM EXTERNAL API FIRST
-   (We need this to map NGO IDs to names)
 ======================================== */
 try {
     // Fetch NGOs from external API
@@ -512,7 +955,6 @@ try {
     }
 } catch (Exception $e) {
     error_log("Error fetching NGOs: " . $e->getMessage());
-    // Keep existing NGO list
 }
 
 /* ========================================
@@ -543,10 +985,10 @@ try {
             // Get skill category from API - This is the volunteer's selected role/skill
             $skill_category = $api_vol['SkillCategory'] ?? $api_vol['skill_category'] ?? $api_vol['Role'] ?? $api_vol['role'] ?? 'Volunteer';
             
-            // Get NGO ID from API (this is a number like 20)
+            // Get NGO ID from API
             $assigned_ngo_id = $api_vol['AssignedNGO'] ?? $api_vol['assignedNGO'] ?? $api_vol['ngo'] ?? null;
             
-            // Get volunteer status - IMPORTANT: Check status from API
+            // Get volunteer status
             $status_from_api = $api_vol['Status'] ?? 'active';
             $original_status_lower = strtolower($status_from_api);
             
@@ -556,15 +998,14 @@ try {
             } elseif ($original_status_lower === 'new' || $original_status_lower === 'pending') {
                 $availability_status = 'new';
             } else {
-                $availability_status = 'active'; // active, available, etc.
+                $availability_status = 'active';
             }
             
             // Convert NGO ID to NGO Name using our mapping
-            $ngo_affiliation = 'Various'; // Default
+            $ngo_affiliation = 'Various';
             if ($assigned_ngo_id && isset($ngo_id_to_name[$assigned_ngo_id])) {
                 $ngo_affiliation = $ngo_id_to_name[$assigned_ngo_id];
             } elseif (is_string($assigned_ngo_id)) {
-                // If it's already a string (NGO name), use it directly
                 $ngo_affiliation = $assigned_ngo_id;
             }
             
@@ -575,18 +1016,18 @@ try {
                     'name' => $name,
                     'phone' => $api_vol['Phone'] ?? $api_vol['phone'] ?? '',
                     'email' => $api_vol['Email'] ?? $api_vol['email'] ?? '',
-                    'role' => $skill_category, // Use skill category from API as role
-                    'skill_category' => $skill_category, // Store skill category separately
+                    'role' => $skill_category,
+                    'skill_category' => $skill_category,
                     'availability_status' => $availability_status,
                     'original_status' => $status_from_api,
                     'ngo_affiliation' => $ngo_affiliation,
-                    'ngo_id' => $assigned_ngo_id, // Keep the original NGO ID
-                    'date_availability' => 'pending' // Will be checked later
+                    'ngo_id' => $assigned_ngo_id,
+                    'date_availability' => 'pending'
                 ];
                 
                 $all_volunteers[] = $volunteer;
                 
-                // Add NGO to list if not already there (using NGO name)
+                // Add NGO to list if not already there
                 if (!empty($ngo_affiliation) && !in_array($ngo_affiliation, $ngos)) {
                     $ngos[] = $ngo_affiliation;
                 }
@@ -621,17 +1062,13 @@ if (isset($_GET['removed']) && $_GET['removed'] == '1') {
     $success = "✅ Volunteer has been successfully removed from the assignment.";
 }
 
-// Run cleanup for cancelled volunteers
-if ($distribution_id) {
-    $cleaned = cleanupCancelledVolunteers($db, $distribution_id);
-    if ($cleaned > 0) {
-        error_log("Cleaned up $cleaned cancelled volunteer assignments for distribution $distribution_id");
-    }
+// Check for sync success
+if (isset($_GET['synced']) && $_GET['synced'] == '1') {
+    $success = "✅ Synchronized with volunteer distribution system. Cancelled assignments have been updated.";
 }
 
 /* ----------------------------------------
    GET DISTRIBUTION PLAN DETAILS
-   FIXED: Get distribution details including disaster_id
 ---------------------------------------- */
 if ($distribution_id) {
     try {
@@ -652,8 +1089,7 @@ if ($distribution_id) {
             throw new Exception("Distribution plan not found!");
         }
         
-        // Debug: Show distribution data
-        error_log("DEBUG: Distribution data loaded - Date: " . ($distribution['date'] ?? 'Not set') . ", Disaster ID: " . ($distribution['disaster_id'] ?? 'Not set'));
+        error_log("DEBUG: Distribution data loaded - Date: " . ($distribution['date'] ?? 'Not set'));
         
     } catch (Exception $e) {
         $error = $e->getMessage();
@@ -662,25 +1098,21 @@ if ($distribution_id) {
 }
 
 /* ========================================
-   FETCH ALL VICTIMS FROM API - ENHANCED WITH LOCATION EXTRACTION
+   FETCH ALL VICTIMS FROM API
 ======================================== */
 try {
-    // Fetch victims from external API with improved error handling
     $victim_api_result = fetchFromAPI($VICTIM_API_URL);
     
     if ($victim_api_result['success']) {
         $api_victims = $victim_api_result['data'];
         
-        // Check if data is nested
         if (isset($api_victims['victims']) && is_array($api_victims['victims'])) {
             $api_victims = $api_victims['victims'];
         } elseif (isset($api_victims['data']) && is_array($api_victims['data'])) {
             $api_victims = $api_victims['data'];
         }
         
-        // Store all victims data
         $all_victims = $api_victims;
-        
         error_log("DEBUG: Found " . count($all_victims) . " total victims from API");
         
     } else {
@@ -694,7 +1126,6 @@ try {
 
 /* ========================================
    CHECK VOLUNTEER DATE AVAILABILITY
-   NEW: Check each volunteer's availability for the distribution date
 ======================================== */
 if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
     try {
@@ -713,7 +1144,6 @@ if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
             
             // First check if volunteer is active in the system
             if ($availability_status === 'inactive') {
-                // Volunteer is inactive in the system (from API status)
                 $volunteer['date_availability'] = 'inactive';
                 $volunteer['availability_reason'] = 'Volunteer is inactive in system';
                 $date_availability_stats['inactive']++;
@@ -725,7 +1155,7 @@ if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
                 $db, 
                 $volunteer_id, 
                 $distribution_date, 
-                $distribution_id // Exclude current distribution
+                $distribution_id
             );
             
             $is_available_for_date = $availability_result['available'];
@@ -736,7 +1166,6 @@ if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
                 $volunteer['availability_reason'] = 'Available for ' . $distribution_date;
                 $date_availability_stats['available']++;
                 
-                // Debug specific volunteers
                 if (in_array($volunteer_id, [23, 24])) {
                     error_log("DEBUG: Volunteer $volunteer_id is AVAILABLE for date $distribution_date");
                 }
@@ -746,14 +1175,13 @@ if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
                 $volunteer['conflicting_distributions'] = $availability_result['conflicting_distributions'] ?? [];
                 $date_availability_stats['date_conflict']++;
                 
-                // Debug specific volunteers
                 if (in_array($volunteer_id, [23, 24])) {
                     error_log("DEBUG: Volunteer $volunteer_id has DATE CONFLICT for $distribution_date - Reason: " . $availability_result['reason']);
                 }
             }
         }
         
-        unset($volunteer); // Break reference
+        unset($volunteer);
         
         error_log("DATE AVAILABILITY STATS for {$distribution_date}: " . json_encode($date_availability_stats));
         
@@ -768,12 +1196,10 @@ if ($distribution && !empty($all_volunteers) && isset($distribution['date'])) {
 ======================================== */
 if ($distribution_id && is_object($db) && !empty($all_victims)) {
     try {
-        // Check if distribution_items table exists
         $table_check = $db->query("SHOW TABLES LIKE 'distribution_items'");
         $has_distribution_items_table = ($table_check && $table_check->num_rows > 0);
         
         if ($has_distribution_items_table) {
-            // Get victims assigned to this distribution from distribution_items table
             $assigned_victims_query = "
                 SELECT di.victim_id
                 FROM distribution_items di
@@ -792,7 +1218,6 @@ if ($distribution_id && is_object($db) && !empty($all_victims)) {
                 $stmt->close();
                 
                 $families_count = count($assigned_victim_ids);
-                
                 error_log("DEBUG: Found " . $families_count . " families assigned to distribution " . $distribution_id);
                 
                 // Get full victim details from API for assigned families
@@ -801,7 +1226,6 @@ if ($distribution_id && is_object($db) && !empty($all_victims)) {
                         $victim_id = $victim['victim_id'] ?? $victim['id'] ?? null;
                         if ($victim_id && in_array($victim_id, $assigned_victim_ids)) {
                             
-                            // Enhanced location extraction
                             $victim_address = $victim['address'] ?? 
                                             $victim['Address'] ?? 
                                             $victim['full_address'] ?? 
@@ -837,7 +1261,6 @@ if ($distribution_id && is_object($db) && !empty($all_victims)) {
                                                  'Location not specified';
                             }
                             
-                            // Enhanced victim data with location
                             $victims_data[] = [
                                 'victim_id' => $victim_id,
                                 'full_name' => $victim['full_name'] ?? 
@@ -863,9 +1286,7 @@ if ($distribution_id && is_object($db) && !empty($all_victims)) {
                         }
                     }
                     
-                    // Reindex array
                     $victims_data = array_values($victims_data);
-                    
                     error_log("DEBUG: Found " . count($victims_data) . " matching victim records in API");
                     
                 }
@@ -880,7 +1301,6 @@ if ($distribution_id && is_object($db) && !empty($all_victims)) {
 
 /* ----------------------------------------
    GET AVAILABLE VOLUNTEERS
-   Now with date availability check
 ---------------------------------------- */
 if ($distribution && is_object($db) && !empty($all_volunteers)) {
     try {
@@ -900,19 +1320,15 @@ if ($distribution && is_object($db) && !empty($all_volunteers)) {
                 
                 foreach ($assigned_vols as $assigned) {
                     $status = $assigned['status'];
-                    // Check if volunteer is completed (treated as cancelled for cleanup)
-                    if ($status === 'Completed') {
+                    if ($status === 'Completed' || $status === 'Cancelled') {
                         $cancelled_volunteers[] = $assigned['volunteer_id'];
-                        // Free up their needs
-                        freeUpCancelledVolunteerNeeds($db, $distribution_id, $assigned['volunteer_id']);
                     } else {
                         $assigned_ids[] = $assigned['volunteer_id'];
                     }
                 }
                 
-                // Log cancelled volunteers
                 if (!empty($cancelled_volunteers)) {
-                    error_log("Found completed volunteers for distribution $distribution_id: " . implode(', ', $cancelled_volunteers));
+                    error_log("Found completed/cancelled volunteers for distribution $distribution_id: " . implode(', ', $cancelled_volunteers));
                 }
             }
         } else {
@@ -921,7 +1337,7 @@ if ($distribution && is_object($db) && !empty($all_volunteers)) {
         
         // Build available volunteers list from API data with date availability check
         foreach ($all_volunteers as $volunteer) {
-            // Skip if already assigned to this distribution
+            // Skip if already assigned to this distribution (and not cancelled)
             if (in_array($volunteer['volunteer_id'], $assigned_ids)) {
                 continue;
             }
@@ -929,12 +1345,10 @@ if ($distribution && is_object($db) && !empty($all_volunteers)) {
             // Debug specific volunteers
             if (in_array($volunteer['volunteer_id'], [23, 24])) {
                 error_log("DEBUG: Processing volunteer " . $volunteer['volunteer_id'] . 
-                         " - Date availability: " . ($volunteer['date_availability'] ?? 'not set') .
-                         " - Availability status: " . ($volunteer['availability_status'] ?? 'not set'));
+                         " - Date availability: " . ($volunteer['date_availability'] ?? 'not set'));
             }
             
-            // All volunteers (including date conflicts and inactive) go to available_volunteers
-            // The availability will be indicated by CSS classes
+            // All volunteers go to available_volunteers
             $available_volunteers[] = $volunteer;
         }
         
@@ -947,12 +1361,10 @@ if ($distribution && is_object($db) && !empty($all_volunteers)) {
 
 /* ----------------------------------------
    GET CURRENTLY ASSIGNED VOLUNTEERS
-   Matching external volunteer IDs
 ---------------------------------------- */
 if ($distribution && is_object($db) && $distribution_id && !empty($all_volunteers)) {
     try {
-        // Get assigned volunteer IDs from our database (these are EXTERNAL IDs)
-        $assigned_ids_query = "SELECT volunteer_id, role, status FROM distribution_volunteer WHERE distribution_id = ? AND status != 'Completed'";
+        $assigned_ids_query = "SELECT volunteer_id, role, status FROM distribution_volunteer WHERE distribution_id = ?";
         $stmt = $db->prepare($assigned_ids_query);
         if (!$stmt) {
             throw new Exception("Failed to prepare assigned query: " . $db->error);
@@ -964,12 +1376,10 @@ if ($distribution && is_object($db) && $distribution_id && !empty($all_volunteer
         $assignments_db = $result->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
         
-        // Get volunteer details from our all_volunteers array
         $assigned_volunteers = [];
         foreach ($assignments_db as $assignment) {
             $external_volunteer_id = $assignment['volunteer_id'];
             
-            // Find volunteer in our all_volunteers array
             $volunteer_found = null;
             foreach ($all_volunteers as $vol) {
                 if ($vol['volunteer_id'] == $external_volunteer_id) {
@@ -979,11 +1389,9 @@ if ($distribution && is_object($db) && $distribution_id && !empty($all_volunteer
             }
             
             if ($volunteer_found) {
-                // Use the role from distribution_volunteer (assigned role) 
-                // but keep skill_category from API
                 $assigned_volunteers[] = array_merge($volunteer_found, [
-                    'assigned_role' => $assignment['role'], // Role assigned in this distribution
-                    'skill_category' => $volunteer_found['skill_category'], // Original skill from API
+                    'assigned_role' => $assignment['role'],
+                    'skill_category' => $volunteer_found['skill_category'],
                     'status' => $assignment['status']
                 ]);
             }
@@ -1001,7 +1409,7 @@ if ($distribution && is_object($db) && $distribution_id && !empty($all_volunteer
 
 /* ----------------------------------------
    FORM SUBMISSION: ASSIGN VOLUNTEERS WITH ALERTS
-   WITH DATE AVAILABILITY CHECK
+   UPDATED: Also update volunteer_distribution_assignments table
 ---------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) && $db && is_object($db)) {
     $selected_volunteers = $_POST['selected_volunteers'] ?? [];
@@ -1059,7 +1467,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) 
             $role = $roles[$external_volunteer_id] ?? ($volunteer['skill_category'] ?? 'Volunteer');
             
             // Check if volunteer already assigned to THIS distribution
-            $check_query = "SELECT id FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
+            $check_query = "SELECT id, status FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
             $check_stmt = $db->prepare($check_query);
             if (!$check_stmt) {
                 throw new Exception("Prepare failed for check query: " . $db->error);
@@ -1072,11 +1480,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) 
             
             $check_stmt->store_result();
             $already_assigned = ($check_stmt->num_rows > 0);
-            $check_stmt->close();
             
-            if (!$already_assigned) {
-                // Assign volunteer to distribution using EXTERNAL ID
-                $assign_query = "INSERT INTO distribution_volunteer (distribution_id, volunteer_id, role, status) VALUES (?, ?, ?, 'Assigned')";
+            if ($already_assigned) {
+                $check_stmt->bind_result($id, $existing_status);
+                $check_stmt->fetch();
+                $check_stmt->close();
+                
+                // Volunteer exists but might be cancelled - update status to Assigned
+                $update_query = "
+                    UPDATE distribution_volunteer 
+                    SET role = ?, 
+                        status = 'Assigned',
+                        updated_at = NOW()
+                    WHERE distribution_id = ? 
+                    AND volunteer_id = ?
+                ";
+                $update_stmt = $db->prepare($update_query);
+                if (!$update_stmt) {
+                    throw new Exception("Prepare failed for update query: " . $db->error);
+                }
+                
+                $update_stmt->bind_param("sii", $role, $distribution_id, $external_volunteer_id);
+                if (!$update_stmt->execute()) {
+                    throw new Exception("Execute failed for update query: " . $update_stmt->error);
+                }
+                $update_stmt->close();
+                
+                error_log("REASSIGNED: Updated existing volunteer $external_volunteer_id from '$existing_status' to 'Assigned' status");
+            } else {
+                // New assignment - insert
+               $assign_query = "
+                INSERT INTO distribution_volunteer 
+                (distribution_id, volunteer_id, role, status, assigned_timestamp, updated_at) 
+                VALUES (?, ?, ?, 'Assigned', NOW(), NOW())
+            ";
                 $assign_stmt = $db->prepare($assign_query);
                 if (!$assign_stmt) {
                     throw new Exception("Prepare failed for assign query: " . $db->error);
@@ -1088,19 +1525,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) 
                 }
                 $assign_stmt->close();
                 
-                // Sync distribution items to log
-                $sync_result = syncDistributionItemsToLog($db, $distribution_id, $external_volunteer_id);
-                error_log("SYNC RESULT for volunteer $external_volunteer_id: " . ($sync_result ? 'SUCCESS' : 'FAILED'));
-                
-                // Create alert for volunteer
-                $alert_result = $alert_service->createVolunteerAlert($external_volunteer_id, $distribution_id, $role);
-                $assignment_results[$external_volunteer_id] = [
-                    'volunteer_id' => $external_volunteer_id,
-                    'role' => $role,
-                    'alert_created' => $alert_result['success'] ?? false,
-                    'items_synced' => $sync_result
-                ];
+                error_log("NEW ASSIGNMENT: Inserted volunteer $external_volunteer_id as '$role'");
             }
+            
+            // CRITICAL: Also update volunteer_distribution_assignments table for volunteer_distribution.php
+            $check_vda_table = $db->query("SHOW TABLES LIKE 'volunteer_distribution_assignments'");
+            if ($check_vda_table && $check_vda_table->num_rows > 0) {
+                // Check if exists in volunteer_distribution_assignments
+                $check_vda_query = "
+                    SELECT id FROM volunteer_distribution_assignments 
+                    WHERE distribution_id = ? 
+                    AND volunteer_id = ?
+                ";
+                $check_vda_stmt = $db->prepare($check_vda_query);
+                if ($check_vda_stmt) {
+                    $check_vda_stmt->bind_param("ii", $distribution_id, $external_volunteer_id);
+                    $check_vda_stmt->execute();
+                    $check_vda_stmt->store_result();
+                    $vda_exists = ($check_vda_stmt->num_rows > 0);
+                    $check_vda_stmt->close();
+                    
+                    if ($vda_exists) {
+                        // Update existing record
+                        $update_vda_query = "
+                            UPDATE volunteer_distribution_assignments 
+                            SET status = 'Assigned',
+                                role = ?,
+                                updated_at = NOW()
+                            WHERE distribution_id = ? 
+                            AND volunteer_id = ?
+                        ";
+                        $update_vda_stmt = $db->prepare($update_vda_query);
+                        if ($update_vda_stmt) {
+                            $update_vda_stmt->bind_param("sii", $role, $distribution_id, $external_volunteer_id);
+                            $update_vda_stmt->execute();
+                            error_log("Updated volunteer_distribution_assignments for volunteer $external_volunteer_id to 'Assigned'");
+                            $update_vda_stmt->close();
+                        }
+                    } else {
+                        // Insert new record
+                        $insert_vda_query = "
+                            INSERT INTO volunteer_distribution_assignments 
+                            (distribution_id, volunteer_id, role, status, created_at, updated_at) 
+                            VALUES (?, ?, ?, 'Assigned', NOW(), NOW())
+                        ";
+                        $insert_vda_stmt = $db->prepare($insert_vda_query);
+                        if ($insert_vda_stmt) {
+                            $insert_vda_stmt->bind_param("iis", $distribution_id, $external_volunteer_id, $role);
+                            $insert_vda_stmt->execute();
+                            error_log("Inserted into volunteer_distribution_assignments for volunteer $external_volunteer_id");
+                            $insert_vda_stmt->close();
+                        }
+                    }
+                }
+            } else {
+                // Create the table if it doesn't exist
+                $create_vda_query = "
+                    CREATE TABLE IF NOT EXISTS volunteer_distribution_assignments (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        distribution_id INT NOT NULL,
+                        volunteer_id INT NOT NULL,
+                        role VARCHAR(100) NOT NULL DEFAULT 'Volunteer',
+                        status VARCHAR(50) NOT NULL DEFAULT 'Assigned',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        UNIQUE KEY unique_assignment (distribution_id, volunteer_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                ";
+                $db->query($create_vda_query);
+                
+                // Insert new record
+                $insert_vda_query = "
+                    INSERT INTO volunteer_distribution_assignments 
+                    (distribution_id, volunteer_id, role, status, created_at, updated_at) 
+                    VALUES (?, ?, ?, 'Assigned', NOW(), NOW())
+                ";
+                $insert_vda_stmt = $db->prepare($insert_vda_query);
+                if ($insert_vda_stmt) {
+                    $insert_vda_stmt->bind_param("iis", $distribution_id, $external_volunteer_id, $role);
+                    $insert_vda_stmt->execute();
+                    error_log("Created volunteer_distribution_assignments table and inserted volunteer $external_volunteer_id");
+                    $insert_vda_stmt->close();
+                }
+            }
+            
+            // Sync distribution items to log
+            $sync_result = syncDistributionItemsToLog($db, $distribution_id, $external_volunteer_id);
+            error_log("SYNC RESULT for volunteer $external_volunteer_id: " . ($sync_result ? 'SUCCESS' : 'FAILED'));
+            
+            // Create alert for volunteer
+            $alert_result = $alert_service->createVolunteerAlert($external_volunteer_id, $distribution_id, $role);
+            $assignment_results[$external_volunteer_id] = [
+                'volunteer_id' => $external_volunteer_id,
+                'name' => $volunteer['name'],
+                'role' => $role,
+                'alert_created' => $alert_result['success'] ?? false,
+                'alert_message' => $alert_result['message'] ?? 'No alert created',
+                'items_synced' => $sync_result
+            ];
+            
+            error_log("ASSIGNMENT COMPLETE: Volunteer {$volunteer['name']} ($external_volunteer_id) assigned as $role");
         }
         
         if (!empty($validation_errors)) {
@@ -1126,12 +1650,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) 
         }
         $update_dist_stmt->close();
         
+        // Sync with volunteer_distribution system
+        $sync_vd_result = syncWithVolunteerDistribution($db, $distribution_id);
+        error_log("Sync with volunteer_distribution result: " . ($sync_vd_result ? 'SUCCESS' : 'FAILED'));
+        
         $db->commit();
         
         // Store results in session for success modal
         $_SESSION['assignment_success'] = count($selected_volunteers);
         $_SESSION['distribution_id'] = $distribution_id;
         $_SESSION['sync_results'] = $assignment_results;
+        $_SESSION['assigned_volunteers'] = array_column($assignment_results, 'name');
+        $_SESSION['sync_vd_success'] = $sync_vd_result;
         
         header("Location: assign_volunteer.php?distribution_id={$distribution_id}&success=1");
         exit;
@@ -1146,7 +1676,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_volunteers']) 
 
 /* ----------------------------------------
    REMOVE VOLUNTEER FROM ASSIGNMENT
-   Using external volunteer IDs
+   UPDATED: Handles both removing and permanently deleting
 ---------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_volunteer'])) {
     $remove_volunteer_id = $_POST['volunteer_id'] ?? null;
@@ -1155,47 +1685,159 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_volunteer'])) 
         try {
             $db->begin_transaction();
             
-            // Remove from distribution_volunteer table
-            $remove_query = "DELETE FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
-            $remove_stmt = $db->prepare($remove_query);
-            if (!$remove_stmt) {
-                throw new Exception("Failed to prepare remove query: " . $db->error);
+            // First, get volunteer name for logging
+            $volunteer_name = "Unknown";
+            foreach ($all_volunteers as $vol) {
+                if ($vol['volunteer_id'] == $remove_volunteer_id) {
+                    $volunteer_name = $vol['name'];
+                    break;
+                }
             }
             
-            $remove_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
-            if (!$remove_stmt->execute()) {
-                throw new Exception("Failed to execute remove query: " . $remove_stmt->error);
+            // Check current status to determine action
+            $check_status_query = "SELECT status FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
+            $check_status_stmt = $db->prepare($check_status_query);
+            if (!$check_status_stmt) {
+                throw new Exception("Failed to prepare check status query: " . $db->error);
             }
-            $remove_stmt->close();
             
-            // Remove from distribution_log table
+            $check_status_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+            $check_status_stmt->execute();
+            $check_status_stmt->bind_result($current_status);
+            $check_status_stmt->fetch();
+            $check_status_stmt->close();
+            
+            if ($current_status === 'Cancelled') {
+                // PERMANENTLY DELETE if already cancelled
+                $delete_query = "DELETE FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
+                $delete_stmt = $db->prepare($delete_query);
+                if (!$delete_stmt) {
+                    throw new Exception("Failed to prepare delete query: " . $db->error);
+                }
+                
+                $delete_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                if (!$delete_stmt->execute()) {
+                    throw new Exception("Failed to execute delete query: " . $delete_stmt->error);
+                }
+                $deleted = $delete_stmt->affected_rows;
+                $delete_stmt->close();
+                
+                if ($deleted === 0) {
+                    throw new Exception("No record found to delete.");
+                }
+                
+                error_log("PERMANENTLY DELETED cancelled volunteer $remove_volunteer_id from distribution $distribution_id");
+                
+            } else {
+                // UPDATE to 'Cancelled' status for non-cancelled volunteers
+                $update_query = "
+                    UPDATE distribution_volunteer 
+                    SET status = 'Cancelled',
+                        updated_at = NOW()
+                    WHERE distribution_id = ? 
+                    AND volunteer_id = ?
+                ";
+                $update_stmt = $db->prepare($update_query);
+                if (!$update_stmt) {
+                    throw new Exception("Failed to prepare update query: " . $db->error);
+                }
+                
+                $update_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                if (!$update_stmt->execute()) {
+                    throw new Exception("Failed to execute update query: " . $update_stmt->error);
+                }
+                $update_stmt->close();
+                
+                error_log("Updated volunteer $remove_volunteer_id status to 'Cancelled' for distribution $distribution_id");
+            }
+            
+            // Also update volunteer_distribution_assignments if exists (for both cases)
+            $check_vda_table = $db->query("SHOW TABLES LIKE 'volunteer_distribution_assignments'");
+            if ($check_vda_table && $check_vda_table->num_rows > 0) {
+                if ($current_status === 'Cancelled') {
+                    // DELETE from volunteer_distribution_assignments
+                    $delete_vda_query = "DELETE FROM volunteer_distribution_assignments WHERE distribution_id = ? AND volunteer_id = ?";
+                    $delete_vda_stmt = $db->prepare($delete_vda_query);
+                    if ($delete_vda_stmt) {
+                        $delete_vda_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                        $delete_vda_stmt->execute();
+                        $delete_vda_stmt->close();
+                        error_log("Deleted from volunteer_distribution_assignments for volunteer $remove_volunteer_id");
+                    }
+                } else {
+                    // UPDATE to 'Cancelled' in volunteer_distribution_assignments
+                    $update_vda_query = "
+                        UPDATE volunteer_distribution_assignments 
+                        SET status = 'Cancelled',
+                            updated_at = NOW()
+                        WHERE distribution_id = ? 
+                        AND volunteer_id = ?
+                    ";
+                    $update_vda_stmt = $db->prepare($update_vda_query);
+                    if ($update_vda_stmt) {
+                        $update_vda_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                        $update_vda_stmt->execute();
+                        $update_vda_stmt->close();
+                        error_log("Updated volunteer_distribution_assignments status to 'Cancelled' for volunteer $remove_volunteer_id");
+                    }
+                }
+            }
+            
+            // Remove from distribution_log table (for both cases)
             $remove_log_query = "DELETE FROM distribution_log WHERE distribution_id = ? AND volunteer_id = ?";
             $remove_log_stmt = $db->prepare($remove_log_query);
             if ($remove_log_stmt) {
                 $remove_log_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
                 $remove_log_stmt->execute();
+                $removed_logs = $remove_log_stmt->affected_rows;
                 $remove_log_stmt->close();
-                error_log("Removed distribution_log entries for volunteer $remove_volunteer_id, distribution $distribution_id");
+                error_log("Removed $removed_logs distribution_log entries for volunteer $remove_volunteer_id");
             }
             
-            // Remove from distribution_items table using assigned_volunteer_id
-            $remove_items_query = "
-                DELETE FROM distribution_items 
-                WHERE distribution_id = ? 
-                AND assigned_volunteer_id = ?
-            ";
-            
-            $remove_items_stmt = $db->prepare($remove_items_query);
-            if ($remove_items_stmt) {
-                $remove_items_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
-                $remove_items_stmt->execute();
-                $removed_items = $remove_items_stmt->affected_rows;
-                $remove_items_stmt->close();
-                error_log("Removed $removed_items items from distribution_items for volunteer $remove_volunteer_id");
+            // Remove from distribution_items table using assigned_volunteer_id (for both cases)
+            $check_items_table = $db->query("SHOW TABLES LIKE 'distribution_items'");
+            if ($check_items_table && $check_items_table->num_rows > 0) {
+                $check_column = $db->query("SHOW COLUMNS FROM distribution_items LIKE 'assigned_volunteer_id'");
+                if ($check_column && $check_column->num_rows > 0) {
+                    $remove_items_query = "
+                        UPDATE distribution_items 
+                        SET assigned_volunteer_id = NULL,
+                            status = 'available'
+                        WHERE distribution_id = ? 
+                        AND assigned_volunteer_id = ?
+                    ";
+                    
+                    $remove_items_stmt = $db->prepare($remove_items_query);
+                    if ($remove_items_stmt) {
+                        $remove_items_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                        $remove_items_stmt->execute();
+                        $removed_items = $remove_items_stmt->affected_rows;
+                        $remove_items_stmt->close();
+                        error_log("Cleared $removed_items items from distribution_items for volunteer $remove_volunteer_id");
+                    }
+                }
             }
             
-            // Check if any volunteers are still assigned
-            $check_remaining_query = "SELECT COUNT(*) as count FROM distribution_volunteer WHERE distribution_id = ?";
+            // Remove from assignment_cancellations table (if exists) for both cases
+            $check_cancellations_table = $db->query("SHOW TABLES LIKE 'assignment_cancellations'");
+            if ($check_cancellations_table && $check_cancellations_table->num_rows > 0) {
+                $delete_cancellations_query = "DELETE FROM assignment_cancellations WHERE distribution_id = ? AND volunteer_id = ?";
+                $delete_cancellations_stmt = $db->prepare($delete_cancellations_query);
+                if ($delete_cancellations_stmt) {
+                    $delete_cancellations_stmt->bind_param("ii", $distribution_id, $remove_volunteer_id);
+                    $delete_cancellations_stmt->execute();
+                    $delete_cancellations_stmt->close();
+                    error_log("Removed cancellation record for volunteer $remove_volunteer_id from assignment_cancellations");
+                }
+            }
+            
+            // Create cancellation alert (only for non-cancelled volunteers)
+            if ($current_status !== 'Cancelled') {
+                $alert_service->createCancellationAlert($remove_volunteer_id, $distribution_id);
+            }
+            
+            // Check if any volunteers are still assigned (check for 'Assigned' or 'Active' status)
+            $check_remaining_query = "SELECT COUNT(*) as count FROM distribution_volunteer WHERE distribution_id = ? AND status IN ('Assigned', 'Active')";
             $check_stmt = $db->prepare($check_remaining_query);
             if (!$check_stmt) {
                 throw new Exception("Failed to prepare check remaining query: " . $db->error);
@@ -1211,7 +1853,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_volunteer'])) 
             $remaining_count = $row ? $row['count'] : 0;
             $check_stmt->close();
             
-            // Update distribution status if no volunteers left
+            // Update distribution status if no assigned volunteers left
             if ($remaining_count == 0) {
                 $update_dist_query = "UPDATE distribution SET status = 'Planning' WHERE distribution_id = ?";
                 $update_dist_stmt = $db->prepare($update_dist_query);
@@ -1224,7 +1866,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_volunteer'])) 
                     throw new Exception("Failed to execute update distribution query: " . $update_dist_stmt->error);
                 }
                 $update_dist_stmt->close();
+                error_log("Updated distribution $distribution_id status to 'Planning' (no assigned volunteers left after removing $volunteer_name)");
             }
+            
+            // Sync with volunteer_distribution system
+            syncWithVolunteerDistribution($db, $distribution_id);
             
             $db->commit();
             
@@ -1254,9 +1900,9 @@ if (!empty($victims_data)) {
     }
 }
 
-// Get unique NGO names from available volunteers for the filter dropdown
+// Get unique NGO names from available volunteers for the filter dropdown - FIXED NULL CHECK
 $unique_ngo_names = [];
-if (!empty($available_volunteers)) {
+if (!empty($available_volunteers) && is_array($available_volunteers)) {
     foreach ($available_volunteers as $volunteer) {
         $ngo_name = $volunteer['ngo_affiliation'] ?? 'Various';
         if (!in_array($ngo_name, $unique_ngo_names)) {
@@ -1266,41 +1912,55 @@ if (!empty($available_volunteers)) {
     sort($unique_ngo_names);
 }
 
-// Count available and unavailable volunteers
-$active_available_volunteers = array_filter($available_volunteers, function($volunteer) {
-    $date_availability = $volunteer['date_availability'] ?? '';
-    $api_status = strtolower($volunteer['original_status'] ?? 'active');
-    $is_system_active = !($api_status === 'inactive' || $api_status === 'suspended');
-    return ($date_availability === 'available' && $is_system_active);
-});
+// Count available and unavailable volunteers - FIXED NULL CHECKS
+$active_available_volunteers = [];
+$date_unavailable_volunteers = [];
+$inactive_volunteers = [];
 
-$date_unavailable_volunteers = array_filter($available_volunteers, function($volunteer) {
-    $date_availability = $volunteer['date_availability'] ?? '';
-    $api_status = strtolower($volunteer['original_status'] ?? 'active');
-    $is_system_active = !($api_status === 'inactive' || $api_status === 'suspended');
-    return ($date_availability === 'date_conflict' && $is_system_active);
-});
+if (!empty($available_volunteers) && is_array($available_volunteers)) {
+    $active_available_volunteers = array_filter($available_volunteers, function($volunteer) {
+        $date_availability = $volunteer['date_availability'] ?? '';
+        $api_status = strtolower($volunteer['original_status'] ?? 'active');
+        $is_system_active = !($api_status === 'inactive' || $api_status === 'suspended');
+        return ($date_availability === 'available' && $is_system_active);
+    });
+    
+    $date_unavailable_volunteers = array_filter($available_volunteers, function($volunteer) {
+        $date_availability = $volunteer['date_availability'] ?? '';
+        $api_status = strtolower($volunteer['original_status'] ?? 'active');
+        $is_system_active = !($api_status === 'inactive' || $api_status === 'suspended');
+        return ($date_availability === 'date_conflict' && $is_system_active);
+    });
+    
+    $inactive_volunteers = array_filter($available_volunteers, function($volunteer) {
+        $api_status = strtolower($volunteer['original_status'] ?? 'active');
+        return ($api_status === 'inactive' || $api_status === 'suspended');
+    });
+}
 
-$inactive_volunteers = array_filter($available_volunteers, function($volunteer) {
-    $api_status = strtolower($volunteer['original_status'] ?? 'active');
-    return ($api_status === 'inactive' || $api_status === 'suspended');
-});
-
-// Debug: Log specific volunteers
+// Debug: Log volunteer status
 error_log("=== VOLUNTEER STATUS SUMMARY ===");
 error_log("Total volunteers loaded: " . count($all_volunteers));
+error_log("Available volunteers array: " . (is_array($available_volunteers) ? count($available_volunteers) : 'NOT ARRAY'));
 error_log("Active & available: " . count($active_available_volunteers));
 error_log("Date conflicts: " . count($date_unavailable_volunteers));
 error_log("Inactive: " . count($inactive_volunteers));
 
-foreach ($all_volunteers as $vol) {
-    if (in_array($vol['volunteer_id'], [23, 24])) {
-        error_log("Volunteer " . $vol['volunteer_id'] . " (" . $vol['name'] . "):");
-        error_log("  - API Status: " . ($vol['original_status'] ?? 'N/A'));
-        error_log("  - Availability Status: " . ($vol['availability_status'] ?? 'N/A'));
-        error_log("  - Date Availability: " . ($vol['date_availability'] ?? 'N/A'));
-        error_log("  - Reason: " . ($vol['availability_reason'] ?? 'N/A'));
-    }
+// Ensure arrays are initialized as arrays for the rest of the code
+if (!is_array($available_volunteers)) {
+    $available_volunteers = [];
+}
+if (!is_array($active_available_volunteers)) {
+    $active_available_volunteers = [];
+}
+if (!is_array($date_unavailable_volunteers)) {
+    $date_unavailable_volunteers = [];
+}
+if (!is_array($inactive_volunteers)) {
+    $inactive_volunteers = [];
+}
+if (!is_array($unique_ngo_names)) {
+    $unique_ngo_names = [];
 }
 ?>
 
@@ -1373,6 +2033,22 @@ foreach ($all_volunteers as $vol) {
             font-size: 60px;
             color: var(--success);
             margin-bottom: 20px;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         /* Cards */
@@ -1830,62 +2506,6 @@ foreach ($all_volunteers as $vol) {
             border: 2px solid var(--primary);
         }
         
-        /* Checkbox custom styling */
-        .checkbox-container {
-            position: relative;
-            padding-left: 35px;
-            margin-bottom: 12px;
-            cursor: pointer;
-            font-size: 16px;
-            user-select: none;
-        }
-        
-        .checkbox-container input {
-            position: absolute;
-            opacity: 0;
-            cursor: pointer;
-            height: 0;
-            width: 0;
-        }
-        
-        .checkmark {
-            position: absolute;
-            top: 0;
-            left: 0;
-            height: 25px;
-            width: 25px;
-            background-color: #eee;
-            border-radius: 4px;
-        }
-        
-        .checkbox-container:hover input ~ .checkmark {
-            background-color: #ccc;
-        }
-        
-        .checkbox-container input:checked ~ .checkmark {
-            background-color: var(--primary);
-        }
-        
-        .checkmark:after {
-            content: "";
-            position: absolute;
-            display: none;
-        }
-        
-        .checkbox-container input:checked ~ .checkmark:after {
-            display: block;
-        }
-        
-        .checkbox-container .checkmark:after {
-            left: 9px;
-            top: 5px;
-            width: 5px;
-            height: 10px;
-            border: solid white;
-            border-width: 0 3px 3px 0;
-            transform: rotate(45deg);
-        }
-        
         /* Responsive */
         @media (max-width: 768px) {
             .container {
@@ -1904,6 +2524,27 @@ foreach ($all_volunteers as $vol) {
                 grid-template-columns: 1fr;
             }
         }
+        
+        /* Sync Button */
+        .sync-btn {
+            background: #ff9f43;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+        }
+        
+        .sync-btn:hover {
+            background: #e67e22;
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 <body>
@@ -1916,6 +2557,7 @@ foreach ($all_volunteers as $vol) {
                 $successful_syncs++;
             }
         }
+        $sync_vd_success = $_SESSION['sync_vd_success'] ?? false;
     ?>
     <div class="success-modal" id="successModal" style="display: flex;">
         <div class="success-modal-content">
@@ -1929,16 +2571,41 @@ foreach ($all_volunteers as $vol) {
                     <strong><?php echo $_SESSION['assignment_success']; ?> volunteer(s)</strong> have been assigned to this distribution.
                 </p>
                 
+                <?php if (!empty($_SESSION['assigned_volunteers'])): ?>
                 <div style="background: #e8f4fc; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid var(--primary);">
                     <p style="margin: 0 0 10px 0; font-weight: bold;">
-                        <i class="fas fa-sync-alt"></i> Data Sync Status
+                        <i class="fas fa-users"></i> Assigned Volunteers:
+                    </p>
+                    <ul style="text-align: left; margin: 10px 0 0 20px; padding: 0; font-size: 14px;">
+                        <?php foreach ($_SESSION['assigned_volunteers'] as $volunteer_name): ?>
+                        <li><?php echo htmlspecialchars($volunteer_name); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+                <?php endif; ?>
+                
+                <div style="background: #e8f4fc; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid var(--primary);">
+                    <p style="margin: 0 0 10px 0; font-weight: bold;">
+                        <i class="fas fa-sync-alt"></i> System Status
                     </p>
                     <ul style="text-align: left; margin: 10px 0 0 20px; padding: 0; font-size: 14px;">
                         <li>✅ Volunteers assigned to distribution</li>
                         <li>✅ Alerts created for volunteers</li>
                         <li><?php echo $successful_syncs > 0 ? '✅' : '⚠️'; ?> Families & items synced to volunteer logs: <?php echo $successful_syncs; ?>/<?php echo count($sync_results); ?> volunteers</li>
                         <li>✅ Distribution status updated to <strong>Assigned</strong></li>
+                        <li><?php echo $sync_vd_success ? '✅' : '⚠️'; ?> Synchronized with Volunteer Distribution system</li>
+                        <li>🔔 Notifications sent to volunteers</li>
                     </ul>
+                </div>
+                
+                <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #ffc107;">
+                    <p style="margin: 0; font-size: 14px;">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Note:</strong> Volunteers can now see this assignment in their Volunteer Distribution page.
+                        <?php if (!$sync_vd_success): ?>
+                        <br><span style="color: #e74c3c;">⚠️ There was an issue syncing with Volunteer Distribution system. Use the Force Sync button if volunteers don't see the assignment.</span>
+                        <?php endif; ?>
+                    </p>
                 </div>
             </div>
             
@@ -1946,12 +2613,24 @@ foreach ($all_volunteers as $vol) {
                 <a href="assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>" class="btn btn-primary">
                     <i class="fas fa-users"></i> View Assigned Volunteers
                 </a>
+                <?php if (!$sync_vd_success): ?>
+                <a href="assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>&force_sync=1" class="btn btn-outline">
+                    <i class="fas fa-sync-alt"></i> Force Sync with Volunteer Distribution
+                </a>
+                <?php endif; ?>
                 <button onclick="closeSuccessModal()" class="btn btn-outline">
                     <i class="fas fa-times"></i> Close
                 </button>
             </div>
         </div>
     </div>
+    <?php 
+        // Clear session data after showing modal
+        unset($_SESSION['assignment_success']);
+        unset($_SESSION['sync_results']);
+        unset($_SESSION['assigned_volunteers']);
+        unset($_SESSION['sync_vd_success']);
+    ?>
     <?php endif; ?>
 
     <div class="container">
@@ -1964,6 +2643,11 @@ foreach ($all_volunteers as $vol) {
             <h1 class="page-title">
                 <i class="fas fa-user-plus"></i> Assign Volunteers
             </h1>
+            
+            <!-- Sync Button -->
+            <a href="assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>&force_sync=1" class="sync-btn" title="Force sync with volunteer distribution system">
+                <i class="fas fa-sync-alt"></i> Force Sync
+            </a>
         </div>
 
         <!-- Distribution Info -->
@@ -1984,6 +2668,12 @@ foreach ($all_volunteers as $vol) {
                             <i class="far fa-calendar"></i>
                             <span><strong><?php echo date('d/m/Y', strtotime($distribution['date'])); ?></strong></span>
                         </div>
+                        <?php if (!empty($distribution['time'])): ?>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <i class="far fa-clock"></i>
+                            <span><?php echo htmlspecialchars($distribution['time']); ?></span>
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div style="background: rgba(255,255,255,0.2); padding: 8px 20px; border-radius: 50px; font-weight: 600;">
@@ -2001,6 +2691,13 @@ foreach ($all_volunteers as $vol) {
                 </div>
             </div>
             <?php endif; ?>
+            
+            <!-- Sync Info -->
+            <div style="margin-top: 15px; padding: 10px 15px; background: rgba(255,255,255,0.1); border-radius: 8px; font-size: 14px;">
+                <i class="fas fa-info-circle"></i>
+                <strong>System Sync:</strong> This page automatically syncs with the Volunteer Distribution system. 
+                Cancelled volunteers can be reassigned and will appear in Volunteer Distribution page.
+            </div>
         </div>
         <?php endif; ?>
 
@@ -2019,7 +2716,7 @@ foreach ($all_volunteers as $vol) {
                     <i class="fas fa-user-check"></i>
                 </div>
                 <div class="stat-value"><?php echo count($assigned_volunteers); ?></div>
-                <div class="stat-label">Assigned</div>
+                <div class="stat-label">Currently Assigned</div>
             </div>
             
             <div class="stat-card available">
@@ -2092,6 +2789,7 @@ foreach ($all_volunteers as $vol) {
                     </h2>
                     <p style="color: var(--gray); margin: 0;">
                         Choose volunteers from the list below to assign them to this distribution on <strong><?php echo date('d/m/Y', strtotime($distribution['date'])); ?></strong>.
+                        Volunteers who cancelled their assignments can be reassigned and will appear in Volunteer Distribution page.
                     </p>
                     
                     <!-- Legend -->
@@ -2102,7 +2800,7 @@ foreach ($all_volunteers as $vol) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <div style="width: 20px; height: 20px; background: #ff9f43; border-radius: 4px;"></div>
-                            <span style="font-size: 0.9rem;">Already assigned on <?php echo date('d/m/Y', strtotime($distribution['date'])); ?></span>
+                            <span style="font-size: 0.9rem;">Date conflict (already assigned on <?php echo date('d/m/Y', strtotime($distribution['date'])); ?>)</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <div style="width: 20px; height: 20px; background: #e74c3c; border-radius: 4px;"></div>
@@ -2175,10 +2873,12 @@ foreach ($all_volunteers as $vol) {
                                     <option value="all">All Skills</option>
                                     <?php 
                                     $skill_categories = [];
-                                    foreach ($available_volunteers as $volunteer) {
-                                        $skill = $volunteer['skill_category'] ?? 'Volunteer';
-                                        if (!in_array($skill, $skill_categories)) {
-                                            $skill_categories[] = $skill;
+                                    if (!empty($available_volunteers)) {
+                                        foreach ($available_volunteers as $volunteer) {
+                                            $skill = $volunteer['skill_category'] ?? 'Volunteer';
+                                            if (!in_array($skill, $skill_categories)) {
+                                                $skill_categories[] = $skill;
+                                            }
                                         }
                                     }
                                     sort($skill_categories);
@@ -2332,12 +3032,12 @@ foreach ($all_volunteers as $vol) {
                                             <span>
                                                 System Status: 
                                                 <span style="font-weight: 600; color: <?php 
-                                                    $status_color = '#2ecc71'; // default green
+                                                    $status_color = '#2ecc71';
                                                     $api_status = strtolower($volunteer['original_status'] ?? '');
                                                     if ($api_status === 'inactive' || $api_status === 'suspended') {
-                                                        $status_color = '#e74c3c'; // red
+                                                        $status_color = '#e74c3c';
                                                     } elseif ($api_status === 'new' || $api_status === 'pending') {
-                                                        $status_color = '#f39c12'; // orange
+                                                        $status_color = '#f39c12';
                                                     }
                                                     echo $status_color;
                                                 ?>;">
@@ -2429,7 +3129,7 @@ foreach ($all_volunteers as $vol) {
                         </span>
                     </h2>
                     <p style="color: var(--gray); margin: 0;">
-                        These volunteers are already assigned to this distribution on <?php echo date('d/m/Y', strtotime($distribution['date'])); ?>
+                        These volunteers are currently assigned to this distribution on <?php echo date('d/m/Y', strtotime($distribution['date'])); ?>
                     </p>
                 </div>
                 
@@ -2441,6 +3141,7 @@ foreach ($all_volunteers as $vol) {
                                 <th style="padding: 15px; text-align: left;">Contact</th>
                                 <th style="padding: 15px; text-align: left;">NGO</th>
                                 <th style="padding: 15px; text-align: left;">Assigned Role</th>
+                                <th style="padding: 15px; text-align: left;">Status</th>
                                 <th style="padding: 15px; text-align: left;">Actions</th>
                             </tr>
                         </thead>
@@ -2477,10 +3178,25 @@ foreach ($all_volunteers as $vol) {
                                     </span>
                                 </td>
                                 <td style="padding: 15px;">
-                                    <button type="button" class="btn btn-danger" onclick="removeVolunteer(<?php echo $assignment['volunteer_id']; ?>)" style="padding: 8px 16px; font-size: 0.9rem;">
-                                        <i class="fas fa-user-times"></i> Remove
-                                    </button>
+                                    <?php 
+                                    $status_color = '#1976d2'; // Default blue for Assigned
+                                    if ($assignment['status'] === 'Cancelled') $status_color = '#e74c3c';
+                                    if ($assignment['status'] === 'Completed') $status_color = '#2ecc71';
+                                    ?>
+                                    <span style="background: <?php echo $status_color; ?>20; color: <?php echo $status_color; ?>; padding: 5px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">
+                                        <?php echo $assignment['status']; ?>
+                                    </span>
                                 </td>
+                                <td style="padding: 15px;">
+    <?php if ($assignment['status'] === 'Assigned' || $assignment['status'] === 'Cancelled'): ?>
+    <button type="button" class="btn btn-danger" onclick="removeVolunteer(<?php echo $assignment['volunteer_id']; ?>)" style="padding: 8px 16px; font-size: 0.9rem;">
+        <i class="fas fa-user-times"></i> 
+        <?php echo $assignment['status'] === 'Cancelled' ? 'Remove Permanently' : 'Remove'; ?>
+    </button>
+    <?php else: ?>
+    <span style="color: var(--gray); font-size: 0.9rem; font-style: italic;">Cannot remove <?php echo strtolower($assignment['status']); ?> volunteers</span>
+    <?php endif; ?>
+</td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -2579,28 +3295,54 @@ foreach ($all_volunteers as $vol) {
         window.history.replaceState({}, '', url);
     }
     
-    function removeVolunteer(volunteerId) {
-        if (confirm('Are you sure you want to remove this volunteer from the assignment?\n\nThis will:\n• Remove volunteer from distribution\n• Remove their distribution log entries\n• Remove their assigned items\n• Update distribution status if no volunteers remain')) {
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = 'assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>';
-            
-            const removeInput = document.createElement('input');
-            removeInput.type = 'hidden';
-            removeInput.name = 'remove_volunteer';
-            removeInput.value = '1';
-            
-            const volunteerInput = document.createElement('input');
-            volunteerInput.type = 'hidden';
-            volunteerInput.name = 'volunteer_id';
-            volunteerInput.value = volunteerId;
-            
-            form.appendChild(removeInput);
-            form.appendChild(volunteerInput);
-            document.body.appendChild(form);
-            form.submit();
+function removeVolunteer(volunteerId) {
+    // Find the volunteer row to check current status
+    const volunteerRow = document.querySelector(`tr:has(button[onclick*="${volunteerId}"])`);
+    let status = 'Assigned';
+    
+    if (volunteerRow) {
+        const statusSpan = volunteerRow.querySelector('td:nth-child(5) span');
+        if (statusSpan) {
+            const statusText = statusSpan.textContent.trim();
+            if (statusText.includes('Cancelled')) {
+                status = 'Cancelled';
+            }
         }
     }
+    
+    if (status === 'Cancelled') {
+        // Permanent deletion for already cancelled volunteers
+        if (confirm('⚠️ Are you sure you want to PERMANENTLY DELETE this cancelled volunteer from the distribution?\n\nThis action cannot be undone!\n\nThis will:\n• Permanently delete the volunteer assignment record\n• Remove all associated distribution log entries\n• Clear all assigned items\n• Remove from volunteer_distribution system')) {
+            submitRemovalForm(volunteerId);
+        }
+    } else {
+        // Normal removal (update to Cancelled status)
+        if (confirm('Are you sure you want to remove this volunteer from the assignment?\n\nThis will:\n• Update volunteer status to "Cancelled"\n• Remove their distribution log entries\n• Clear their assigned items\n• Update volunteer_distribution system\n• Create cancellation alert')) {
+            submitRemovalForm(volunteerId);
+        }
+    }
+}
+
+function submitRemovalForm(volunteerId) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>';
+    
+    const removeInput = document.createElement('input');
+    removeInput.type = 'hidden';
+    removeInput.name = 'remove_volunteer';
+    removeInput.value = '1';
+    
+    const volunteerInput = document.createElement('input');
+    volunteerInput.type = 'hidden';
+    volunteerInput.name = 'volunteer_id';
+    volunteerInput.value = volunteerId;
+    
+    form.appendChild(removeInput);
+    form.appendChild(volunteerInput);
+    document.body.appendChild(form);
+    form.submit();
+}
     
     // Volunteer selection and filtering
     const volunteerCards = document.querySelectorAll('.volunteer-card');
@@ -2780,7 +3522,7 @@ foreach ($all_volunteers as $vol) {
                 return;
             }
             
-            let message = `Assign ${selected} volunteer(s) to this distribution on <?php echo date('d/m/Y', strtotime($distribution['date'] ?? 'selected date')); ?>?\n\n✅ Volunteers will be assigned with their selected roles\n🔔 Alerts will be created for volunteers\n📊 Distribution status will be updated to Assigned\n📋 Family data will be synced to volunteer logs`;
+            let message = `Assign ${selected} volunteer(s) to this distribution on <?php echo date('d/m/Y', strtotime($distribution['date'] ?? 'selected date')); ?>?\n\n✅ Volunteers will be assigned with their selected roles\n🔔 Alerts will be created for volunteers\n📊 Distribution status will be updated to Assigned\n📋 Family data will be synced to volunteer logs\n🔄 Volunteer Distribution system will be updated\n📱 Volunteers will see this in their Volunteer Distribution page`;
             
             if (!confirm(message)) {
                 e.preventDefault();
@@ -2797,10 +3539,17 @@ foreach ($all_volunteers as $vol) {
     updateSelectedCount();
     filterVolunteers();
     
-    // Clear filters on page load to ensure consistency
+    // Auto-refresh page after 30 seconds to sync with volunteer_distribution.php
     window.addEventListener('load', function() {
         clearFilters();
         updateSelectedCount();
+        
+        // Auto-refresh page after 30 seconds to sync with volunteer_distribution.php
+        setTimeout(() => {
+            if (!document.getElementById('successModal') || document.getElementById('successModal').style.display === 'none') {
+                location.reload();
+            }
+        }, 30000); // 30 seconds
     });
     </script>
 </body>

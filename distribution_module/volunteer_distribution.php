@@ -142,7 +142,7 @@ function fetchSingleFromAPI($url, $id = null) {
 function fetchAllFromAPI($url) {
     $result = fetchDataFromAPI($url);
     if (!$result['success']) {
-        return ['success' => false, 'data' => []];
+        return ['success' => false, 'error' => $result['error'] ?? 'Unknown error fetching data'];
     }
     
     $data = $result['data'];
@@ -303,7 +303,7 @@ try {
     $apiResult = fetchAllFromAPI($API_URL);
     
     if (!$apiResult['success']) {
-        throw new Exception($apiResult['error']);
+        throw new Exception($apiResult['error'] ?? 'Unknown API error');
     }
     
     $all_volunteers = $apiResult['data'];
@@ -890,7 +890,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // If distribution is still in 'Assigned' status, update it to 'In Progress'
                 if ($current_distribution_status === 'Assigned') {
-                    // CORRECTED: Your distribution table doesn't have updated_at column
+                    // CORRECTED: Removed updated_at column reference
                     $update_dist_query = "UPDATE distribution SET status = 'In Progress' WHERE distribution_id = ?";
                     $dist_stmt = $db->prepare($update_dist_query);
                     if ($dist_stmt) {
@@ -917,7 +917,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $alert_message = "You have confirmed your assignment for Distribution #{$distribution_id}. You can now start the distribution when ready.";
                 $table_check = $db->query("SHOW TABLES LIKE 'volunteer_alerts'");
                 if ($table_check && $table_check->num_rows > 0) {
-                    $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message, created_at) VALUES (?, ?, ?, NOW())";
+                    $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message) VALUES (?, ?, ?)";
                     $alert_stmt = $db->prepare($alert_query);
                     if ($alert_stmt) {
                         $alert_stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_message);
@@ -961,13 +961,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $delete_stmt->close();
                 }
                 
-                // 2. Update distribution_items if table exists
+                // 2. Update distribution_items if table exists - FIXED: Removed updated_at reference
                 $table_check = $db->query("SHOW TABLES LIKE 'distribution_items'");
                 if ($table_check && $table_check->num_rows > 0) {
                     // Check if assigned_volunteer_id column exists
                     $column_check = $db->query("SHOW COLUMNS FROM distribution_items LIKE 'assigned_volunteer_id'");
                     if ($column_check && $column_check->num_rows > 0) {
-                        $update_items = "UPDATE distribution_items SET assigned_volunteer_id = NULL, status = 'Scheduled' WHERE distribution_id = ? AND assigned_volunteer_id = ?";
+                        $update_items = "UPDATE distribution_items SET assigned_volunteer_id = NULL WHERE distribution_id = ? AND assigned_volunteer_id = ?";
                         $update_stmt = $db->prepare($update_items);
                         if ($update_stmt) {
                             $update_stmt->bind_param("ii", $distribution_id, $volunteer_id);
@@ -1026,7 +1026,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Only update if it's currently in a volunteer-assigned state
                     $volunteer_states = ['Assigned', 'In Transit', 'Active', 'In Progress'];
                     if (in_array($current_status, $volunteer_states)) {
-                        // CORRECTED: Your distribution table doesn't have updated_at column
+                        // CORRECTED: Removed updated_at column reference
                         $update_dist_query = "UPDATE distribution SET status = 'Volunteer Needed' WHERE distribution_id = ?";
                         $dist_stmt = $db->prepare($update_dist_query);
                         if ($dist_stmt) {
@@ -2172,7 +2172,7 @@ if (isset($_GET['success'])) {
         <!-- API Debug Info -->
         <?php if (isset($apiResult) && !$apiResult['success']): ?>
             <div class="alert alert-error">
-                <strong>API Error:</strong> <?php echo htmlspecialchars($apiResult['error']); ?>
+                <strong>API Error:</strong> <?php echo isset($apiResult['error']) ? htmlspecialchars($apiResult['error']) : 'Unknown error'; ?>
                 <br><small>API URL: <?php echo $API_URL; ?></small>
             </div>
         <?php endif; ?>

@@ -6,7 +6,7 @@ require_once 'config.php';
 
 // Check if user is coordinator/admin
 if (!isset($_SESSION['user_role']) || ($_SESSION['user_role'] !== 'coordinator' && $_SESSION['user_role'] !== 'admin')) {
-    header("Location: login_gateway.php");
+    header("Location: http://10.147.17.30:8000/login.php");
     exit;
 }
 
@@ -135,16 +135,29 @@ if ($result = $db->query($assignments_query)) {
     $assignments = $result->fetch_all(MYSQLI_ASSOC);
 }
 
-// Get distribution execution data (from distribution_log) - UPDATED TO EXCLUDE CANCELLED VOLUNTEERS
+// ========================================
+// UPDATED: Get distribution execution data with REAL STATUS from distribution_log
+// ========================================
 $execution_query = "
     SELECT 
         dl.*,
         d.disaster_id,
         d.date as distribution_date,
         d.location as distribution_location,
-        d.coordinator_name
+        d.coordinator_name,
+        d.status as overall_distribution_status,
+        COALESCE(
+            dt.status, 
+            dl.status, 
+            'in_transit'
+        ) as real_status
     FROM distribution_log dl
     LEFT JOIN distribution d ON dl.distribution_id = d.distribution_id
+    LEFT JOIN (
+        SELECT distribution_id, volunteer_id, status, MAX(created_at) as latest_tracking
+        FROM distribution_tracking
+        GROUP BY distribution_id, volunteer_id
+    ) dt ON dl.distribution_id = dt.distribution_id AND dl.volunteer_id = dt.volunteer_id
     WHERE dl.distribution_id NOT IN (
         SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dl.volunteer_id
     )
@@ -158,6 +171,9 @@ if ($result = $db->query($execution_query)) {
     
     // Enhance execution data with API information
     foreach ($executions as &$exec) {
+        // Use the REAL status from the query (tracking status first, then log status)
+        $real_status = $exec['real_status'] ?? $exec['status'] ?? 'in_transit';
+        
         // 1. Get VOLUNTEER info from API
         $volunteer_name = 'Unknown Volunteer';
         $volunteer_contact = 'N/A';
@@ -190,6 +206,8 @@ if ($result = $db->query($execution_query)) {
             $quantity_needed = $need['quantity_needed'] ?? 1;
         }
         
+        // Update the execution record with the real status
+        $exec['status'] = $real_status;
         $exec['volunteer_name'] = $volunteer_name;
         $exec['volunteer_contact'] = $volunteer_contact;
         $exec['victim_name'] = $victim_name;
@@ -310,7 +328,8 @@ if ($filter_disaster) {
 }
 
 if ($filter_status && $filter_status !== 'need_volunteers') {
-    $execution_where_conditions[] = "dl.status = ?";
+    // Use the real_status field for filtering
+    $execution_where_conditions[] = "COALESCE(dt.status, dl.status, 'in_transit') = ?";
     $execution_params[] = $filter_status;
     $execution_types .= 's';
 }
@@ -335,9 +354,20 @@ if (!empty($execution_where_conditions)) {
             d.disaster_id,
             d.date as distribution_date,
             d.location as distribution_location,
-            d.coordinator_name
+            d.coordinator_name,
+            d.status as overall_distribution_status,
+            COALESCE(
+                dt.status, 
+                dl.status, 
+                'in_transit'
+            ) as real_status
         FROM distribution_log dl
         LEFT JOIN distribution d ON dl.distribution_id = d.distribution_id
+        LEFT JOIN (
+            SELECT distribution_id, volunteer_id, status, MAX(created_at) as latest_tracking
+            FROM distribution_tracking
+            GROUP BY distribution_id, volunteer_id
+        ) dt ON dl.distribution_id = dt.distribution_id AND dl.volunteer_id = dt.volunteer_id
         WHERE " . implode(' AND ', $execution_where_conditions) . "
         ORDER BY dl.created_at DESC
         LIMIT 100
@@ -356,6 +386,7 @@ if (!empty($execution_where_conditions)) {
             
             // Re-enhance execution data with API information
             foreach ($filtered_executions as &$exec) {
+                $real_status = $exec['real_status'] ?? $exec['status'] ?? 'in_transit';
                 $volunteer_name = 'Unknown Volunteer';
                 $volunteer_contact = 'N/A';
                 $victim_name = 'Unknown Victim';
@@ -383,6 +414,8 @@ if (!empty($execution_where_conditions)) {
                     $quantity_needed = $need['quantity_needed'] ?? 1;
                 }
                 
+                // Update the execution record with the real status
+                $exec['status'] = $real_status;
                 $exec['volunteer_name'] = $volunteer_name;
                 $exec['volunteer_contact'] = $volunteer_contact;
                 $exec['victim_name'] = $victim_name;
@@ -1275,7 +1308,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
         
-        
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['active_volunteers'] ?? 0; ?></div>
+                <div class="stat-label">Active Volunteers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['active_distributions'] ?? 0; ?></div>
+                <div class="stat-label">Active Distributions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['families_served'] ?? 0; ?></div>
+                <div class="stat-label">Families Served</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['items_delivered'] ?? 0; ?></div>
+                <div class="stat-label">Items Delivered</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['pending_assignments'] ?? 0; ?></div>
+                <div class="stat-label">Pending Assignments</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['need_volunteers'] ?? 0; ?></div>
+                <div class="stat-label">Need Volunteers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['completed_distributions'] ?? 0; ?></div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
         
         <!-- Filter Section -->
         <div class="filter-section">
@@ -1409,6 +1472,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $resource_name = $exec['resource_name'] ?? 'Item';
                                 $quantity_needed = $exec['quantity_needed'] ?? 1;
                                 $unit = $exec['unit'] ?? 'units';
+                                $status = $exec['status'] ?? 'in_transit';
                             ?>
                             <tr>
                                 <td><?php echo date('d/m/Y H:i', strtotime($exec['created_at'])); ?></td>
@@ -1445,11 +1509,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </td>
                                 <td>
                                     <?php 
-                                    $status_class = strtolower(str_replace(' ', '_', $exec['status']));
+                                    $status_class = strtolower(str_replace(' ', '_', $status));
                                     ?>
                                     <span class="status-badge status-<?php echo $status_class; ?>">
-                                        <?php echo ucfirst($exec['status']); ?>
+                                        <?php echo ucfirst(str_replace('_', ' ', $status)); ?>
                                     </span>
+                                    <?php if ($status === 'departed' || $status === 'in_transit' || $status === 'arrived' || $status === 'delayed'): ?>
+                                        <div style="font-size: 10px; color: #3498db; margin-top: 3px;">
+                                            <i class="fas fa-sync-alt"></i> Live tracking
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if (!empty($exec['remarks'])): ?>

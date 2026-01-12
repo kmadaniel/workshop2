@@ -3,6 +3,7 @@
 // Enhanced Distribution Dashboard with Filters & Pagination
 // distribution_main.php (index.php) - MAIN DASHBOARD
 // UPDATED WITH CORRECT API AUTHENTICATION HANDLING
+// AND SHELLTER-BASED DISTRIBUTION
 // ========================================
 
 // ========================================
@@ -129,6 +130,7 @@ require_once 'config.php';
 // API URLs
 $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
+$NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 
 // Helper function for API calls
 function fetchFromAPI($url) {
@@ -158,20 +160,59 @@ function fetchFromAPI($url) {
     }
 }
 
-// Function to build full location from victim data
-function buildFullLocation($victim) {
+// Function to extract shelter information from victim data
+function getShelterInfo($victim) {
+    // Check for selected_shelter field
+    if (isset($victim['selected_shelter']) && !empty($victim['selected_shelter'])) {
+        $shelter = trim($victim['selected_shelter']);
+        
+        // Try to extract shelter district from disaster API or victim data
+        $district = $victim['district'] ?? '';
+        $city = $victim['city'] ?? '';
+        
+        // Create full shelter location
+        $shelter_location = $shelter;
+        if (!empty($district)) {
+            $shelter_location .= ", " . $district;
+        }
+        if (!empty($city) && $city != $district) {
+            $shelter_location .= ", " . $city;
+        }
+        
+        return [
+            'shelter_name' => $shelter,
+            'shelter_district' => $district,
+            'shelter_city' => $city,
+            'shelter_full_location' => $shelter_location,
+            'shelter_type' => 'Emergency Shelter',
+            'has_shelter' => true
+        ];
+    }
+    
+    // Check if shelter information might be in address or other fields
     $address = $victim['address'] ?? '';
-    $city = $victim['city'] ?? '';
-    $district = $victim['district'] ?? '';
-    $postal_code = $victim['postal_code'] ?? '';
+    if (strpos(strtolower($address), 'shelter') !== false || 
+        strpos(strtolower($address), 'stadium') !== false ||
+        strpos(strtolower($address), 'hall') !== false) {
+        return [
+            'shelter_name' => $address,
+            'shelter_district' => $victim['district'] ?? '',
+            'shelter_city' => $victim['city'] ?? '',
+            'shelter_full_location' => $address,
+            'shelter_type' => 'Emergency Shelter',
+            'has_shelter' => true
+        ];
+    }
     
-    $full_location = '';
-    if (!empty($address)) $full_location .= $address;
-    if (!empty($city)) $full_location .= ', ' . $city;
-    if (!empty($district)) $full_location .= ', ' . $district;
-    if (!empty($postal_code)) $full_location .= ' ' . $postal_code;
-    
-    return trim($full_location, ', ');
+    // No shelter information found
+    return [
+        'shelter_name' => 'No Shelter Assigned',
+        'shelter_district' => $victim['district'] ?? '',
+        'shelter_city' => $victim['city'] ?? '',
+        'shelter_full_location' => 'No shelter assigned',
+        'shelter_type' => 'Unknown',
+        'has_shelter' => false
+    ];
 }
 
 // Initialize variables
@@ -197,7 +238,7 @@ $status_options = [];
 $disaster_options = [];
 $error = null;
 
-// Fetch victim data early for location data
+// Fetch victim data early for shelter data
 $victim_data = fetchFromAPI($VICTIM_API_URL);
 
 try {
@@ -275,10 +316,10 @@ try {
     }
 
     // ========================================
-    // CREATE VICTIM LOOKUP ARRAY WITH LOCATION DATA
+    // CREATE VICTIM LOOKUP ARRAY WITH SHELTER DATA
     // ========================================
     $victim_lookup = [];
-    $victim_location_lookup = []; // Store location data
+    $victim_shelter_lookup = []; // Store shelter data
     
     if ($victim_data && is_array($victim_data)) {
         // If it's already parsed as an array
@@ -289,16 +330,20 @@ try {
                     $victim_id = $victim['victim_id'];
                     $victim_lookup[$victim_id] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
                     
-                    // Store location data
-                    $full_location = buildFullLocation($victim);
+                    // Store shelter data
+                    $shelter_info = getShelterInfo($victim);
                     
-                    $victim_location_lookup[$victim_id] = [
-                        'full_location' => $full_location,
-                        'address' => $victim['address'] ?? '',
-                        'city' => $victim['city'] ?? '',
-                        'district' => $victim['district'] ?? '',
-                        'postal_code' => $victim['postal_code'] ?? '',
-                        'country' => $victim['country'] ?? '',
+                    $victim_shelter_lookup[$victim_id] = [
+                        'shelter_name' => $shelter_info['shelter_name'],
+                        'shelter_district' => $shelter_info['shelter_district'],
+                        'shelter_city' => $shelter_info['shelter_city'],
+                        'shelter_full_location' => $shelter_info['shelter_full_location'],
+                        'shelter_type' => $shelter_info['shelter_type'],
+                        'has_shelter' => $shelter_info['has_shelter'],
+                        'victim_address' => $victim['address'] ?? '',
+                        'victim_city' => $victim['city'] ?? '',
+                        'victim_district' => $victim['district'] ?? '',
+                        'victim_postal_code' => $victim['postal_code'] ?? '',
                         'phone' => $victim['phone'] ?? ''
                     ];
                 }
@@ -311,16 +356,20 @@ try {
                     $victim_id = $victim['victim_id'];
                     $victim_lookup[$victim_id] = $victim['full_name'] ?? $victim['name'] ?? 'Unknown Victim';
                     
-                    // Store location data
-                    $full_location = buildFullLocation($victim);
+                    // Store shelter data
+                    $shelter_info = getShelterInfo($victim);
                     
-                    $victim_location_lookup[$victim_id] = [
-                        'full_location' => $full_location,
-                        'address' => $victim['address'] ?? '',
-                        'city' => $victim['city'] ?? '',
-                        'district' => $victim['district'] ?? '',
-                        'postal_code' => $victim['postal_code'] ?? '',
-                        'country' => $victim['country'] ?? '',
+                    $victim_shelter_lookup[$victim_id] = [
+                        'shelter_name' => $shelter_info['shelter_name'],
+                        'shelter_district' => $shelter_info['shelter_district'],
+                        'shelter_city' => $shelter_info['shelter_city'],
+                        'shelter_full_location' => $shelter_info['shelter_full_location'],
+                        'shelter_type' => $shelter_info['shelter_type'],
+                        'has_shelter' => $shelter_info['has_shelter'],
+                        'victim_address' => $victim['address'] ?? '',
+                        'victim_city' => $victim['city'] ?? '',
+                        'victim_district' => $victim['district'] ?? '',
+                        'victim_postal_code' => $victim['postal_code'] ?? '',
                         'phone' => $victim['phone'] ?? ''
                     ];
                 }
@@ -642,25 +691,31 @@ if (empty($disaster_options)) {
             transition: all 0.3s ease;
         }
         
-        /* Add new styles for location display */
-        .location-cell {
+        /* SHELTER-BASED STYLES */
+        .shelter-cell {
             max-width: 180px;
             min-width: 150px;
         }
         
-        .location-cell i {
-            color: #e74c3c;
+        .shelter-cell i {
+            color: #3498db;
             margin-right: 5px;
         }
         
-        .distribution-location {
-            font-size: 0.9em;
+        .shelter-name {
+            font-weight: 500;
+            color: #2c3e50;
+            font-size: 0.95em;
+        }
+        
+        .shelter-location {
+            font-size: 0.85em;
             color: #666;
             margin-top: 2px;
         }
         
-        .location-details {
-            font-size: 0.85em;
+        .shelter-details {
+            font-size: 0.8em;
             color: #666;
             margin-top: 3px;
             max-height: 60px;
@@ -668,13 +723,42 @@ if (empty($disaster_options)) {
             padding-right: 5px;
         }
         
-        .location-details::-webkit-scrollbar {
+        .shelter-details::-webkit-scrollbar {
             width: 3px;
         }
         
-        .location-details::-webkit-scrollbar-thumb {
+        .shelter-details::-webkit-scrollbar-thumb {
             background: #ddd;
             border-radius: 3px;
+        }
+        
+        .shelter-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 0.7em;
+            font-weight: 600;
+            margin-top: 3px;
+        }
+        
+        .shelter-emergency {
+            background: #ffeaa7;
+            color: #856404;
+        }
+        
+        .shelter-temporary {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .shelter-permanent {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .shelter-unknown {
+            background: #f8f9fa;
+            color: #6c757d;
         }
         
         .api-status-indicator {
@@ -911,14 +995,14 @@ if (empty($disaster_options)) {
             background: #c0392b;
         }
         
-        /* Location tooltip */
-        .location-tooltip {
+        /* Shelter tooltip */
+        .shelter-tooltip {
             position: relative;
             cursor: help;
         }
         
-        .location-tooltip:hover::after {
-            content: attr(data-location);
+        .shelter-tooltip:hover::after {
+            content: attr(data-shelter);
             position: absolute;
             bottom: 100%;
             left: 0;
@@ -965,7 +1049,7 @@ if (empty($disaster_options)) {
             <div class="header-controls">
                 <div class="search-box">
                     <i class="fas fa-search"></i>
-                    <input type="text" placeholder="Search distributions, victims, needs..." id="globalSearch" value="<?php echo htmlspecialchars($search); ?>">
+                    <input type="text" placeholder="Search distributions, victims, shelters..." id="globalSearch" value="<?php echo htmlspecialchars($search); ?>">
                     <span class="api-status-indicator <?php echo ($disaster_data ? 'api-online' : 'api-offline'); ?>" 
                           title="<?php echo ($disaster_data ? 'API Online' : 'API Offline'); ?>"></span>
                 </div>
@@ -1044,6 +1128,14 @@ if (empty($disaster_options)) {
                 </a>
             </li>
 
+            <li class="nav-item">
+                <a href="http://10.147.17.154:8000/database_backup.php" class="nav-link">
+                    <i class="fas fa-users"></i>
+                    <span class="nav-text">Backup & Recovery</span>
+                    <span class="badge badge-success" style="margin-left: auto;">24</span>
+                </a>
+            </li>
+
             <!-- Logout Section at bottom - FIXED -->
             <li class="nav-divider"></li>
             <li class="nav-item logout-item">
@@ -1053,12 +1145,6 @@ if (empty($disaster_options)) {
                        class="nav-link logout-link">
                         <i class="fas fa-arrow-left"></i>
                         <span class="nav-text">Back to Main System</span>
-                    </a>
-                <?php else: ?>
-                    <!-- Local admin/staff: Normal logout -->
-                    <a href="logout.php" class="nav-link logout-link">
-                        <i class="fas fa-sign-out-alt"></i>
-                        <span class="nav-text">Logout</span>
                     </a>
                 <?php endif; ?>
             </li>
@@ -1161,7 +1247,7 @@ if (empty($disaster_options)) {
         <div class="page-header">
             <div class="header-content">
                 <h2>
-                    <span class="animated-icon">📦</span> Distribution Dashboard
+                    <span class="animated-icon">🏠</span> Shelter Distribution Dashboard
                     <?php if ($is_api_authenticated): ?>
                     <span style="font-size: 0.6em; color: #d32f2f; margin-left: 10px; font-weight: bold;">
                         <i class="fas fa-shield-alt"></i> API-AUTHENTICATED ADMIN
@@ -1186,7 +1272,7 @@ if (empty($disaster_options)) {
             <div class="stat-card animated-card">
                 <h3>Total Distributions</h3>
                 <div class="stat-value"><?php echo number_format($stats['total_distributions']); ?></div>
-                <span class="stat-icon">📦</span>
+                <span class="stat-icon">🏠</span>
             </div>
             
             <div class="stat-card pending animated-card">
@@ -1242,7 +1328,7 @@ if (empty($disaster_options)) {
                             <div class="form-group">
                                 <label for="search"><i class="fas fa-search"></i> Search</label>
                                 <input type="text" id="search" name="search" class="form-control" 
-                                       placeholder="Search by disaster, victim, location, or comments..." 
+                                       placeholder="Search by disaster, victim, shelter..." 
                                        value="<?php echo htmlspecialchars($search); ?>">
                             </div>
                         </div>
@@ -1290,11 +1376,11 @@ if (empty($disaster_options)) {
             </div>
         </div>
 
-        <!-- Recent Distributions Table - WITH LOCATION DATA -->
+        <!-- Recent Distributions Table - WITH SHELTER DATA -->
         <div class="card animated-card">
             <div class="card-header">
                 <h2>
-                    <i class="fas fa-list"></i> Recent Distributions
+                    <i class="fas fa-list"></i> Shelter Distributions
                     <?php if ($is_api_authenticated): ?>
                     <span style="font-size: 0.7em; color: #d32f2f; margin-left: 10px;">
                         <i class="fas fa-eye"></i> Full Administrative Access
@@ -1315,7 +1401,7 @@ if (empty($disaster_options)) {
                             <th>Date</th>
                             <th>Disaster</th>
                             <th>Victims</th>
-                            <th>Location</th>
+                            <th>Shelter</th>
                             <th>Coordinator</th>
                             <th>Volunteers</th>
                             <th>Status</th>
@@ -1353,9 +1439,9 @@ if (empty($disaster_options)) {
                                 ? $disaster_lookup[$disaster_id] 
                                 : "Disaster #" . $disaster_id;
                             
-                            // Get victim names and locations for this distribution
+                            // Get victim names and shelters for this distribution
                             $victim_names_array = [];
-                            $victim_locations_array = [];
+                            $victim_shelters_array = [];
                             $victim_count = $row['victim_count'] ?? 0;
                             
                             if ($victim_count > 0) {
@@ -1387,11 +1473,24 @@ if (empty($disaster_options)) {
                                             }
                                         }
                                         
-                                        // Get victim location if available
-                                        if (isset($victim_location_lookup[$victim_id])) {
-                                            $victim_location = $victim_location_lookup[$victim_id]['full_location'];
-                                            if (!empty($victim_location) && !in_array($victim_location, $victim_locations_array)) {
-                                                $victim_locations_array[] = $victim_location;
+                                        // Get victim shelter if available
+                                        if (isset($victim_shelter_lookup[$victim_id])) {
+                                            $shelter_info = $victim_shelter_lookup[$victim_id];
+                                            $shelter_name = $shelter_info['shelter_name'];
+                                            $shelter_full = $shelter_info['shelter_full_location'];
+                                            $shelter_type = $shelter_info['shelter_type'];
+                                            
+                                            // Add to shelters array if not already present
+                                            $shelter_key = $shelter_name . '|' . $shelter_full;
+                                            if (!isset($victim_shelters_array[$shelter_key])) {
+                                                $victim_shelters_array[$shelter_key] = [
+                                                    'name' => $shelter_name,
+                                                    'full_location' => $shelter_full,
+                                                    'type' => $shelter_type,
+                                                    'victim_count' => 1
+                                                ];
+                                            } else {
+                                                $victim_shelters_array[$shelter_key]['victim_count']++;
                                             }
                                         }
                                     }
@@ -1409,15 +1508,25 @@ if (empty($disaster_options)) {
                                 }
                             }
                             
-                            // Format victim locations for display
-                            $victim_locations_display = '';
-                            $victim_locations_full = '';
-                            if (!empty($victim_locations_array)) {
-                                $victim_locations_full = implode("\n", $victim_locations_array);
-                                $victim_locations_display = implode(', ', array_slice($victim_locations_array, 0, 2));
-                                if (count($victim_locations_array) > 2) {
-                                    $victim_locations_display .= '... (+' . (count($victim_locations_array) - 2) . ' more)';
+                            // Format shelters for display
+                            $shelters_display = '';
+                            $shelters_full = '';
+                            $shelter_types = [];
+                            
+                            if (!empty($victim_shelters_array)) {
+                                $shelter_details = [];
+                                foreach ($victim_shelters_array as $shelter) {
+                                    $shelter_details[] = $shelter['name'] . ' (' . $shelter['victim_count'] . ' victims)';
                                 }
+                                
+                                $shelters_full = implode("\n", $shelter_details);
+                                $shelters_display = implode(', ', array_slice($shelter_details, 0, 2));
+                                if (count($shelter_details) > 2) {
+                                    $shelters_display .= '... (+' . (count($shelter_details) - 2) . ' more shelters)';
+                                }
+                                
+                                // Determine shelter types
+                                $shelter_types = array_unique(array_column($victim_shelters_array, 'type'));
                             }
                         ?>
                         <tr class="table-row" id="row-<?php echo $row['distribution_id']; ?>">
@@ -1465,24 +1574,42 @@ if (empty($disaster_options)) {
                             </td>
                             
                             <td>
-                                <div class="location-cell">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <div class="location-tooltip" data-location="<?php echo htmlspecialchars($victim_locations_full); ?>">
-                                        <?php 
-                                        // First check if there's a distribution location
-                                        if (!empty($row['distribution_location'])) {
-                                            echo htmlspecialchars($row['distribution_location']);
-                                        } elseif (!empty($victim_locations_display)) {
-                                            echo htmlspecialchars($victim_locations_display);
-                                        } else {
-                                            echo '<span style="color: #999; font-style: italic;">N/A</span>';
-                                        }
-                                        ?>
-                                    </div>
-                                    <?php if ($victim_count > 0 && !empty($victim_ids)): ?>
-                                    <div style="font-size: 0.8em; color: #666; margin-top: 3px;">
-                                        <i class="fas fa-users"></i> <?php echo $victim_count; ?> families
-                                    </div>
+                                <div class="shelter-cell">
+                                    <i class="fas fa-home"></i>
+                                    <?php if (!empty($victim_shelters_array)): ?>
+                                        <div class="shelter-tooltip" data-shelter="<?php echo htmlspecialchars($shelters_full); ?>">
+                                            <div class="shelter-name">
+                                                <?php 
+                                                $first_shelter = reset($victim_shelters_array);
+                                                echo htmlspecialchars($first_shelter['name']);
+                                                ?>
+                                            </div>
+                                            <div class="shelter-location">
+                                                <?php echo htmlspecialchars($first_shelter['full_location']); ?>
+                                            </div>
+                                            <?php if (count($victim_shelters_array) > 1): ?>
+                                                <div style="font-size: 0.8em; color: #3498db; margin-top: 3px;">
+                                                    <i class="fas fa-building"></i> +<?php echo count($victim_shelters_array) - 1; ?> more shelters
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php if (!empty($shelter_types)): ?>
+                                            <?php 
+                                            $shelter_class = 'shelter-unknown';
+                                            if (in_array('Emergency Shelter', $shelter_types)) {
+                                                $shelter_class = 'shelter-emergency';
+                                            } elseif (in_array('Temporary Shelter', $shelter_types)) {
+                                                $shelter_class = 'shelter-temporary';
+                                            }
+                                            ?>
+                                            <span class="shelter-badge <?php echo $shelter_class; ?>">
+                                                <?php echo implode(', ', $shelter_types); ?>
+                                            </span>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <div class="shelter-name" style="color: #999; font-style: italic;">
+                                            No shelter assigned
+                                        </div>
                                     <?php endif; ?>
                                 </div>
                             </td>
@@ -1574,8 +1701,8 @@ if (empty($disaster_options)) {
                                             data-id="<?php echo $row['distribution_id']; ?>" 
                                             data-victims="<?php echo htmlspecialchars($victim_names_display); ?>"
                                             data-victims-full="<?php echo htmlspecialchars($victim_names_full); ?>"
-                                            data-locations="<?php echo htmlspecialchars($victim_locations_display); ?>"
-                                            data-locations-full="<?php echo htmlspecialchars($victim_locations_full); ?>"
+                                            data-shelters="<?php echo htmlspecialchars($shelters_display); ?>"
+                                            data-shelters-full="<?php echo htmlspecialchars($shelters_full); ?>"
                                             data-disaster="<?php echo htmlspecialchars($disaster_name); ?>"
                                             data-coordinator="<?php echo htmlspecialchars($row['coordinator_name'] ?? ''); ?>"
                                             data-status="<?php echo $row['status']; ?>"
@@ -1637,7 +1764,7 @@ if (empty($disaster_options)) {
                         <i class="fas fa-box-open"></i>
                     </div>
                     <h3>No distributions found</h3>
-                    <p>Get started by creating your first distribution!</p>
+                    <p>Get started by creating your first shelter distribution!</p>
                     <br>
                     <div class="row">
                         <div class="col-6">
@@ -1661,7 +1788,7 @@ if (empty($disaster_options)) {
     <div id="quick-view-modal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Distribution Quick View</h3>
+                <h3>Shelter Distribution Quick View</h3>
                 <button class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
@@ -1697,7 +1824,7 @@ if (empty($disaster_options)) {
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
-    <script>
+        <script>
         // Wait for DOM to be fully loaded
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM loaded, initializing dashboard...');
@@ -1822,9 +1949,9 @@ if (empty($disaster_options)) {
                         const victimNames = this.getAttribute('data-victims-full') || 
                                           this.getAttribute('data-victims') || 
                                           'None';
-                        const victimLocations = this.getAttribute('data-locations-full') ||
-                                              this.getAttribute('data-locations') ||
-                                              'No location data';
+                        const shelters = this.getAttribute('data-shelters-full') ||
+                                       this.getAttribute('data-shelters') ||
+                                       'No shelter data';
                         const disasterName = this.getAttribute('data-disaster');
                         const coordinator = this.getAttribute('data-coordinator');
                         const status = this.getAttribute('data-status');
@@ -1840,13 +1967,13 @@ if (empty($disaster_options)) {
                             victimNamesHTML = '<div><i>No victims assigned</i></div>';
                         }
                         
-                        // Create location HTML
-                        let locationHTML = '';
-                        if (victimLocations !== 'No location data') {
-                            const locationsArray = victimLocations.split('\n');
-                            locationHTML = locationsArray.map(location => `<div>📍 ${location}</div>`).join('');
+                        // Create shelters HTML
+                        let sheltersHTML = '';
+                        if (shelters !== 'No shelter data') {
+                            const sheltersArray = shelters.split('\n');
+                            sheltersHTML = sheltersArray.map(shelter => `<div>🏠 ${shelter}</div>`).join('');
                         } else {
-                            locationHTML = '<div><i>No location data available</i></div>';
+                            sheltersHTML = '<div><i>No shelter data available</i></div>';
                         }
                         
                         modalContent.innerHTML = `
@@ -1880,10 +2007,10 @@ if (empty($disaster_options)) {
                                     </div>
                                 </div>
                                 <div class="detail-row">
-                                    <div class="detail-label">Locations</div>
+                                    <div class="detail-label">Shelters</div>
                                     <div class="detail-value">
                                         <div style="margin-top: 5px; font-size: 0.9em; color: #666; max-height: 100px; overflow-y: auto;">
-                                            ${locationHTML}
+                                            ${sheltersHTML}
                                         </div>
                                     </div>
                                 </div>
@@ -1940,8 +2067,9 @@ if (empty($disaster_options)) {
                     const row = document.querySelector(`#row-${distributionId}`);
                     if (row) {
                         const disasterName = row.querySelector('.disaster-cell strong').textContent;
-                        const locationElement = row.querySelector('.location-tooltip');
-                        const location = locationElement ? locationElement.textContent.trim() : 'N/A';
+                        const shelterElement = row.querySelector('.shelter-tooltip');
+                        const shelter = shelterElement ? shelterElement.querySelector('.shelter-name').textContent.trim() : 'No shelter assigned';
+                        const shelterLocation = shelterElement ? shelterElement.querySelector('.shelter-location').textContent.trim() : '';
                         const status = row.querySelector('.badge').textContent.trim();
                         const victimCount = row.querySelector('.victim-count-badge i').nextSibling.textContent.trim();
                         const coordinatorName = row.querySelector('td:nth-child(6) div')?.textContent || 'Not assigned';
@@ -1950,7 +2078,8 @@ if (empty($disaster_options)) {
                         deleteDetails.innerHTML = `
                             <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-top: 10px;">
                                 <p><strong>Disaster:</strong> ${disasterName}</p>
-                                <p><strong>Location:</strong> ${location}</p>
+                                <p><strong>Shelter:</strong> ${shelter}</p>
+                                <p><strong>Shelter Location:</strong> ${shelterLocation}</p>
                                 <p><strong>Status:</strong> ${status}</p>
                                 <p><strong>Coordinator:</strong> ${coordinatorName}</p>
                                 <p><strong>Victims:</strong> ${victimCount}</p>
@@ -2072,29 +2201,40 @@ if (empty($disaster_options)) {
             }
             
             // Toast notifications function
-            window.showToast = function(message, type = 'info') {
+            window.showToast = function(message, type) {
+                // Set default type if not provided
+                type = type || 'info';
+                
                 const toastContainer = document.getElementById('toast-container');
                 if (!toastContainer) {
                     console.error('Toast container not found!');
                     return;
                 }
                 
+                const iconMap = {
+                    'success': 'check-circle',
+                    'error': 'exclamation-circle',
+                    'warning': 'exclamation-triangle',
+                    'info': 'info-circle'
+                };
+                
+                const icon = iconMap[type] || 'info-circle';
+                
                 const toast = document.createElement('div');
-                toast.className = `toast toast-${type}`;
-                toast.innerHTML = `
-                    <div class="toast-content">
-                        <i class="fas fa-${getToastIcon(type)}"></i>
-                        <span>${message}</span>
-                    </div>
-                    <button class="toast-close">&times;</button>
-                `;
+                toast.className = 'toast toast-' + type;
+                toast.innerHTML = 
+                    '<div class="toast-content">' +
+                    '<i class="fas fa-' + icon + '"></i>' +
+                    '<span>' + message + '</span>' +
+                    '</div>' +
+                    '<button class="toast-close">&times;</button>';
                 
                 toastContainer.appendChild(toast);
                 
                 // Auto remove after 5 seconds
-                setTimeout(() => {
+                setTimeout(function() {
                     toast.classList.add('fade-out');
-                    setTimeout(() => {
+                    setTimeout(function() {
                         if (toast.parentNode) {
                             toast.remove();
                         }
@@ -2106,7 +2246,7 @@ if (empty($disaster_options)) {
                 if (closeBtn) {
                     closeBtn.addEventListener('click', function() {
                         toast.classList.add('fade-out');
-                        setTimeout(() => {
+                        setTimeout(function() {
                             if (toast.parentNode) {
                                 toast.remove();
                             }
@@ -2114,15 +2254,6 @@ if (empty($disaster_options)) {
                     });
                 }
             };
-            
-            function getToastIcon(type) {
-                switch(type) {
-                    case 'success': return 'check-circle';
-                    case 'error': return 'exclamation-circle';
-                    case 'warning': return 'exclamation-triangle';
-                    default: return 'info-circle';
-                }
-            }
             
             // Table row animations
             const rows = document.querySelectorAll('.table-row');

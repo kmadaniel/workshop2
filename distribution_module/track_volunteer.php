@@ -6,7 +6,7 @@ require_once 'config.php';
 
 // Check if user is coordinator/admin
 if (!isset($_SESSION['user_role']) || ($_SESSION['user_role'] !== 'coordinator' && $_SESSION['user_role'] !== 'admin')) {
-    header("Location: login_gateway.php");
+    header("Location: http://10.147.17.30:8000/login.php");
     exit;
 }
 

@@ -1,7 +1,7 @@
 <?php
 // ========================================
 // MANAGE NEEDS - APPROVAL SYSTEM WITH API INTEGRATION
-// manage_needs.php - UPDATED TO SEND TO YOUR API
+// manage_needs.php - UPDATED FOR YOUR API STRUCTURE
 // ========================================
 
 require_once 'config.php';
@@ -19,12 +19,12 @@ $victims = [];
 $needs = [];
 $statistics = [];
 
-// API Configuration
+// API Configuration - YOUR FRIEND'S APIS
 $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 
-// YOUR API to send status updates to your friend
+// YOUR API to send status updates to your system
 $YOUR_API_URL = 'http://10.147.17.154:8000/distribution_module/api_victim_approve.php';
 
 // Function to send status update to YOUR API
@@ -91,7 +91,7 @@ if (!$db->query($create_processed_disasters_table)) {
 }
 
 /* ----------------------------------------
-   FETCH ALL DATA FROM FRIEND'S API
+   IMPROVED API FETCH FUNCTIONS FOR YOUR SPECIFIC API STRUCTURE
 ---------------------------------------- */
 function fetchDataFromAPI($url, $timeout = 5) {
     $context = stream_context_create([
@@ -121,10 +121,6 @@ function fetchDataFromAPI($url, $timeout = 5) {
         return ['success' => false, 'error' => $e->getMessage()];
     }
 }
-
-$disasterApiResult = fetchDataFromAPI($DISASTER_API_URL);
-$victimApiResult = fetchDataFromAPI($VICTIM_API_URL);
-$needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
 
 /* ----------------------------------------
    MARK DISASTER AS PROCESSED AFTER APPROVALS
@@ -227,18 +223,13 @@ if (isset($_GET['update_status']) && isset($_GET['victim_id']) && isset($_GET['n
 function checkAndMarkDisasterAsProcessed($db, $disaster_id) {
     try {
         // Get total victims for this disaster from API
-        global $victimApiResult;
+        global $allApiVictims;
         $total_victims = 0;
         
-        if ($victimApiResult['success'] && is_array($victimApiResult['data'])) {
-            foreach ($victimApiResult['data'] as $victim) {
-                $victimDisasterId = $victim['disaster_id'] ?? 
-                                   $victim['Disaster_ID'] ?? 
-                                   $victim['disasterId'] ?? 
-                                   $victim['DisasterID'] ?? 0;
-                if (intval($victimDisasterId) == $disaster_id) {
-                    $total_victims++;
-                }
+        foreach ($allApiVictims as $victim) {
+            $victimDisasterId = intval($victim['disaster_id'] ?? 0);
+            if ($victimDisasterId == $disaster_id) {
+                $total_victims++;
             }
         }
         
@@ -257,8 +248,7 @@ function checkAndMarkDisasterAsProcessed($db, $disaster_id) {
         $stmt->bind_param("i", $disaster_id);
         $stmt->execute();
         $result = $stmt->get_result();
-        $row = $result->fetch_assoc();
-        $approved_not_distributed = $row['approved_count'];
+        $approved_not_distributed = $row['approved_count'] ?? 0;
         $stmt->close();
         
         // Get total approved (including distributed)
@@ -269,7 +259,7 @@ function checkAndMarkDisasterAsProcessed($db, $disaster_id) {
         $stmt2->execute();
         $result2 = $stmt2->get_result();
         $row2 = $result2->fetch_assoc();
-        $total_approved = $row2['total_approved'];
+        $total_approved = $row2['total_approved'] ?? 0;
         $stmt2->close();
         
         // If all victims are approved AND all approved victims have been distributed, mark as processed
@@ -361,33 +351,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action']) && iss
 }
 
 /* ----------------------------------------
-   PROCESS DATA WITH NEEDS API INTEGRATION - UPDATED FOR CONSISTENCY
+   FETCH ALL DATA FROM FRIEND'S API - UPDATED FOR YOUR API STRUCTURE
 ---------------------------------------- */
-$selected_disaster_id = intval($_GET['disaster_id'] ?? 0);
-$selected_status_filter = $_GET['status_filter'] ?? 'Pending';
+$disasterApiResult = fetchDataFromAPI($DISASTER_API_URL);
+$victimApiResult = fetchDataFromAPI($VICTIM_API_URL);
+$needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
 
-// Check for success message in URL - AFTER header redirects
-if (isset($_GET['success'])) {
-    $success = urldecode($_GET['success']);
+// Debug: Log API responses
+error_log("Disaster API success: " . ($disasterApiResult['success'] ? 'true' : 'false'));
+error_log("Victim API success: " . ($victimApiResult['success'] ? 'true' : 'false'));
+error_log("Needs API success: " . ($needsApiResult['success'] ? 'true' : 'false'));
+
+if ($victimApiResult['success'] && !empty($victimApiResult['data'])) {
+    error_log("First victim data sample: " . json_encode($victimApiResult['data'][0]));
 }
 
-// FIRST, load ALL victims and needs to create a complete mapping
+// Initialize arrays
 $allApiVictims = [];
 $allApiNeeds = [];
+$allApiDisasters = [];
 $victimNeedsMap = [];
 
-// Load victims from victim API
+// Process Disaster API data
+if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])) {
+    $allApiDisasters = $disasterApiResult['data'];
+}
+
+// Process Victim API data
 if ($victimApiResult['success'] && is_array($victimApiResult['data'])) {
     $allApiVictims = $victimApiResult['data'];
 }
 
-// Load needs from needs API
-if ($needsApiResult['success'] && isset($needsApiResult['data']['data']) && is_array($needsApiResult['data']['data'])) {
-    $allApiNeeds = $needsApiResult['data']['data'];
+// Process Needs API data
+if ($needsApiResult['success']) {
+    // Check different possible structures
+    if (isset($needsApiResult['data']['data']) && is_array($needsApiResult['data']['data'])) {
+        $allApiNeeds = $needsApiResult['data']['data'];
+    } elseif (is_array($needsApiResult['data'])) {
+        $allApiNeeds = $needsApiResult['data'];
+    }
     
-    // First, map needs to victims
+    // Map needs to victims
     foreach ($allApiNeeds as $need) {
-        $victimId = $need['victim_id'] ?? 0;
+        $victimId = intval($need['victim_id'] ?? 0);
         
         if ($victimId > 0) {
             if (!isset($victimNeedsMap[$victimId])) {
@@ -400,51 +406,44 @@ if ($needsApiResult['success'] && isset($needsApiResult['data']['data']) && is_a
                 'quantity_needed' => $need['quantity_needed'] ?? '0',
                 'priority' => $need['priority'] ?? 'Medium',
                 'status' => $need['status'] ?? 'Pending',
-                'has_baby' => isset($need['has_baby']) ? (bool)$need['has_baby'] : false,
-                'has_elderly' => isset($need['has_elderly']) ? (bool)$need['has_elderly'] : false,
-                'has_disabled' => isset($need['has_disabled']) ? (bool)$need['has_disabled'] : false
+                'has_baby' => isset($need['has_baby']) ? (($need['has_baby'] === 't' || $need['has_baby'] === true) ? true : false) : false,
+                'has_elderly' => isset($need['has_elderly']) ? (($need['has_elderly'] === 't' || $need['has_elderly'] === true) ? true : false) : false,
+                'has_disabled' => isset($need['has_disabled']) ? (($need['has_disabled'] === 't' || $need['has_disabled'] === true) ? true : false) : false
             ];
         }
     }
 }
 
-// Load disasters with consistent statistics calculation
-if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])) {
-    foreach ($disasterApiResult['data'] as $apiDisaster) {
-        $disaster_id = $apiDisaster['disaster_id'] ?? 
-                      $apiDisaster['Disaster_ID'] ?? 
-                      $apiDisaster['disasterId'] ?? 
-                      $apiDisaster['DisasterID'] ??
-                      $apiDisaster['id'] ?? null;
+/* ----------------------------------------
+   PROCESS DISASTERS WITH CORRECT FIELD MAPPING
+---------------------------------------- */
+$selected_disaster_id = intval($_GET['disaster_id'] ?? 0);
+$selected_status_filter = $_GET['status_filter'] ?? 'Pending';
+
+// Check for success message in URL - AFTER header redirects
+if (isset($_GET['success'])) {
+    $success = urldecode($_GET['success']);
+}
+
+foreach ($allApiDisasters as $apiDisaster) {
+    $disaster_id = intval($apiDisaster['disaster_id'] ?? 0);
+    
+    if ($disaster_id > 0) {
+        // Check if disaster is already processed
+        $is_processed = isDisasterProcessed($db, $disaster_id);
         
-        if ($disaster_id) {
-            $disaster_id = intval($disaster_id);
+        // Count victims for this disaster from victim API
+        $victimCount = 0;
+        $needCount = 0;
+        $victimNeedsData = [];
+        
+        foreach ($allApiVictims as $victim) {
+            $victimDisasterId = intval($victim['disaster_id'] ?? 0);
             
-            // Check if disaster is already processed
-            $is_processed = isDisasterProcessed($db, $disaster_id);
-            
-            // Count victims for this disaster from victim API (with needs mapping)
-            $victimCount = 0;
-            $needCount = 0;
-            $victimNeedsData = []; // Store victim data for this disaster
-            
-            foreach ($allApiVictims as $index => $victim) {
-                if (!is_array($victim)) continue;
+            if ($victimDisasterId == $disaster_id) {
+                $victim_id = intval($victim['victim_id'] ?? 0);
                 
-                $victimDisasterId = $victim['disaster_id'] ?? 
-                                   $victim['Disaster_ID'] ?? 
-                                   $victim['disasterId'] ?? 
-                                   $victim['DisasterID'] ?? 0;
-                $victimDisasterId = intval($victimDisasterId);
-                
-                if ($victimDisasterId == $disaster_id) {
-                    $victim_id = $victim['victim_id'] ?? 
-                                $victim['Victim_ID'] ?? 
-                                $victim['victimId'] ?? 
-                                $victim['VictimID'] ??
-                                $victim['id'] ?? ($index + 1);
-                    $victim_id = intval($victim_id);
-                    
+                if ($victim_id > 0) {
                     // Get needs for this victim
                     $victim['needs'] = $victimNeedsMap[$victim_id] ?? [];
                     $victim['victim_id'] = $victim_id;
@@ -457,140 +456,131 @@ if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])) {
                     $victimNeedsData[$victim_id] = $victim;
                 }
             }
-            
-            // Now calculate approval statistics CONSISTENTLY with the victim table
-            $pending = 0;
-            $approved = 0;
-            $rejected = 0;
-            $approved_not_distributed = 0;
-            $approved_distributed = 0;
-            
-            foreach ($victimNeedsData as $victim_id => $victim) {
-                if ($victim_id > 0) {
-                    // Get approval status and check if already distributed
-                    $approval_query = "
-                        SELECT 
-                            va.approval_status,
-                            CASE WHEN di.victim_id IS NOT NULL THEN 1 ELSE 0 END as is_distributed
-                        FROM victim_approvals va
-                        LEFT JOIN distribution_items di ON va.victim_id = di.victim_id 
-                            AND di.status IN ('Scheduled', 'Dispatched', 'Delivered')
-                        WHERE va.victim_id = ? AND va.disaster_id = ?
-                    ";
-                    $approval_stmt = $db->prepare($approval_query);
-                    $approval_stmt->bind_param("ii", $victim_id, $disaster_id);
-                    $approval_stmt->execute();
-                    $approval_result = $approval_stmt->get_result();
-                    
-                    if ($approval_result->num_rows > 0) {
-                        $approval = $approval_result->fetch_assoc();
-                        $approval_status = $approval['approval_status'];
-                        $is_distributed = $approval['is_distributed'];
-                    } else {
-                        $approval_status = 'Pending';
-                        $is_distributed = 0;
-                    }
-                    $approval_stmt->close();
-                    
-                    // Count based on status
-                    if ($approval_status === 'Pending') {
-                        $pending++;
-                    } elseif ($approval_status === 'Approved') {
-                        $approved++;
-                        if ($is_distributed) {
-                            $approved_distributed++;
-                        } else {
-                            $approved_not_distributed++;
-                        }
-                    } elseif ($approval_status === 'Rejected') {
-                        $rejected++;
-                    }
-                } else {
-                    $pending++;
-                }
-            }
-            
-            // Get processed date if exists
-            $processed_date = null;
-            $processed_notes = null;
-            if ($is_processed) {
-                $processed_query = "SELECT processed_date, notes FROM processed_disasters WHERE disaster_id = ?";
-                $processed_stmt = $db->prepare($processed_query);
-                $processed_stmt->bind_param("i", $disaster_id);
-                $processed_stmt->execute();
-                $processed_result = $processed_stmt->get_result();
-                if ($processed_result->num_rows > 0) {
-                    $processed_data = $processed_result->fetch_assoc();
-                    $processed_date = $processed_data['processed_date'];
-                    $processed_notes = $processed_data['notes'];
-                }
-                $processed_stmt->close();
-            }
-            
-            $disasters[] = [
-                'disaster_id' => $disaster_id,
-                'Disaster_Name' => $apiDisaster['disaster_name'] ?? $apiDisaster['Disaster_Name'] ?? $apiDisaster['disasterName'] ?? 'Unknown',
-                'Location' => $apiDisaster['district'] ?? $apiDisaster['District'] ?? 'Unknown',
-                'Disaster_Type' => $apiDisaster['severity'] ?? $apiDisaster['Severity'] ?? 'Unknown',
-                'description' => $apiDisaster['description'] ?? '',
-                'status' => $apiDisaster['status'] ?? 'Unknown',
-                'total_needs' => $victimCount, // Use victim count from API
-                'pending' => $pending,
-                'approved' => $approved,
-                'rejected' => $rejected,
-                'approved_not_distributed' => $approved_not_distributed,
-                'approved_distributed' => $approved_distributed,
-                'api_victim_count' => $victimCount,
-                'api_need_count' => $needCount,
-                'is_processed' => $is_processed,
-                'processed_date' => $processed_date,
-                'processed_notes' => $processed_notes
-            ];
         }
+        
+        // Calculate approval statistics
+        $pending = 0;
+        $approved = 0;
+        $rejected = 0;
+        $approved_not_distributed = 0;
+        $approved_distributed = 0;
+        
+        foreach ($victimNeedsData as $victim_id => $victim) {
+            if ($victim_id > 0) {
+                // Get approval status and check if already distributed
+                $approval_query = "
+                    SELECT 
+                        va.approval_status,
+                        CASE WHEN di.victim_id IS NOT NULL THEN 1 ELSE 0 END as is_distributed
+                    FROM victim_approvals va
+                    LEFT JOIN distribution_items di ON va.victim_id = di.victim_id 
+                        AND di.status IN ('Scheduled', 'Dispatched', 'Delivered')
+                    WHERE va.victim_id = ? AND va.disaster_id = ?
+                ";
+                $approval_stmt = $db->prepare($approval_query);
+                $approval_stmt->bind_param("ii", $victim_id, $disaster_id);
+                $approval_stmt->execute();
+                $result = $approval_stmt->get_result();
+                
+                if ($result->num_rows > 0) {
+                    $approval = $result->fetch_assoc();
+                    $approval_status = $approval['approval_status'];
+                    $is_distributed = $approval['is_distributed'];
+                } else {
+                    $approval_status = 'Pending';
+                    $is_distributed = 0;
+                }
+                $approval_stmt->close();
+                
+                // Count based on status
+                if ($approval_status === 'Pending') {
+                    $pending++;
+                } elseif ($approval_status === 'Approved') {
+                    $approved++;
+                    if ($is_distributed) {
+                        $approved_distributed++;
+                    } else {
+                        $approved_not_distributed++;
+                    }
+                } elseif ($approval_status === 'Rejected') {
+                    $rejected++;
+                }
+            } else {
+                $pending++;
+            }
+        }
+        
+        // Get processed date if exists
+        $processed_date = null;
+        $processed_notes = null;
+        if ($is_processed) {
+            $processed_query = "SELECT processed_date, notes FROM processed_disasters WHERE disaster_id = ?";
+            $processed_stmt = $db->prepare($processed_query);
+            $processed_stmt->bind_param("i", $disaster_id);
+            $processed_stmt->execute();
+            $processed_result = $processed_stmt->get_result();
+            if ($processed_result->num_rows > 0) {
+                $processed_data = $processed_result->fetch_assoc();
+                $processed_date = $processed_data['processed_date'];
+                $processed_notes = $processed_data['notes'];
+            }
+            $processed_stmt->close();
+        }
+        
+        $disasters[] = [
+            'disaster_id' => $disaster_id,
+            'Disaster_Name' => $apiDisaster['disaster_name'] ?? 'Unknown',
+            'Location' => $apiDisaster['district'] ?? 'Unknown',
+            'Disaster_Type' => $apiDisaster['severity'] ?? 'Unknown',
+            'description' => $apiDisaster['description'] ?? '',
+            'status' => $apiDisaster['status'] ?? 'Unknown',
+            'total_needs' => $victimCount,
+            'pending' => $pending,
+            'approved' => $approved,
+            'rejected' => $rejected,
+            'approved_not_distributed' => $approved_not_distributed,
+            'approved_distributed' => $approved_distributed,
+            'api_victim_count' => $victimCount,
+            'api_need_count' => $needCount,
+            'is_processed' => $is_processed,
+            'processed_date' => $processed_date,
+            'processed_notes' => $processed_notes
+        ];
     }
 }
 
 /* ----------------------------------------
-   LOAD VICTIMS WITH NEEDS FOR SELECTED DISASTER
+   LOAD VICTIMS WITH NEEDS FOR SELECTED DISASTER - UPDATED
 ---------------------------------------- */
 if ($selected_disaster_id > 0) {
     $disasterVictims = [];
     $victimNeedsData = [];
     
     // Find victims for this disaster
-    foreach ($allApiVictims as $index => $victim) {
-        if (!is_array($victim)) continue;
-        
-        $victimDisasterId = $victim['disaster_id'] ?? 
-                           $victim['Disaster_ID'] ?? 
-                           $victim['disasterId'] ?? 
-                           $victim['DisasterID'] ?? 0;
-        $victimDisasterId = intval($victimDisasterId);
+    foreach ($allApiVictims as $victim) {
+        $victimDisasterId = intval($victim['disaster_id'] ?? 0);
         
         if ($victimDisasterId == $selected_disaster_id) {
-            $victim_id = $victim['victim_id'] ?? 
-                        $victim['Victim_ID'] ?? 
-                        $victim['victimId'] ?? 
-                        $victim['VictimID'] ??
-                        $victim['id'] ?? ($index + 1);
-            $victim_id = intval($victim_id);
+            $victim_id = intval($victim['victim_id'] ?? 0);
             
-            // Get needs for this victim
-            $victim['needs'] = $victimNeedsMap[$victim_id] ?? [];
-            $victim['victim_id'] = $victim_id;
-            
-            // Calculate priority based on needs
-            $highPriorityCount = 0;
-            foreach ($victim['needs'] as $need) {
-                if ($need['priority'] === 'High') {
-                    $highPriorityCount++;
+            if ($victim_id > 0) {
+                // Get needs for this victim
+                $victim['needs'] = $victimNeedsMap[$victim_id] ?? [];
+                $victim['victim_id'] = $victim_id;
+                
+                // Calculate priority based on needs
+                $highPriorityCount = 0;
+                foreach ($victim['needs'] as $need) {
+                    if ($need['priority'] === 'High') {
+                        $highPriorityCount++;
+                    }
                 }
+                
+                $victim['priority'] = $highPriorityCount > 0 ? 'High' : 'Medium';
+                $victim['needs_count'] = count($victim['needs']);
+                
+                $disasterVictims[] = $victim;
             }
-            
-            $victim['priority'] = $highPriorityCount > 0 ? 'High' : 'Medium';
-            $victim['needs_count'] = count($victim['needs']);
-            
-            $disasterVictims[] = $victim;
         }
     }
     
@@ -646,7 +636,7 @@ if ($selected_disaster_id > 0) {
     
     $needs = array_values($disasterVictims);
     
-    // Get statistics (including distribution status) - Count ALL victims from API
+    // Get statistics (including distribution status)
     $total_api_victims = 0;
     $pending = 0;
     $approved = 0;
@@ -734,6 +724,45 @@ if ($table_check->num_rows > 0) {
             color: #6c757d;
             margin-top: 3px;
         }
+        
+        /* API Debug Styles */
+        .api-debug-section {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-family: monospace;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .api-debug-section h4 {
+            color: #495057;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .api-data-item {
+            padding: 3px 0;
+            border-bottom: 1px dashed #e9ecef;
+        }
+        
+        .api-success { color: #28a745; }
+        .api-error { color: #dc3545; }
+        .api-warning { color: #ffc107; }
+        
+        /* Field mapping helper */
+        .field-map {
+            background: #e9ecef;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin: 2px;
+            display: inline-block;
+        }
     </style>
 </head>
 <body>
@@ -746,36 +775,128 @@ if ($table_check->num_rows > 0) {
                 <!-- Disaster API -->
                 <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
                     <h4><i class="fas fa-exclamation-triangle"></i> Disaster API</h4>
-                    <p>Status: <?php echo ($disasterApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?></p>
+                    <p class="<?php echo ($disasterApiResult['success'] ? 'api-success' : 'api-error'); ?>">
+                        Status: <?php echo ($disasterApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
+                    </p>
                     <?php if ($disasterApiResult['success']): ?>
                         <?php $disasterCount = is_array($disasterApiResult['data']) ? count($disasterApiResult['data']) : 'N/A'; ?>
                         <p>Items: <strong><?php echo $disasterCount; ?></strong></p>
+                        <?php if ($disasterCount > 0): ?>
+                        <p>First disaster: <strong><?php echo htmlspecialchars($disasterApiResult['data'][0]['disaster_name'] ?? 'Unknown'); ?></strong></p>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p>Error: <?php echo htmlspecialchars($disasterApiResult['error'] ?? 'Unknown error'); ?></p>
                     <?php endif; ?>
                 </div>
                 
                 <!-- Victim API -->
                 <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
                     <h4><i class="fas fa-users"></i> Victim API</h4>
-                    <p>Status: <?php echo ($victimApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?></p>
+                    <p class="<?php echo ($victimApiResult['success'] ? 'api-success' : 'api-error'); ?>">
+                        Status: <?php echo ($victimApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
+                    </p>
                     <?php if ($victimApiResult['success']): ?>
                         <?php $victimCount = is_array($victimApiResult['data']) ? count($victimApiResult['data']) : 'N/A'; ?>
                         <p>Items: <strong><?php echo $victimCount; ?></strong></p>
+                        <?php if ($victimCount > 0): ?>
+                        <p>First victim: <strong><?php echo htmlspecialchars($victimApiResult['data'][0]['full_name'] ?? 'Unknown'); ?></strong></p>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p>Error: <?php echo htmlspecialchars($victimApiResult['error'] ?? 'Unknown error'); ?></p>
                     <?php endif; ?>
                 </div>
                 
                 <!-- Needs API -->
                 <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
                     <h4><i class="fas fa-heart"></i> Needs API</h4>
-                    <p>Status: <?php echo ($needsApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?></p>
-                    <?php if ($needsApiResult['success'] && isset($needsApiResult['data']['summary'])): ?>
-                        <p>Total Needs: <strong><?php echo $needsApiResult['data']['summary']['total_needs'] ?? 0; ?></strong></p>
-                        <p>Unique Victims: <strong><?php echo $needsApiResult['data']['summary']['unique_victims'] ?? 0; ?></strong></p>
+                    <p class="<?php echo ($needsApiResult['success'] ? 'api-success' : 'api-error'); ?>">
+                        Status: <?php echo ($needsApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
+                    </p>
+                    <?php if ($needsApiResult['success']): ?>
+                        <?php 
+                        $needsCount = 0;
+                        if (isset($needsApiResult['data']['data']) && is_array($needsApiResult['data']['data'])) {
+                            $needsCount = count($needsApiResult['data']['data']);
+                        } elseif (isset($needsApiResult['data']['summary'])) {
+                            $needsCount = $needsApiResult['data']['summary']['total_needs'] ?? 0;
+                        }
+                        ?>
+                        <p>Total Needs: <strong><?php echo $needsCount; ?></strong></p>
+                        <?php if ($needsCount > 0): ?>
                         <p>High Priority: <strong><?php echo $needsApiResult['data']['summary']['high_priority'] ?? 0; ?></strong></p>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p>Error: <?php echo htmlspecialchars($needsApiResult['error'] ?? 'Unknown error'); ?></p>
                     <?php endif; ?>
                 </div>
             </div>
+            
+            <!-- Debug Data -->
+            <div style="margin-top: 20px;">
+                <button type="button" class="btn btn-sm btn-info" onclick="toggleDebugData()">
+                    <i class="fas fa-code"></i> Toggle Debug Data
+                </button>
+                
+                <div id="debugData" style="display: none; margin-top: 15px;">
+                    <div class="api-debug-section">
+                        <h4>Disaster Data Structure</h4>
+                        <?php if ($disasterApiResult['success'] && is_array($disasterApiResult['data']) && count($disasterApiResult['data']) > 0): ?>
+                            <?php $firstDisaster = $disasterApiResult['data'][0]; ?>
+                            <div class="api-data-item"><strong>First Disaster Fields:</strong></div>
+                            <?php foreach ($firstDisaster as $key => $value): ?>
+                                <div class="api-data-item">
+                                    <span class="field-map"><?php echo htmlspecialchars($key); ?></span> => 
+                                    <?php echo is_array($value) ? json_encode($value) : htmlspecialchars($value); ?>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="api-data-item api-error">No disaster data available</div>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <div class="api-debug-section">
+                        <h4>Victim Data Structure</h4>
+                        <?php if ($victimApiResult['success'] && is_array($victimApiResult['data']) && count($victimApiResult['data']) > 0): ?>
+                            <?php $firstVictim = $victimApiResult['data'][0]; ?>
+                            <div class="api-data-item"><strong>First Victim Fields:</strong></div>
+                            <?php foreach ($firstVictim as $key => $value): ?>
+                                <div class="api-data-item">
+                                    <span class="field-map"><?php echo htmlspecialchars($key); ?></span> => 
+                                    <?php echo is_array($value) ? json_encode($value) : htmlspecialchars($value); ?>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="api-data-item api-error">No victim data available</div>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <div class="api-debug-section">
+                        <h4>Field Mapping Summary</h4>
+                        <div class="api-data-item">
+                            <strong>Disaster ID field:</strong> <span class="field-map">disaster_id</span>
+                        </div>
+                        <div class="api-data-item">
+                            <strong>Victim ID field:</strong> <span class="field-map">victim_id</span>
+                        </div>
+                        <div class="api-data-item">
+                            <strong>Disaster Name field:</strong> <span class="field-map">disaster_name</span>
+                        </div>
+                        <div class="api-data-item">
+                            <strong>Victim Name field:</strong> <span class="field-map">full_name</span>
+                        </div>
+                        <div class="api-data-item">
+                            <strong>Total processed:</strong> <?php echo count($disasters); ?> disasters found
+                        </div>
+                        <?php if ($selected_disaster_id > 0): ?>
+                        <div class="api-data-item">
+                            <strong>Selected disaster victims:</strong> <?php echo count($needs); ?> victims found
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
         </div>
-        
+
         <!-- Page Header -->
         <div class="header">
             <div class="header-content">
@@ -853,6 +974,12 @@ if ($table_check->num_rows > 0) {
                     <div class="empty-state-icon">📭</div>
                     <h3>No disasters found</h3>
                     <p>No active disasters in the external system.</p>
+                    <?php if (!$disasterApiResult['success']): ?>
+                    <p style="color: #dc3545;">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        Could not connect to Disaster API: <?php echo htmlspecialchars($disasterApiResult['error'] ?? 'Unknown error'); ?>
+                    </p>
+                    <?php endif; ?>
                 </div>
             <?php else: ?>
                 <div class="table-container" style="max-height: 400px;">
@@ -1293,62 +1420,35 @@ if ($table_check->num_rows > 0) {
                             <tbody>
                                 <?php foreach ($needs as $victim): ?>
                                 <?php 
-                                // Get victim info with multiple field name options
-                                $victim_id = $victim['victim_id'] ?? 
-                                           $victim['Victim_ID'] ?? 
-                                           $victim['victimId'] ?? 
-                                           $victim['VictimID'] ??
-                                           $victim['id'] ?? 0;
+                                // Get victim info with correct field names from YOUR API
+                                $victim_id = intval($victim['victim_id'] ?? 0);
+                                $full_name = $victim['full_name'] ?? 'Unknown';
+                                $ic_number = $victim['ic_number'] ?? 'N/A';
+                                $email = $victim['email'] ?? 'N/A';
+                                $phone = $victim['phone'] ?? '';
+                                $address = $victim['address'] ?? 'Unknown';
+                                $city = $victim['city'] ?? '';
+                                $postal_code = $victim['postal_code'] ?? '';
+                                $district = $victim['district'] ?? 'N/A';
+                                $family_members = intval($victim['family_members'] ?? 1);
                                 
-                                $full_name = $victim['full_name'] ?? 
-                                           $victim['Full_Name'] ?? 
-                                           $victim['fullName'] ?? 
-                                           $victim['name'] ?? 'Unknown';
+                                // Handle boolean fields (t/f or true/false)
+                                $has_baby = false;
+                                if (isset($victim['has_baby'])) {
+                                    $has_baby = ($victim['has_baby'] === 't' || $victim['has_baby'] === true);
+                                }
                                 
-                                $ic_number = $victim['ic_number'] ?? 
-                                           $victim['IC_Number'] ?? 
-                                           $victim['icNumber'] ?? 
-                                           $victim['identification'] ?? 'N/A';
+                                $has_elderly = false;
+                                if (isset($victim['has_elderly'])) {
+                                    $has_elderly = ($victim['has_elderly'] === 't' || $victim['has_elderly'] === true);
+                                }
                                 
-                                $email = $victim['email'] ?? 
-                                       $victim['Email'] ?? 'N/A';
+                                $has_disabled = false;
+                                if (isset($victim['has_disabled'])) {
+                                    $has_disabled = ($victim['has_disabled'] === 't' || $victim['has_disabled'] === true);
+                                }
                                 
-                                $phone = $victim['phone'] ?? 
-                                       $victim['Phone'] ?? '';
-                                
-                                $address = $victim['address'] ?? 
-                                         $victim['Address'] ?? 'Unknown';
-                                
-                                $city = $victim['city'] ?? 
-                                       $victim['City'] ?? '';
-                                
-                                $postal_code = $victim['postal_code'] ?? 
-                                             $victim['Postal_Code'] ?? 
-                                             $victim['postalCode'] ?? '';
-                                
-                                $district = $victim['district'] ?? 
-                                          $victim['District'] ?? 'N/A';
-                                
-                                $family_members = $victim['family_members'] ?? 
-                                                $victim['Family_Members'] ?? 
-                                                $victim['familyMembers'] ?? 1;
-                                
-                                $has_baby = $victim['has_baby'] ?? 
-                                          $victim['Has_Baby'] ?? 
-                                          $victim['hasBaby'] ?? false;
-                                
-                                $has_elderly = $victim['has_elderly'] ?? 
-                                             $victim['Has_Elderly'] ?? 
-                                             $victim['hasElderly'] ?? false;
-                                
-                                $has_disabled = $victim['has_disabled'] ?? 
-                                              $victim['Has_Disabled'] ?? 
-                                              $victim['hasDisabled'] ?? false;
-                                
-                                $special_request = $victim['special_request'] ?? 
-                                                 $victim['Special_Request'] ?? 
-                                                 $victim['specialRequest'] ?? '';
-                                
+                                $special_request = $victim['special_request'] ?? '';
                                 $approval_status = $victim['approval_status'] ?? 'Pending';
                                 $is_distributed = $victim['is_distributed'] ?? 0;
                                 $needs_list = $victim['needs'] ?? [];
@@ -1421,13 +1521,13 @@ if ($table_check->num_rows > 0) {
                                                 <?php foreach ($needs_list as $need): ?>
                                                     <div class="need-item">
                                                         <span class="need-resource">
-                                                            <?php echo htmlspecialchars($need['resource_name']); ?>
+                                                            <?php echo htmlspecialchars($need['resource_name'] ?? 'Unknown'); ?>
                                                         </span>
                                                         <span class="need-quantity">
-                                                            <?php echo $need['quantity_needed']; ?>
+                                                            <?php echo $need['quantity_needed'] ?? 0; ?>
                                                         </span>
-                                                        <span class="need-priority priority-<?php echo strtolower($need['priority']); ?>">
-                                                            <?php echo $need['priority']; ?>
+                                                        <span class="need-priority priority-<?php echo strtolower($need['priority'] ?? 'Medium'); ?>">
+                                                            <?php echo $need['priority'] ?? 'Medium'; ?>
                                                         </span>
                                                     </div>
                                                 <?php endforeach; ?>
@@ -1616,6 +1716,15 @@ if ($table_check->num_rows > 0) {
             // Find the disaster data and show in alert
             const disasterName = document.querySelector(`tr td:first-child strong[data-id="${disasterId}"]`)?.closest('tr')?.querySelector('td:nth-child(2) div:first-child')?.textContent || 'Disaster #' + disasterId;
             alert(`Disaster "${disasterName}" has been marked as processed and will not appear in distribution creation.\n\nTo reset this status, click the "Manage" button and use the "Reset Status" option.`);
+        }
+        
+        function toggleDebugData() {
+            const debugDiv = document.getElementById('debugData');
+            if (debugDiv.style.display === 'none') {
+                debugDiv.style.display = 'block';
+            } else {
+                debugDiv.style.display = 'none';
+            }
         }
         
         // Initialize bulk actions bar state

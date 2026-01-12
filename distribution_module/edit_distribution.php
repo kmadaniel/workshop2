@@ -143,9 +143,17 @@ $needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
 /* ----------------------------------------
    GET DISTRIBUTION DETAILS
 ---------------------------------------- */
+// SIMPLIFIED QUERY - only select existing columns
 $query = "
     SELECT 
-        d.*
+        d.distribution_id,
+        d.date,
+        d.status,
+        d.coordinator_name,
+        d.coordinator_contact,
+        d.estimated_duration,
+        d.volunteers_needed,
+        d.comments
     FROM distribution d
     WHERE d.distribution_id = ?
 ";
@@ -283,6 +291,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $volunteers_needed = $_POST['volunteers_needed'] ?? 0;
             $comments = $_POST['comments'] ?? '';
             
+            // SIMPLIFIED UPDATE QUERY - no last_updated column
             $update_query = "
                 UPDATE distribution 
                 SET date = ?, 
@@ -290,8 +299,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     coordinator_contact = ?, 
                     estimated_duration = ?, 
                     volunteers_needed = ?, 
-                    comments = ?, 
-                    last_updated = NOW()
+                    comments = ?
                 WHERE distribution_id = ?
             ";
             
@@ -331,12 +339,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $delete_stmt->close();
             
-            // Add updated resources
+            // Add updated resources - REMOVED allocated_at column
             $resources = json_decode($_POST['resources'], true);
             if (is_array($resources) && !empty($resources)) {
                 $insert_resource_query = "
-                    INSERT INTO distribution_resources (distribution_id, resource_id, quantity_allocated, allocated_at) 
-                    VALUES (?, ?, ?, NOW())
+                    INSERT INTO distribution_resources (distribution_id, resource_id, quantity_allocated) 
+                    VALUES (?, ?, ?)
                 ";
                 $insert_stmt = $db->prepare($insert_resource_query);
                 if (!$insert_stmt) {
@@ -744,7 +752,7 @@ if (isset($_GET['success']) && $_GET['success'] == 1) {
         }
         
         .quantity-input:focus {
-            border-color: var(--primary);
+            border-color = var(--primary);
             box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.1);
             transform: scale(1.05);
         }
@@ -986,7 +994,7 @@ if (isset($_GET['success']) && $_GET['success'] == 1) {
         
         .loading-spinner {
             width: 50px;
-            height: 50px;
+            height = 50px;
             border: 3px solid #f0f0f0;
             border-top: 3px solid var(--primary);
             border-radius: 50%;
@@ -1234,9 +1242,6 @@ if (isset($_GET['success']) && $_GET['success'] == 1) {
                         • <strong>Status:</strong> <span class="status-badge status-<?php echo strtolower($distribution['status'] ?? 'planned'); ?>">
                             <?php echo ucfirst($distribution['status'] ?? 'Planned'); ?>
                         </span>
-                        <?php if ($distribution['last_updated']): ?>
-                        • <strong>Last Updated:</strong> <?php echo date('F j, Y g:i A', strtotime($distribution['last_updated'])); ?>
-                        <?php endif; ?>
                     </p>
                     
                     <div class="header-actions">

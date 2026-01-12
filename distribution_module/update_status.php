@@ -1,6 +1,6 @@
 <?php
 // ========================================
-// UPDATE DISTRIBUTION STATUS - COMPLETE FIXED VERSION
+// UPDATE DISTRIBUTION STATUS - SHELTER BASED
 // ========================================
 
 // Enable error reporting for debugging
@@ -65,10 +65,21 @@ $victims_stmt->close();
 // ============ Get resource allocations from distribution_resources table ============
 $resources_query = "
     SELECT 
-        dr.*
+        dr.*,
+        CASE 
+            WHEN dr.resource_id = 0 THEN 'Basic Needs (Auto-allocated)'
+            WHEN dr.resource_id = 1 THEN 'Special Requests'
+            ELSE 'Other Resources'
+        END as resource_type
     FROM distribution_resources dr
     WHERE dr.distribution_id = ?
-    ORDER BY dr.allocation_id
+    ORDER BY 
+        CASE 
+            WHEN dr.resource_id = 0 THEN 1
+            WHEN dr.resource_id = 1 THEN 2
+            ELSE 3
+        END,
+        dr.allocation_id
 ";
 
 $resources_stmt = $db->prepare($resources_query);
@@ -82,10 +93,19 @@ $resources_stmt->close();
 $total_families = count($distribution_victims);
 $total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
 
-// Calculate total quantity from resources
-$total_quantity_needed = 0;
+// Calculate totals by type
+$basic_needs_total = 0;
+$special_requests_total = 0;
+$other_resources_total = 0;
+
 foreach ($distribution_resources as $resource) {
-    $total_quantity_needed += $resource['quantity_allocated'];
+    if ($resource['resource_id'] == 0) {
+        $basic_needs_total += $resource['quantity_allocated'];
+    } elseif ($resource['resource_id'] == 1) {
+        $special_requests_total += $resource['quantity_allocated'];
+    } else {
+        $other_resources_total += $resource['quantity_allocated'];
+    }
 }
 
 // ============ Get assigned volunteers ============
@@ -108,7 +128,6 @@ $volunteers_stmt->close();
 $success = $error = '';
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
     $new_status = $_POST['status'] ?? '';
-    $quantity_received = $_POST['quantity_received'] ?? $basic_distribution['quantity_sent'];
     $status_notes = $_POST['status_notes'] ?? '';
     
     try {
@@ -119,12 +138,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
         $update_query = "
             UPDATE distribution 
             SET status = ?, 
-                quantity_sent = ?, 
-                comments = CONCAT(IFNULL(comments, ''), '\n\nStatus Update (', DATE_FORMAT(NOW(), '%Y-%m-d %H:%i:%s'), '): ', ?)
+                comments = CONCAT(IFNULL(comments, ''), '\n\nStatus Update (', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), '): ', ?)
             WHERE distribution_id = ?
         ";
         $update_stmt = $db->prepare($update_query);
-        $update_stmt->bind_param("sisi", $new_status, $quantity_received, $status_notes, $distribution_id);
+        $update_stmt->bind_param("ssi", $new_status, $status_notes, $distribution_id);
         
         if (!$update_stmt->execute()) {
             throw new Exception("Error updating distribution status: " . $update_stmt->error);
@@ -154,8 +172,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
                 WHERE distribution_id = ?
             ";
             $resources_update_stmt = $db->prepare($resources_update_query);
-            $resources_stmt->bind_param("i", $distribution_id);
-            $resources_update_stmt->execute();
+            $resources_update_stmt->bind_param("i", $distribution_id);
+            if (!$resources_update_stmt->execute()) {
+                throw new Exception("Error updating distribution resources: " . $resources_update_stmt->error);
+            }
             $resources_update_stmt->close();
         }
 
@@ -190,6 +210,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_status'])) {
         // Recalculate totals
         $total_families = count($distribution_victims);
         $total_resources_allocated = array_sum(array_column($distribution_resources, 'quantity_allocated'));
+        
+        // Recalculate totals by type
+        $basic_needs_total = 0;
+        $special_requests_total = 0;
+        $other_resources_total = 0;
+        
+        foreach ($distribution_resources as $resource) {
+            if ($resource['resource_id'] == 0) {
+                $basic_needs_total += $resource['quantity_allocated'];
+            } elseif ($resource['resource_id'] == 1) {
+                $special_requests_total += $resource['quantity_allocated'];
+            } else {
+                $other_resources_total += $resource['quantity_allocated'];
+            }
+        }
         
     } catch (Exception $e) {
         // Rollback transaction on error
@@ -259,7 +294,9 @@ $VOLUNTEER_API_URL = 'http://10.147.17.30:8000/api_volunteer.php';
 // Initialize variables
 $disaster_name = "Unknown Disaster";
 $disaster_location = "Unknown";
+$shelter_location = "Unknown Shelter";
 $victim_names_by_id = [];
+$victim_shelters_by_id = [];
 $volunteer_names_by_id = [];
 $assigned_volunteers = [];
 
@@ -279,77 +316,38 @@ $api_debug_info['disaster'] = $disaster_api_result;
 
 if ($disaster_api_result['success']) {
     $disaster_api_status = true;
-    
-    // Check different response formats
     $disaster_data = $disaster_api_result['data'];
     
-    // Debug: Log what we got
-    error_log("Disaster API Response: " . print_r($disaster_data, true));
-    
-    // Check if data is an array
     if (is_array($disaster_data)) {
         // Try to find disaster by ID
         foreach ($disaster_data as $item) {
             if (!is_array($item)) continue;
             
-            // Try multiple possible ID field names
-            $possible_id_fields = ['disaster_id', 'Disaster_ID', 'disasterId', 'DisasterID', 'id'];
             $found_id = null;
-            
-            foreach ($possible_id_fields as $field) {
-                if (isset($item[$field]) && is_numeric($item[$field])) {
-                    $found_id = intval($item[$field]);
-                    break;
-                }
+            if (isset($item['disaster_id']) && is_numeric($item['disaster_id'])) {
+                $found_id = intval($item['disaster_id']);
+            } elseif (isset($item['id']) && is_numeric($item['id'])) {
+                $found_id = intval($item['id']);
             }
             
             if ($found_id && $found_id == $disaster_id) {
-                // Try multiple possible name fields
-                $possible_name_fields = ['disaster_name', 'Disaster_Name', 'disasterName', 'name', 'title', 'Name'];
-                $possible_location_fields = ['location', 'Location', 'district', 'District', 'area', 'Area', 'city', 'City'];
-                
-                foreach ($possible_name_fields as $field) {
-                    if (isset($item[$field]) && !empty($item[$field])) {
-                        $disaster_name = htmlspecialchars($item[$field]);
-                        break;
-                    }
+                // Get disaster name
+                if (isset($item['disaster_name']) && !empty($item['disaster_name'])) {
+                    $disaster_name = htmlspecialchars($item['disaster_name']);
+                } elseif (isset($item['name']) && !empty($item['name'])) {
+                    $disaster_name = htmlspecialchars($item['name']);
                 }
                 
-                foreach ($possible_location_fields as $field) {
-                    if (isset($item[$field]) && !empty($item[$field])) {
-                        $disaster_location = htmlspecialchars($item[$field]);
-                        break;
-                    }
+                // Get disaster location
+                if (isset($item['district']) && !empty($item['district'])) {
+                    $disaster_location = htmlspecialchars($item['district']);
+                } elseif (isset($item['location']) && !empty($item['location'])) {
+                    $disaster_location = htmlspecialchars($item['location']);
                 }
-                
-                // If still not found, use first non-empty string value
-                if ($disaster_name == "Unknown Disaster") {
-                    foreach ($item as $key => $value) {
-                        if (is_string($value) && !empty($value) && $key !== 'disaster_id' && $key !== 'id') {
-                            $disaster_name = htmlspecialchars($value);
-                            break;
-                        }
-                    }
-                }
-                
-                error_log("Found disaster: ID=$disaster_id, Name=$disaster_name, Location=$disaster_location");
                 break;
             }
         }
-        
-        // If still not found, use first item as fallback
-        if ($disaster_name == "Unknown Disaster" && !empty($disaster_data[0]) && is_array($disaster_data[0])) {
-            $first_item = $disaster_data[0];
-            foreach ($first_item as $key => $value) {
-                if (is_string($value) && !empty($value) && $key !== 'disaster_id' && $key !== 'id') {
-                    $disaster_name = "Disaster: " . htmlspecialchars($value);
-                    break;
-                }
-            }
-        }
     }
-} else {
-    error_log("Disaster API failed: " . $disaster_api_result['error']);
 }
 
 // Get victim data
@@ -366,34 +364,55 @@ if ($victim_api_result['success']) {
             
             // Get victim ID
             $victim_id = null;
-            $possible_id_fields = ['victim_id', 'Victim_ID', 'victimId', 'VictimID', 'id'];
-            
-            foreach ($possible_id_fields as $field) {
-                if (isset($victim[$field]) && is_numeric($victim[$field])) {
-                    $victim_id = intval($victim[$field]);
-                    break;
-                }
+            if (isset($victim['victim_id']) && is_numeric($victim['victim_id'])) {
+                $victim_id = intval($victim['victim_id']);
+            } elseif (isset($victim['id']) && is_numeric($victim['id'])) {
+                $victim_id = intval($victim['id']);
             }
             
             if ($victim_id) {
                 // Get victim name
                 $victim_name = 'Unknown';
-                $possible_name_fields = ['full_name', 'Full_Name', 'fullName', 'name', 'victim_name', 'Name'];
-                
-                foreach ($possible_name_fields as $field) {
-                    if (isset($victim[$field]) && !empty($victim[$field])) {
-                        $victim_name = htmlspecialchars($victim[$field]);
-                        break;
-                    }
+                if (isset($victim['full_name']) && !empty($victim['full_name'])) {
+                    $victim_name = htmlspecialchars($victim['full_name']);
+                } elseif (isset($victim['name']) && !empty($victim['name'])) {
+                    $victim_name = htmlspecialchars($victim['name']);
                 }
                 
                 $victim_names_by_id[$victim_id] = $victim_name;
+                
+                // Get victim shelter
+                if (isset($victim['selected_shelter']) && !empty($victim['selected_shelter'])) {
+                    $victim_shelters_by_id[$victim_id] = htmlspecialchars($victim['selected_shelter']);
+                } elseif (isset($victim['shelter']) && !empty($victim['shelter'])) {
+                    $victim_shelters_by_id[$victim_id] = htmlspecialchars($victim['shelter']);
+                } else {
+                    $victim_shelters_by_id[$victim_id] = 'No Shelter Assigned';
+                }
             }
         }
     }
+    
+    // Determine most common shelter from selected victims
+    $shelter_counts = [];
+    foreach ($distribution_victims as $dist_victim) {
+        $victim_id = $dist_victim['victim_id'];
+        if (isset($victim_shelters_by_id[$victim_id])) {
+            $shelter = $victim_shelters_by_id[$victim_id];
+            if (!isset($shelter_counts[$shelter])) {
+                $shelter_counts[$shelter] = 0;
+            }
+            $shelter_counts[$shelter]++;
+        }
+    }
+    
+    if (!empty($shelter_counts)) {
+        arsort($shelter_counts);
+        $shelter_location = key($shelter_counts);
+    }
 }
 
-// Get volunteer data
+// Get volunteer data with proper mapping
 $volunteer_api_result = fetchDataWithDebug($VOLUNTEER_API_URL);
 $api_debug_info['volunteer'] = $volunteer_api_result;
 
@@ -405,21 +424,22 @@ if ($volunteer_api_result['success']) {
         foreach ($volunteer_data as $volunteer) {
             if (!is_array($volunteer)) continue;
             
-            $volunteer_id = $volunteer['volunteer_id'] ?? 
-                          $volunteer['Volunteer_ID'] ?? 
-                          $volunteer['id'] ?? null;
+            // Extract volunteer ID - EXTERNAL ID from external database
+            $volunteer_id = $volunteer['VolunteerID'] ?? $volunteer['volunteer_id'] ?? $volunteer['id'] ?? null;
             
             if ($volunteer_id) {
-                $volunteer_name = $volunteer['name'] ?? 
-                                $volunteer['full_name'] ?? 
-                                $volunteer['Full_Name'] ?? 
-                                "Volunteer #" . $volunteer_id;
-                $volunteer_role = $volunteer['role'] ?? 
-                                $volunteer['Role'] ?? 
-                                'Volunteer';
+                // Get volunteer name - Your API returns FullName
+                $volunteer_name = $volunteer['FullName'] ?? $volunteer['full_name'] ?? $volunteer['name'] ?? "Volunteer #" . $volunteer_id;
+                
+                // Get volunteer role/skill
+                $volunteer_role = $volunteer['SkillCategory'] ?? $volunteer['skill_category'] ?? $volunteer['role'] ?? 'Volunteer';
+                
                 $volunteer_names_by_id[$volunteer_id] = [
                     'name' => $volunteer_name,
-                    'role' => $volunteer_role
+                    'role' => $volunteer_role,
+                    'email' => $volunteer['Email'] ?? '',
+                    'phone' => $volunteer['Phone'] ?? '',
+                    'status' => $volunteer['Status'] ?? 'active'
                 ];
             }
         }
@@ -436,7 +456,9 @@ foreach ($assigned_volunteers_raw as $volunteer) {
             'volunteer_id' => $volunteer_id,
             'volunteer_name' => $volunteer_info['name'],
             'volunteer_role' => $volunteer_info['role'],
-            'status' => $volunteer['status'] ?? 'Active',
+            'email' => $volunteer_info['email'],
+            'phone' => $volunteer_info['phone'],
+            'status' => $volunteer['status'] ?? $volunteer_info['status'],
             'assigned_timestamp' => $volunteer['assigned_timestamp'] ?? date('Y-m-d H:i:s')
         ];
     } else {
@@ -444,26 +466,30 @@ foreach ($assigned_volunteers_raw as $volunteer) {
             'volunteer_id' => $volunteer_id,
             'volunteer_name' => "Volunteer #" . $volunteer_id,
             'volunteer_role' => 'Unknown',
+            'email' => '',
+            'phone' => '',
             'status' => $volunteer['status'] ?? 'Active',
             'assigned_timestamp' => $volunteer['assigned_timestamp'] ?? date('Y-m-d H:i:s')
         ];
     }
 }
 
-// ============ Get victim names for this distribution ============
+// ============ Get victim names and shelters for this distribution ============
 $distribution_victim_names = [];
+$distribution_victim_shelters = [];
 foreach ($distribution_victims as $victim) {
     $victim_id = $victim['victim_id'];
     $distribution_victim_names[$victim_id] = $victim_names_by_id[$victim_id] ?? "Victim #" . $victim_id;
+    $distribution_victim_shelters[$victim_id] = $victim_shelters_by_id[$victim_id] ?? 'No Shelter Assigned';
 }
 
 // Get current status for CSS classes
 $current_status = $distribution['status'] ?? 'Planned';
 $status_class = 'status-' . strtolower($current_status);
 
-// Map your statuses to example statuses for progress tracking
+// Map your statuses for progress tracking
 $status_map = [
-    'Planned' => 'planned',
+    'Planning' => 'planned',
     'Assigned' => 'assigned', 
     'In Transit' => 'active',
     'Delivered' => 'active',
@@ -482,9 +508,6 @@ switch ($current_status_mapped) {
     case 'completed': $progress_percentage = 100; break;
     default: $progress_percentage = 0;
 }
-
-// Get unit for display (use default)
-$resource_unit = 'units';
 ?>
 
 <!DOCTYPE html>
@@ -501,7 +524,6 @@ $resource_unit = 'units';
         } else {
             // Fallback CSS if update.css doesn't exist
             ?>
-            /* Fallback basic styles */
             .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
             .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .alert { padding: 16px 20px; border-radius: 10px; margin-bottom: 20px; }
@@ -516,7 +538,6 @@ $resource_unit = 'units';
         }
         ?>
         
-        /* Additional styles for your PHP integration */
         .alert {
             padding: 16px 20px;
             border-radius: 10px;
@@ -568,8 +589,8 @@ $resource_unit = 'units';
             color: #4b5563;
         }
         
-        /* Status badge overrides for your status system */
-        .status-badge-large.status-planned {
+        /* Status badges */
+        .status-badge-large.status-planning {
             background: linear-gradient(135deg, #f39c12, #e67e22);
             color: white;
         }
@@ -594,8 +615,7 @@ $resource_unit = 'units';
             color: white;
         }
         
-        /* Status guide badges */
-        .status-guide-badge.status-planned {
+        .status-guide-badge.status-planning {
             background: linear-gradient(135deg, #f39c12, #e67e22);
             color: white;
         }
@@ -696,7 +716,6 @@ $resource_unit = 'units';
             grid-template-columns: 300px 1fr;
             gap: 20px;
         }
-        
         
         .action-buttons-grid {
             display: grid;
@@ -887,6 +906,123 @@ $resource_unit = 'units';
             max-height: 150px;
             overflow-y: auto;
         }
+        
+        /* Shelter-specific styles */
+        .shelter-badge {
+            background: #3498db;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .shelter-location {
+            font-weight: 600;
+            color: #2c3e50;
+            background: #e3f2fd;
+            padding: 8px 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #3498db;
+        }
+        
+        .shelter-icon {
+            color: #3498db;
+        }
+        
+        /* Volunteer details */
+        .volunteer-contact {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        .volunteer-email {
+            color: #3498db;
+        }
+        
+        .volunteer-phone {
+            color: #27ae60;
+        }
+        
+        /* Resource breakdown */
+        .resource-breakdown {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        .resource-breakdown-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .resource-breakdown-items {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .resource-breakdown-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 6px;
+            border-left: 4px solid;
+        }
+        
+        .resource-breakdown-item-basic {
+            border-left-color: #28a745;
+        }
+        
+        .resource-breakdown-item-special {
+            border-left-color: #ffc107;
+        }
+        
+        .resource-breakdown-item-other {
+            border-left-color: #6c757d;
+        }
+        
+        .resource-type-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+        }
+        
+        .resource-type-icon-basic {
+            color: #28a745;
+        }
+        
+        .resource-type-icon-special {
+            color: #ffc107;
+        }
+        
+        .resource-type-icon-other {
+            color: #6c757d;
+        }
+        
+        .resource-quantity {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .resource-percentage {
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
@@ -902,14 +1038,8 @@ $resource_unit = 'units';
                 </span>
                 <?php if (!$disaster_api_status): ?>
                     <div>Error: <?php echo htmlspecialchars($api_debug_info['disaster']['error'] ?? 'Unknown error'); ?></div>
-                    <?php if (isset($api_debug_info['disaster']['raw_response'])): ?>
-                        <div class="raw-response">
-                            <?php echo htmlspecialchars($api_debug_info['disaster']['raw_response']); ?>
-                        </div>
-                    <?php endif; ?>
                 <?php else: ?>
                     <div>Found: <strong><?php echo $disaster_name; ?></strong> in <strong><?php echo $disaster_location; ?></strong></div>
-                    <div>Looking for Disaster ID: <?php echo $disaster_id; ?></div>
                 <?php endif; ?>
             </div>
             
@@ -919,7 +1049,7 @@ $resource_unit = 'units';
                     <?php echo $victim_api_status ? '✅ Connected' : '❌ Failed'; ?>
                 </span>
                 <?php if ($victim_api_status): ?>
-                    <div>Loaded <?php echo count($victim_names_by_id); ?> victim names</div>
+                    <div>Loaded <?php echo count($victim_names_by_id); ?> victim names and shelters</div>
                 <?php endif; ?>
             </div>
             
@@ -928,6 +1058,9 @@ $resource_unit = 'units';
                 <span class="<?php echo $volunteer_api_status ? 'api-success' : 'api-error'; ?>">
                     <?php echo $volunteer_api_status ? '✅ Connected' : '❌ Failed'; ?>
                 </span>
+                <?php if ($volunteer_api_status): ?>
+                    <div>Loaded <?php echo count($volunteer_names_by_id); ?> volunteer profiles</div>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -955,30 +1088,17 @@ $resource_unit = 'units';
                 <div class="page-title-section">
                     <h1>
                         <span>📝</span>
-                        Update Distribution Status
+                        Update Distribution Status - Shelter Based
                     </h1>
                     <p class="page-subtitle">
                         <span>📍</span>
                         Distribution ID: #<?php echo $distribution_id; ?> - 
-                        <?php echo $total_families; ?> family(ies) - 
-                        Total allocated: <?php echo $total_quantity_needed; ?> 
-                        <?php echo $resource_unit; ?>
+                        <?php echo $total_families; ?> family(ies)
                         <span class="api-status <?php 
                             if ($disaster_api_status && $victim_api_status && $volunteer_api_status) echo 'api-online';
                             elseif (!$disaster_api_status && !$victim_api_status && !$volunteer_api_status) echo 'api-offline';
                             else echo 'api-warning';
-                        ?>" title="
-                            <?php
-                            $statuses = [];
-                            if ($disaster_api_status) $statuses[] = 'Disaster API: Online';
-                            else $statuses[] = 'Disaster API: Offline';
-                            if ($victim_api_status) $statuses[] = 'Victim API: Online';
-                            else $statuses[] = 'Victim API: Offline';
-                            if ($volunteer_api_status) $statuses[] = 'Volunteer API: Online';
-                            else $statuses[] = 'Volunteer API: Offline';
-                            echo implode(', ', $statuses);
-                            ?>
-                        "></span>
+                        ?>" title="API Status"></span>
                     </p>
                 </div>
                 <div class="distribution-id-badge">
@@ -993,23 +1113,119 @@ $resource_unit = 'units';
                     <div class="quick-stat-value"><?php echo safe_output($disaster_name); ?></div>
                 </div>
                 <div class="quick-stat-item">
-                    <div class="quick-stat-label">Families</div>
+                    <div class="quick-stat-label">Shelter Location</div>
+                    <div class="quick-stat-value">
+                        <span class="shelter-badge">
+                            <i class="fas fa-hotel shelter-icon"></i>
+                            <?php echo safe_output($shelter_location); ?>
+                        </span>
+                    </div>
+                </div>
+                <div class="quick-stat-item">
+                    <div class="quick-stat-label">Families at Shelter</div>
                     <div class="quick-stat-value"><?php echo $total_families; ?></div>
                 </div>
                 <div class="quick-stat-item">
                     <div class="quick-stat-label">Resources Allocated</div>
                     <div class="quick-stat-value">
-                        <?php echo $total_quantity_needed; ?> 
-                        <?php echo $resource_unit; ?>
+                        <?php echo $total_resources_allocated; ?> units
                     </div>
                 </div>
                 <div class="quick-stat-item">
-                    <div class="quick-stat-label">Quantity Sent</div>
+                    <div class="quick-stat-label">Volunteers Assigned</div>
                     <div class="quick-stat-value">
-                        <?php echo safe_output($basic_distribution['quantity_sent'] ?? '0'); ?> 
-                        <?php echo $resource_unit; ?>
+                        <?php echo count($assigned_volunteers); ?>
                     </div>
                 </div>
+                <div class="quick-stat-item">
+                    <div class="quick-stat-label">Current Status</div>
+                    <div class="quick-stat-value">
+                        <span style="color: <?php 
+                            switch($current_status) {
+                                case 'Completed': echo '#28a745'; break;
+                                case 'In Transit': echo '#17a2b8'; break;
+                                case 'Assigned': echo '#ffc107'; break;
+                                case 'Planning': echo '#6c757d'; break;
+                                case 'Cancelled': echo '#dc3545'; break;
+                                default: echo '#6c757d';
+                            }
+                        ?>;">
+                            <?php echo safe_output($current_status); ?>
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Resource Breakdown -->
+            <div class="resource-breakdown">
+                <div class="resource-breakdown-title">
+                    <i class="fas fa-boxes"></i> Resource Allocation Breakdown
+                </div>
+                <div class="resource-breakdown-items">
+                    <?php if ($basic_needs_total > 0): ?>
+                    <div class="resource-breakdown-item resource-breakdown-item-basic">
+                        <div class="resource-type-label">
+                            <i class="fas fa-check-circle resource-type-icon-basic"></i>
+                            <span>Basic Needs (Auto-allocated)</span>
+                        </div>
+                        <div>
+                            <span class="resource-quantity"><?php echo $basic_needs_total; ?> units</span>
+                            <span class="resource-percentage">
+                                (<?php echo $total_resources_allocated > 0 ? round(($basic_needs_total / $total_resources_allocated) * 100, 1) : 0; ?>%)
+                            </span>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if ($special_requests_total > 0): ?>
+                    <div class="resource-breakdown-item resource-breakdown-item-special">
+                        <div class="resource-type-label">
+                            <i class="fas fa-star resource-type-icon-special"></i>
+                            <span>Special Requests from Families</span>
+                        </div>
+                        <div>
+                            <span class="resource-quantity"><?php echo $special_requests_total; ?> units</span>
+                            <span class="resource-percentage">
+                                (<?php echo $total_resources_allocated > 0 ? round(($special_requests_total / $total_resources_allocated) * 100, 1) : 0; ?>%)
+                            </span>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if ($other_resources_total > 0): ?>
+                    <div class="resource-breakdown-item resource-breakdown-item-other">
+                        <div class="resource-type-label">
+                            <i class="fas fa-box resource-type-icon-other"></i>
+                            <span>Other Resources</span>
+                        </div>
+                        <div>
+                            <span class="resource-quantity"><?php echo $other_resources_total; ?> units</span>
+                            <span class="resource-percentage">
+                                (<?php echo $total_resources_allocated > 0 ? round(($other_resources_total / $total_resources_allocated) * 100, 1) : 0; ?>%)
+                            </span>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if ($total_resources_allocated > 0): ?>
+                    <div style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #dee2e6;">
+                        <strong>Total Allocated: <?php echo $total_resources_allocated; ?> units</strong>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+            
+            <!-- Shelter Information -->
+            <div class="shelter-location">
+                <i class="fas fa-hotel shelter-icon"></i>
+                <strong>Primary Shelter:</strong> <?php echo safe_output($shelter_location); ?>
+                <?php if (!empty($distribution['coordinator_name'])): ?>
+                    <br><i class="fas fa-user-tie"></i>
+                    <strong>Coordinator:</strong> <?php echo safe_output($distribution['coordinator_name']); ?>
+                    <?php if (!empty($distribution['coordinator_contact'])): ?>
+                        (<?php echo safe_output($distribution['coordinator_contact']); ?>)
+                    <?php endif; ?>
+                <?php endif; ?>
             </div>
         </header>
 
@@ -1027,7 +1243,7 @@ $resource_unit = 'units';
                             <!-- Current Status -->
                             <div class="current-status-display">
                                 <div class="status-label-small">Current Status</div>
-                                <div class="status-badge-large <?php echo 'status-' . strtolower($current_status_mapped); ?>">
+                                <div class="status-badge-large <?php echo 'status-' . strtolower($current_status); ?>">
                                     <?php echo safe_output($current_status); ?>
                                 </div>
                             </div>
@@ -1047,6 +1263,18 @@ $resource_unit = 'units';
                                     <span class="info-label">Status</span>
                                     <span class="info-value"><?php echo safe_output($current_status); ?></span>
                                 </div>
+                                <?php if (!empty($distribution['estimated_duration'])): ?>
+                                <div class="info-item">
+                                    <span class="info-label">Est. Duration</span>
+                                    <span class="info-value"><?php echo $distribution['estimated_duration']; ?> hours</span>
+                                </div>
+                                <?php endif; ?>
+                                <?php if (!empty($distribution['volunteers_needed'])): ?>
+                                <div class="info-item">
+                                    <span class="info-label">Volunteers Needed</span>
+                                    <span class="info-value"><?php echo $distribution['volunteers_needed']; ?></span>
+                                </div>
+                                <?php endif; ?>
                             </div>
 
                             <!-- Disaster Details -->
@@ -1066,25 +1294,49 @@ $resource_unit = 'units';
                                 </div>
                             </div>
 
-                            <!-- Resource Details -->
+                            <!-- Shelter Distribution -->
                             <div class="overview-section">
-                                <div class="section-title">Resource Details</div>
+                                <div class="section-title">Shelter Distribution</div>
                                 <div class="info-item">
-                                    <span class="info-label">Resources Allocated</span>
-                                    <span class="info-value"><?php echo count($distribution_resources); ?> types</span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">Total Allocated</span>
+                                    <span class="info-label">Primary Shelter</span>
                                     <span class="info-value">
-                                        <?php echo $total_quantity_needed; ?> 
-                                        <?php echo $resource_unit; ?>
+                                        <span class="shelter-badge" style="font-size: 0.8rem;">
+                                            <i class="fas fa-hotel"></i>
+                                            <?php echo safe_output($shelter_location); ?>
+                                        </span>
                                     </span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Quantity Sent</span>
-                                    <span class="info-value">
-                                        <?php echo safe_output($basic_distribution['quantity_sent'] ?? '0'); ?> 
-                                        <?php echo $resource_unit; ?>
+                                    <span class="info-label">Families at Shelter</span>
+                                    <span class="info-value"><?php echo $total_families; ?></span>
+                                </div>
+                            </div>
+
+                            <!-- Resource Summary -->
+                            <div class="overview-section">
+                                <div class="section-title">Resource Summary</div>
+                                <?php if ($basic_needs_total > 0): ?>
+                                <div class="info-item">
+                                    <span class="info-label">Basic Needs</span>
+                                    <span class="info-value"><?php echo $basic_needs_total; ?> units</span>
+                                </div>
+                                <?php endif; ?>
+                                <?php if ($special_requests_total > 0): ?>
+                                <div class="info-item">
+                                    <span class="info-label">Special Requests</span>
+                                    <span class="info-value"><?php echo $special_requests_total; ?> units</span>
+                                </div>
+                                <?php endif; ?>
+                                <?php if ($other_resources_total > 0): ?>
+                                <div class="info-item">
+                                    <span class="info-label">Other Resources</span>
+                                    <span class="info-value"><?php echo $other_resources_total; ?> units</span>
+                                </div>
+                                <?php endif; ?>
+                                <div class="info-item">
+                                    <span class="info-label">Total Allocated</span>
+                                    <span class="info-value" style="font-weight: bold; color: #2c3e50;">
+                                        <?php echo $total_resources_allocated; ?> units
                                     </span>
                                 </div>
                             </div>
@@ -1092,9 +1344,11 @@ $resource_unit = 'units';
                             <!-- Families Assigned -->
                             <?php if (!empty($distribution_victims)): ?>
                             <div class="overview-section">
-                                <div class="section-title">Families Assigned (<?php echo $total_families; ?>)</div>
+                                <div class="section-title">Families at Shelter (<?php echo $total_families; ?>)</div>
                                 <?php $index = 1; ?>
-                                <?php foreach ($distribution_victim_names as $victim_id => $victim_name): ?>
+                                <?php foreach ($distribution_victim_names as $victim_id => $victim_name): 
+                                    $shelter = $distribution_victim_shelters[$victim_id] ?? 'No Shelter';
+                                ?>
                                 <div class="info-item" style="border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px;">
                                     <div style="display: flex; justify-content: space-between; width: 100%;">
                                         <div>
@@ -1102,7 +1356,6 @@ $resource_unit = 'units';
                                                 <?php echo ($index++) . '. ' . safe_output($victim_name); ?>
                                             </div>
                                             <?php 
-                                            // Find the victim status from distribution_victims array
                                             $victim_status = 'Scheduled';
                                             foreach ($distribution_victims as $victim) {
                                                 if ($victim['victim_id'] == $victim_id) {
@@ -1113,6 +1366,9 @@ $resource_unit = 'units';
                                             ?>
                                             <div style="font-size: 0.8rem; color: #666;">
                                                 Status: <?php echo safe_output($victim_status); ?>
+                                            </div>
+                                            <div style="font-size: 0.8rem; color: #3498db; margin-top: 2px;">
+                                                <i class="fas fa-hotel"></i> <?php echo safe_output($shelter); ?>
                                             </div>
                                         </div>
                                         <div style="text-align: right;">
@@ -1133,7 +1389,7 @@ $resource_unit = 'units';
                                 👁️ View Details
                             </a>
                             <a href="assign_volunteer.php?distribution_id=<?php echo $distribution_id; ?>" class="btn btn-success">
-                                👥 Assign
+                                👥 Assign Volunteers
                             </a>
                             <button class="btn btn-outline" onclick="window.print()">
                                 🖨️ Print
@@ -1158,7 +1414,7 @@ $resource_unit = 'units';
                             <div class="progress-steps">
                                 <div class="progress-step <?php echo $current_status_mapped === 'planned' ? 'active' : ($progress_percentage >= 25 ? 'completed' : ''); ?>" data-status="planned">
                                     <div class="step-circle">1</div>
-                                    <div class="step-label">Planned</div>
+                                    <div class="step-label">Planning</div>
                                 </div>
                                 <div class="progress-step <?php echo $current_status_mapped === 'assigned' ? 'active' : ($progress_percentage >= 50 ? 'completed' : ''); ?>" data-status="assigned">
                                     <div class="step-circle">2</div>
@@ -1166,7 +1422,7 @@ $resource_unit = 'units';
                                 </div>
                                 <div class="progress-step <?php echo $current_status_mapped === 'active' ? 'active' : ($progress_percentage >= 75 ? 'completed' : ''); ?>" data-status="active">
                                     <div class="step-circle">3</div>
-                                    <div class="step-label">Active</div>
+                                    <div class="step-label">In Transit</div>
                                 </div>
                                 <div class="progress-step <?php echo $current_status_mapped === 'completed' ? 'active' : ($progress_percentage >= 100 ? 'completed' : ''); ?>" data-status="completed">
                                     <div class="step-circle">✓</div>
@@ -1198,31 +1454,14 @@ $resource_unit = 'units';
                                         <span class="input-icon">🏷️</span>
                                         <select class="form-control" id="statusSelect" name="status" required>
                                             <option value="">Select new status...</option>
-                                            <option value="Planned" <?php echo ($current_status === 'Planned') ? 'selected' : ''; ?>>📋 Planned</option>
+                                            <option value="Planning" <?php echo ($current_status === 'Planning') ? 'selected' : ''; ?>>📋 Planning</option>
                                             <option value="Assigned" <?php echo ($current_status === 'Assigned') ? 'selected' : ''; ?>>👥 Assigned</option>
                                             <option value="In Transit" <?php echo ($current_status === 'In Transit') ? 'selected' : ''; ?>>🚚 In Transit</option>
-                                            <option value="Delivered" <?php echo ($current_status === 'Delivered') ? 'selected' : ''; ?>>📦 Delivered</option>
                                             <option value="Completed" <?php echo ($current_status === 'Completed') ? 'selected' : ''; ?>>✅ Completed</option>
                                             <option value="Cancelled" <?php echo ($current_status === 'Cancelled') ? 'selected' : ''; ?>>❌ Cancelled</option>
                                         </select>
                                     </div>
                                     <small class="form-text">Select the new status for this distribution</small>
-                                </div>
-
-                                <div class="form-group" id="quantityGroup" style="display: <?php echo ($current_status === 'Completed') ? 'block' : 'none'; ?>;">
-                                    <label class="form-label">
-                                        Quantity Sent <span class="required-star">*</span>
-                                    </label>
-                                    <div class="form-control-icon">
-                                        <span class="input-icon">📦</span>
-                                        <input type="number" class="form-control" id="quantityInput" name="quantity_received"
-                                               placeholder="Enter quantity sent" min="0" max="<?php echo $total_quantity_needed; ?>"
-                                               value="<?php echo $distribution['quantity_sent'] ?? $total_quantity_needed; ?>">
-                                    </div>
-                                    <small class="form-text">
-                                        Actual quantity sent (max: <?php echo $total_quantity_needed; ?> 
-                                        <?php echo $resource_unit; ?>)
-                                    </small>
                                 </div>
 
                                 <div class="form-group">
@@ -1247,20 +1486,20 @@ $resource_unit = 'units';
                             <div class="status-guide">
                                 <div class="status-guide-title">Status Meanings</div>
                                 <div class="status-guide-item">
-                                    <div class="status-guide-badge status-planned">Planned</div>
-                                    <div class="status-guide-text">Distribution is being planned and organized</div>
+                                    <div class="status-guide-badge status-planning">Planning</div>
+                                    <div class="status-guide-text">Distribution is being planned and organized for shelter</div>
                                 </div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-assigned">Assigned</div>
-                                    <div class="status-guide-text">Volunteers have been assigned to this distribution</div>
+                                    <div class="status-guide-text">Volunteers have been assigned to this shelter distribution</div>
                                 </div>
                                 <div class="status-guide-item">
-                                    <div class="status-guide-badge status-active">In Transit/Delivered</div>
-                                    <div class="status-guide-text">Distribution is in progress or delivered</div>
+                                    <div class="status-guide-badge status-active">In Transit</div>
+                                    <div class="status-guide-text">Distribution is in progress (in transit to shelter)</div>
                                 </div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-completed">Completed</div>
-                                    <div class="status-guide-text">Distribution finished successfully</div>
+                                    <div class="status-guide-text">Distribution finished successfully at shelter</div>
                                 </div>
                                 <div class="status-guide-item">
                                     <div class="status-guide-badge status-cancelled">Cancelled</div>
@@ -1282,8 +1521,9 @@ $resource_unit = 'units';
                                 <thead>
                                     <tr>
                                         <th>Volunteer</th>
-                                        <th>Role</th>
-                                        <th>Assignment Status</th>
+                                        <th>Role/Skill</th>
+                                        <th>Contact</th>
+                                        <th>Status</th>
                                         <th>Assigned On</th>
                                     </tr>
                                 </thead>
@@ -1292,8 +1532,23 @@ $resource_unit = 'units';
                                     <tr>
                                         <td>
                                             <strong><?php echo safe_output($volunteer['volunteer_name']); ?></strong>
+                                            <div class="volunteer-contact">
+                                                ID: <?php echo safe_output($volunteer['volunteer_id']); ?>
+                                            </div>
                                         </td>
                                         <td><?php echo safe_output($volunteer['volunteer_role']); ?></td>
+                                        <td>
+                                            <?php if (!empty($volunteer['email'])): ?>
+                                            <div class="volunteer-contact volunteer-email">
+                                                <i class="fas fa-envelope"></i> <?php echo safe_output($volunteer['email']); ?>
+                                            </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($volunteer['phone'])): ?>
+                                            <div class="volunteer-contact volunteer-phone">
+                                                <i class="fas fa-phone"></i> <?php echo safe_output($volunteer['phone']); ?>
+                                            </div>
+                                            <?php endif; ?>
+                                        </td>
                                         <td>
                                             <?php 
                                             $status_text = $volunteer['status'] ?? 'Active';
@@ -1330,11 +1585,10 @@ $resource_unit = 'units';
                         <div class="timeline-wrapper">
                             <div class="timeline">
                                 <?php
-                                // Define statuses in order
-                                $statuses_in_order = ['Planned', 'Assigned', 'In Transit', 'Delivered', 'Completed'];
+                                $statuses_in_order = ['Planning', 'Assigned', 'In Transit', 'Completed'];
                                 $current_status_index = array_search($current_status, $statuses_in_order);
                                 if ($current_status_index === false) {
-                                    $current_status_index = 0;
+                                    $current_status_index = -1;
                                 }
                                 
                                 foreach ($statuses_in_order as $index => $status):
@@ -1366,31 +1620,13 @@ $resource_unit = 'units';
     <script>
         // Status Select Handler
         const statusSelect = document.getElementById('statusSelect');
-        const quantityGroup = document.getElementById('quantityGroup');
-        const quantityInput = document.getElementById('quantityInput');
         const progressFill = document.getElementById('progressFill');
         const progressSteps = document.querySelectorAll('.progress-step');
         const updateForm = document.getElementById('updateForm');
         const btnText = document.getElementById('btnText');
 
-        // Get quantities from PHP
-        const maxQuantityAllocated = <?php echo $total_quantity_needed; ?>;
-        const currentQuantitySent = <?php echo $basic_distribution['quantity_sent'] ?? $total_quantity_needed; ?>;
-
-        // Initialize quantity input with current sent value
-        quantityInput.value = currentQuantitySent;
-
         statusSelect.addEventListener('change', function() {
             const status = this.value;
-
-            // Show/hide quantity field for completed status
-            if (status === 'Completed') {
-                quantityGroup.style.display = 'block';
-                quantityInput.required = true;
-            } else {
-                quantityGroup.style.display = 'none';
-                quantityInput.required = false;
-            }
 
             // Update progress bar and steps
             updateProgress(status);
@@ -1408,11 +1644,11 @@ $resource_unit = 'units';
             });
 
             const statusMap = {
-                'Planned': { width: '25%', activeIndex: 0 },
+                'Planning': { width: '25%', activeIndex: 0 },
                 'Assigned': { width: '50%', activeIndex: 1 },
                 'In Transit': { width: '75%', activeIndex: 2 },
-                'Delivered': { width: '75%', activeIndex: 2 },
-                'Completed': { width: '100%', activeIndex: 3 }
+                'Completed': { width: '100%', activeIndex: 3 },
+                'Cancelled': { width: '0%', activeIndex: -1 }
             };
 
             if (statusMap[status]) {
@@ -1425,7 +1661,7 @@ $resource_unit = 'units';
                 }
 
                 // Mark active step
-                if (progressSteps[activeIndex]) {
+                if (activeIndex >= 0 && progressSteps[activeIndex]) {
                     progressSteps[activeIndex].classList.add('active');
                 }
             }
@@ -1433,11 +1669,10 @@ $resource_unit = 'units';
 
         function getStatusDescription(status) {
             const descriptions = {
-                'Planned': 'Distribution is being planned and organized',
-                'Assigned': 'Volunteers have been assigned to this distribution',
-                'In Transit': 'Distribution is currently in transit',
-                'Delivered': 'Distribution has been delivered',
-                'Completed': 'Distribution has been successfully completed',
+                'Planning': 'Distribution is being planned and organized for shelter',
+                'Assigned': 'Volunteers have been assigned to this shelter distribution',
+                'In Transit': 'Distribution is currently in transit to the shelter',
+                'Completed': 'Distribution has been successfully completed at shelter',
                 'Cancelled': 'Distribution has been cancelled'
             };
             return descriptions[status] || '';
@@ -1446,32 +1681,11 @@ $resource_unit = 'units';
         // Form Submission
         updateForm.addEventListener('submit', function(e) {
             const status = statusSelect.value;
-            const quantity = parseInt(quantityInput.value) || 0;
 
             if (!status) {
                 e.preventDefault();
                 showNotification('Error', 'Please select a new status', 'error');
                 return;
-            }
-
-            if (status === 'Completed' && !quantityInput.value) {
-                e.preventDefault();
-                showNotification('Error', 'Please enter the quantity sent', 'error');
-                return;
-            }
-
-            if (status === 'Completed' && quantity > maxQuantityAllocated) {
-                e.preventDefault();
-                showNotification('Error', `Quantity sent (${quantity}) cannot exceed quantity allocated (${maxQuantityAllocated})`, 'error');
-                return;
-            }
-
-            // Add warning if quantity is less than total allocated
-            if (status === 'Completed' && quantity < maxQuantityAllocated) {
-                if (!confirm(`Warning: Quantity sent (${quantity}) is less than quantity allocated (${maxQuantityAllocated}). Some families may not receive enough. Are you sure you want to continue?`)) {
-                    e.preventDefault();
-                    return;
-                }
             }
 
             // Show loading state
@@ -1522,21 +1736,6 @@ $resource_unit = 'units';
             }, 3000);
         }
 
-        // Real-time validation for quantity
-        quantityInput.addEventListener('input', function() {
-            const value = parseInt(this.value) || 0;
-
-            if (value > maxQuantityAllocated) {
-                this.style.borderColor = '#e74c3c';
-                showNotification('Warning', `Quantity cannot exceed ${maxQuantityAllocated}`, 'warning');
-            } else if (value < maxQuantityAllocated) {
-                this.style.borderColor = '#f39c12';
-                showNotification('Notice', `Quantity is less than allocated amount (${maxQuantityAllocated})`, 'warning');
-            } else {
-                this.style.borderColor = '#27ae60';
-            }
-        });
-
         // Initialize on load
         document.addEventListener('DOMContentLoaded', function() {
             // Focus on status select
@@ -1544,12 +1743,6 @@ $resource_unit = 'units';
 
             // Initialize progress based on current status
             updateProgress('<?php echo $current_status; ?>');
-            
-            // Initialize quantity field visibility
-            if (statusSelect.value === 'Completed') {
-                quantityGroup.style.display = 'block';
-                quantityInput.required = true;
-            }
         });
     </script>
 </body>
