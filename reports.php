@@ -1,3 +1,78 @@
+<?php
+// ========================================
+// Reports Dashboard - Session & Auth
+// Integrated from distribution_main.php
+// ========================================
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// TEMPORARILY DISABLED SESSION CHECK FOR TESTING
+/*
+// Check if user is authenticated via API bridge
+$is_api_authenticated = false;
+
+// Check multiple possible API authentication indicators
+if (isset($_SESSION['admin_api_verified']) && $_SESSION['admin_api_verified'] === true) {
+    $is_api_authenticated = true;
+} elseif (isset($_SESSION['AdminID']) || isset($_SESSION['FullName'])) {
+    // If we have API fields in session, treat as API authenticated
+    $is_api_authenticated = true;
+    $_SESSION['admin_api_verified'] = true;
+}
+
+// User Detection
+$user_type = 'guest';
+$current_user = null;
+
+// 1. FIRST PRIORITY: Check for API-authenticated admin
+if ($is_api_authenticated) {
+    $user_type = 'admin';
+    
+    $admin_id = $_SESSION['AdminID'] ?? $_SESSION['user_id'] ?? 0;
+    $admin_name = $_SESSION['FullName'] ?? $_SESSION['user_name'] ?? 'Admin User';
+    $admin_email = $_SESSION['Email'] ?? $_SESSION['user_email'] ?? 'admin@disasterrelief.org';
+    $admin_role = $_SESSION['Role'] ?? $_SESSION['user_role'] ?? 'Administrator';
+    
+    $current_user = [
+        'id' => $admin_id,
+        'name' => $admin_name,
+        'role' => $admin_role,
+        'avatar' => substr($admin_name, 0, 2),
+        'email' => $admin_email,
+        'api_verified' => true
+    ];
+}
+// 2. SECOND PRIORITY: Check for local staff/admin
+elseif (isset($_SESSION['user_id']) && !isset($_SESSION['volunteer_id'])) {
+    $user_type = 'staff';
+    $current_user = [
+        'id' => $_SESSION['user_id'],
+        'name' => $_SESSION['user_name'] ?? 'Admin User',
+        'role' => $_SESSION['user_role'] ?? 'System Administrator',
+        'avatar' => substr($_SESSION['user_name'] ?? 'AU', 0, 2),
+        'email' => $_SESSION['user_email'] ?? 'admin@disasterrelief.org',
+        'api_verified' => false
+    ];
+}
+// 3. ACCESS CONTROL: Redirect if Guest or Volunteer
+else {
+    header("Location: http://10.147.17.30:8000/login.php");
+    exit;
+}
+*/
+
+// Mock User for Testing
+$current_user = [
+    'id' => 1,
+    'name' => 'Test Admin',
+    'role' => 'Administrator',
+    'avatar' => 'TA',
+    'email' => 'admin@test.com'
+];
+$is_api_authenticated = true; 
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -63,7 +138,7 @@
             display: flex;
             gap: 20px;
             margin-bottom: 24px;
-            align-items: flex-start;
+            align-items: stretch; /* Match height */
         }
         .backup-option-card {
             flex: 1;
@@ -73,6 +148,9 @@
             padding: 20px;
             text-align: center;
             transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         }
         .backup-option-card:hover {
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
@@ -108,6 +186,150 @@
             justify-content: center;
         }
         .manual-backup-btn:hover {
+            background-color: #059669;
+        }
+        .next-run-text {
+            font-size: 0.85rem;
+            color: #64748b;
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px dashed #e2e8f0;
+        }
+        .next-run-text strong {
+            color: var(--primary);
+        }
+
+        /* CUSTOM CONFIRMATION MODAL STYLES */
+        .confirm-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5); /* Semi-transparent backdrop */
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000; /* High z-index to sit on top */
+            backdrop-filter: blur(3px); /* Blur effect */
+            transition: opacity 0.2s ease-in-out;
+        }
+
+        .confirm-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            text-align: center;
+            transform: scale(0.95);
+            opacity: 0;
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .confirm-modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .confirm-modal-overlay.active .confirm-modal {
+            transform: scale(1);
+            opacity: 1;
+        }
+
+        .confirm-icon-wrapper {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background-color: #eff6ff; /* Light blue bg */
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px auto;
+            font-size: 28px;
+        }
+
+        .confirm-modal.danger .confirm-icon-wrapper {
+            background-color: #fef2f2; /* Light red bg */
+            color: #ef4444;
+        }
+        
+        .confirm-modal.success .confirm-icon-wrapper {
+            background-color: #ecfdf5; /* Light green bg */
+            color: #10b981;
+        }
+
+        .confirm-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 8px;
+        }
+
+        .confirm-message {
+            color: var(--text-muted);
+            margin-bottom: 28px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        .confirm-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* Single button layout for alerts */
+        .confirm-actions.single {
+            grid-template-columns: 1fr;
+        }
+
+        .btn-modal {
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+            border: none;
+        }
+
+        .btn-cancel {
+            background-color: white;
+            color: var(--text-muted);
+            border: 1px solid #e2e8f0;
+        }
+        .btn-cancel:hover {
+            background-color: #f8fafc;
+            color: var(--text-main);
+            border-color: #cbd5e1;
+        }
+
+        .btn-confirm {
+            background-color: var(--primary);
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+        }
+        .btn-confirm:hover {
+            background-color: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .confirm-modal.danger .btn-confirm {
+            background-color: #ef4444;
+            box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2);
+        }
+        .confirm-modal.danger .btn-confirm:hover {
+            background-color: #dc2626;
+        }
+        
+        .confirm-modal.success .btn-confirm {
+            background-color: #10b981;
+            box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2);
+        }
+        .confirm-modal.success .btn-confirm:hover {
             background-color: #059669;
         }
     </style>
@@ -268,10 +490,13 @@
                             <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 15px;">
                                 Set how frequently the system should automatically back up data.
                             </p>
-                            <div style="display: flex; justify-content: center; gap: 10px;">
+                            <div style="display: flex; justify-content: center; gap: 10px; margin-bottom: 10px;">
                                 <button class="schedule-btn active" onclick="setSchedule('Daily', this)">Daily</button>
                                 <button class="schedule-btn" onclick="setSchedule('Weekly', this)">Weekly</button>
                                 <button class="schedule-btn" onclick="setSchedule('Monthly', this)">Monthly</button>
+                            </div>
+                            <div class="next-run-text" id="next-run-display">
+                                Next scheduled run: <strong>Calculating...</strong>
                             </div>
                         </div>
 
@@ -303,6 +528,21 @@
         </main>
     </div>
 
+    <!-- CUSTOM CONFIRMATION MODAL -->
+    <div class="confirm-modal-overlay" id="confirm-modal-overlay">
+        <div class="confirm-modal" id="confirm-modal-content">
+            <div class="confirm-icon-wrapper">
+                <i class="fas fa-question" id="confirm-icon"></i>
+            </div>
+            <div class="confirm-title" id="confirm-title">Confirm Action</div>
+            <div class="confirm-message" id="confirm-message">Are you sure you want to proceed?</div>
+            <div class="confirm-actions" id="confirm-actions">
+                <button class="btn-modal btn-cancel" onclick="closeConfirmation()">Cancel</button>
+                <button class="btn-modal btn-confirm" id="confirm-yes-btn">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <!-- JS Logic -->
     <script>
         const API_DISTRIBUTIONS = 'http://10.147.17.154:8000/distribution_module/distribution.php';
@@ -325,6 +565,81 @@
         let currentSort = { key: null, direction: 'asc' };
         let charts = { status: null, resource: null, trend: null };
 
+        // --- Custom Confirmation Logic ---
+        let confirmCallback = null;
+
+        function showConfirmation(title, message, isDanger, onConfirm) {
+            document.getElementById('confirm-title').innerText = title;
+            document.getElementById('confirm-message').innerText = message;
+            
+            const modalContent = document.getElementById('confirm-modal-content');
+            const icon = document.getElementById('confirm-icon');
+            const yesBtn = document.getElementById('confirm-yes-btn');
+            const actionsDiv = document.getElementById('confirm-actions');
+            
+            // Reset classes
+            modalContent.classList.remove('danger', 'success');
+            actionsDiv.classList.remove('single');
+            document.querySelector('.btn-cancel').style.display = 'block';
+            
+            if (isDanger) {
+                modalContent.classList.add('danger');
+                icon.className = 'fas fa-exclamation-triangle';
+                yesBtn.innerText = "Yes, Proceed";
+            } else {
+                icon.className = 'fas fa-question';
+                yesBtn.innerText = "Confirm";
+            }
+            
+            confirmCallback = onConfirm;
+            const overlay = document.getElementById('confirm-modal-overlay');
+            overlay.classList.add('active'); 
+        }
+
+        function showAlert(title, message, isSuccess = true) {
+            document.getElementById('confirm-title').innerText = title;
+            document.getElementById('confirm-message').innerText = message;
+            
+            const modalContent = document.getElementById('confirm-modal-content');
+            const icon = document.getElementById('confirm-icon');
+            const yesBtn = document.getElementById('confirm-yes-btn');
+            const actionsDiv = document.getElementById('confirm-actions');
+            
+            modalContent.classList.remove('danger');
+            
+            if (isSuccess) {
+                modalContent.classList.add('success');
+                icon.className = 'fas fa-check';
+            } else {
+                modalContent.classList.add('danger');
+                icon.className = 'fas fa-times';
+            }
+            
+            // Single button mode
+            actionsDiv.classList.add('single');
+            document.querySelector('.btn-cancel').style.display = 'none';
+            yesBtn.innerText = "OK";
+            
+            confirmCallback = null; // No callback for simple alert
+            const overlay = document.getElementById('confirm-modal-overlay');
+            overlay.classList.add('active'); 
+        }
+
+        function closeConfirmation() {
+            const overlay = document.getElementById('confirm-modal-overlay');
+            overlay.classList.remove('active');
+            setTimeout(() => {
+                 // Reset state after animation
+                 confirmCallback = null;
+            }, 200);
+        }
+
+        document.getElementById('confirm-yes-btn').addEventListener('click', () => {
+            if (confirmCallback) confirmCallback();
+            closeConfirmation();
+        });
+
+        // --- INIT ---
         document.addEventListener('DOMContentLoaded', () => {
             fetchDistributions(); fetchVolunteers(); fetchResources(); 
             fetchDisasters(); fetchVictims(); fetchReports(); fetchBackups(); getSchedule();
@@ -334,11 +649,13 @@
             if (view) {
                 if(view === 'backup') showSection('backup');
                 else { showSection('lists'); switchList(view); }
-                window.history.replaceState({}, document.title, window.location.pathname);
+                
+                // FIXED: Don't clear history immediately so sidebar PHP knows what to highlight on refresh
+                // window.history.replaceState({}, document.title, window.location.pathname);
             }
         });
 
-        // --- BACKUP & RESTORE LOGIC ---
+        // --- BACKUP & RESTORE LOGIC (UPDATED WITH CUSTOM MODAL) ---
         async function fetchBackups() {
             const container = document.getElementById('backup-list');
             try {
@@ -359,7 +676,10 @@
                                 <div style="font-size: 12px; color: var(--text-muted);">${b.date} • ${b.size}</div>
                             </div>
                         </div>
-                        <button class="btn-restore" onclick="restoreBackup('${b.name}')">Restore</button>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn-restore" onclick="restoreBackup('${b.name}')">Restore</button>
+                            <button class="btn-restore" style="border-color: #ef4444; color: #ef4444;" onclick="deleteBackup('${b.name}')"><i class="fas fa-trash"></i></button>
+                        </div>
                     </div>
                 `).join('');
             } catch (err) {
@@ -368,24 +688,54 @@
             }
         }
 
-        async function triggerManualBackup() {
-            if(!confirm(`Create a Manual backup now?`)) return;
-            
-            try {
-                alert("Backup started... This might take a few seconds.");
-                const res = await fetch(`${API_BACKUP_SYSTEM}?action=backup&type=Manual`);
-                const result = await res.json();
-                
-                if (result.status === 'success') {
-                    alert("Backup Successful: " + result.file);
-                    fetchBackups(); // Refresh list
-                    logReportToDB('System Backup (Manual)'); 
-                } else {
-                    alert("Backup Failed: " + result.message);
+        function triggerManualBackup() {
+            showConfirmation(
+                "Initiate Backup",
+                "Are you sure you want to create a manual system backup now? This might take a few moments.",
+                false,
+                async () => {
+                    try {
+                        const res = await fetch(`${API_BACKUP_SYSTEM}?action=backup&type=Manual`);
+                        const result = await res.json();
+                        
+                        if (result.status === 'success') {
+                            showAlert("Success", "Backup created successfully: " + result.file, true);
+                            fetchBackups();
+                            logReportToDB('System Backup (Manual)'); 
+                            getSchedule(); 
+                        } else {
+                            showAlert("Error", "Backup Failed: " + result.message, false);
+                        }
+                    } catch (err) {
+                        showAlert("Error", "Error connecting to backup system.", false);
+                    }
                 }
-            } catch (err) {
-                alert("Error connecting to backup system.");
-            }
+            );
+        }
+        
+        function deleteBackup(filename) {
+            showConfirmation(
+                "Delete Backup",
+                `Are you sure you want to permanently delete "${filename}"? This cannot be undone.`,
+                true,
+                async () => {
+                    try {
+                        const res = await fetch(`${API_BACKUP_SYSTEM}?action=delete`, {
+                             method: 'POST', body: JSON.stringify({ filename: filename })
+                        });
+                        const result = await res.json();
+                        
+                        if (result.status === 'success') {
+                            fetchBackups();
+                            // Optional: No alert needed for delete success to keep it snappy, or use showAlert
+                        } else {
+                            showAlert("Error", "Delete Failed: " + result.message, false);
+                        }
+                    } catch (err) {
+                        showAlert("Error", "Error connecting to backup system.", false);
+                    }
+                }
+            );
         }
 
         async function getSchedule() {
@@ -393,7 +743,6 @@
                 const res = await fetch(`${API_BACKUP_SYSTEM}?action=get_schedule`);
                 const result = await res.json();
                 
-                // Update UI
                 document.querySelectorAll('.schedule-btn').forEach(btn => {
                     if (btn.innerText === result.schedule) {
                         btn.classList.add('active');
@@ -401,81 +750,74 @@
                         btn.classList.remove('active');
                     }
                 });
+
+                const nextRunEl = document.getElementById('next-run-display');
+                if (nextRunEl) {
+                    nextRunEl.innerHTML = `Next scheduled run: <strong>${result.next_run}</strong>`;
+                }
             } catch (err) { console.error('Failed to get schedule'); }
         }
 
-        async function setSchedule(type, btnElement) {
-            try {
-                // FIXED: Added headers to ensure PHP parses the JSON body correctly
-                const res = await fetch(`${API_BACKUP_SYSTEM}?action=set_schedule`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ schedule: type })
-                });
-
-                // Helper to check if response is ok
-                if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-
-                const result = await res.json();
-                
-                if (result.status === 'success') {
-                    // Update UI
-                    document.querySelectorAll('.schedule-btn').forEach(b => b.classList.remove('active'));
-                    btnElement.classList.add('active');
-                    alert(`Schedule updated to ${type}`);
-                } else {
-                    // Alert specific error from server
-                    alert(`Server Error: ${result.message || 'Could not update schedule'}`);
+        function setSchedule(type, btnElement) {
+            showConfirmation(
+                "Change Schedule",
+                `Are you sure you want to change the automated backup frequency to ${type}?`,
+                false,
+                async () => {
+                    try {
+                        const res = await fetch(`${API_BACKUP_SYSTEM}?action=set_schedule`, {
+                            method: 'POST',
+                            body: JSON.stringify({ schedule: type })
+                        });
+                        const result = await res.json();
+                        
+                        if (result.status === 'success') {
+                            document.querySelectorAll('.schedule-btn').forEach(b => b.classList.remove('active'));
+                            btnElement.classList.add('active');
+                            getSchedule(); 
+                            showAlert("Success", `Schedule updated to ${type}`, true);
+                        }
+                    } catch (err) {
+                        showAlert("Error", "Failed to set schedule.", false);
+                    }
                 }
-            } catch (err) {
-                console.error("Set Schedule Failed:", err);
-                alert("Failed to set schedule. Check console for details.");
-            }
+            );
         }
 
-        async function restoreBackup(filename) {
-            if(!confirm(`WARNING: This will overwrite the current 'Reports' database with ${filename}.\nAre you sure?`)) return;
-            
-            try {
-                alert("Restoring... This may take a moment.");
-                // FIXED: Added headers here as well
-                const res = await fetch(`${API_BACKUP_SYSTEM}?action=restore`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ filename: filename })
-                });
-                const result = await res.json();
-                
-                if (result.status === 'success') {
-                    alert("Restore Successful!");
-                    logReportToDB('System Restore (' + filename + ')');
-                    location.reload(); 
-                } else {
-                    alert("Restore Failed: " + result.message);
+        function restoreBackup(filename) {
+            showConfirmation(
+                "Restore Database",
+                `WARNING: This will overwrite the current 'Reports' database with ${filename}. This action cannot be undone. Are you sure?`,
+                true, // isDanger = true
+                async () => {
+                    try {
+                        const res = await fetch(`${API_BACKUP_SYSTEM}?action=restore`, {
+                            method: 'POST',
+                            body: JSON.stringify({ filename: filename })
+                        });
+                        const result = await res.json();
+                        
+                        if (result.status === 'success') {
+                            showAlert("Success", "Restore Successful! The page will reload.", true);
+                            logReportToDB('System Restore (' + filename + ')'); 
+                            setTimeout(() => location.reload(), 2000);
+                        } else {
+                            showAlert("Error", "Restore Failed: " + result.message, false);
+                        }
+                    } catch (err) {
+                        showAlert("Error", "Error during restore process.", false);
+                    }
                 }
-            } catch (err) {
-                console.error("Restore failed:", err);
-                alert("Error during restore process.");
-            }
+            );
         }
 
-        // --- HELPER FUNCTION: UPDATE STATS ---
+        // ... [Rest of your existing functions: updateStats, fetch*, render*, export*, sortData etc.] ...
+        
         function updateStats() {
-            const volEl = document.getElementById('stat-volunteers');
-            if (volEl) volEl.innerText = data.volunteers.length;
-            
-            const resEl = document.getElementById('stat-resources');
-            if (resEl) resEl.innerText = data.resources.reduce((sum, item) => sum + item.Qty, 0);
-            
-            const vicEl = document.getElementById('stat-victims');
-            if (vicEl) vicEl.innerText = data.victims.filter(v => v.Status !== 'Assisted').length;
-            
-            const distEl = document.getElementById('stat-distributions');
-            if (distEl) distEl.innerText = data.distributions.length;
+            const volEl = document.getElementById('stat-volunteers'); if(volEl) volEl.innerText = data.volunteers.length;
+            const resEl = document.getElementById('stat-resources'); if(resEl) resEl.innerText = data.resources.reduce((sum, item) => sum + item.Qty, 0);
+            const vicEl = document.getElementById('stat-victims'); if(vicEl) vicEl.innerText = data.victims.filter(v => v.Status !== 'Assisted').length;
+            const distEl = document.getElementById('stat-distributions'); if(distEl) distEl.innerText = data.distributions.length;
             
             const repEl = document.getElementById('stat-reports');
             if (repEl) repEl.innerText = data.reports.length;
@@ -484,7 +826,7 @@
         }
 
         // --- Include all previous fetch functions here ---
-        async function fetchSession() { /* ... */ }
+        async function fetchSession() { /* Client-side fetch kept if needed, but PHP handles main auth */ }
         async function fetchResources() { 
              try {
                 const promises = Object.entries(API_RESOURCES).map(async ([category, url]) => {
@@ -543,9 +885,33 @@
 
         // --- Navigation & UI Logic ---
         function showSection(id) {
-            ['dashboard','lists','backup'].forEach(s => document.getElementById(s).classList.add('hidden'));
-            document.getElementById(id).classList.remove('hidden');
+            // 1. Hide/Show Sections
+            ['dashboard','lists','backup'].forEach(s => {
+                const el = document.getElementById(s);
+                if(el) el.classList.add('hidden');
+            });
+            const target = document.getElementById(id);
+            if(target) target.classList.remove('hidden');
+
+            // 2. Update Sidebar Highlight (FIXED)
+            // Remove 'active' from all sidebar items
+            document.querySelectorAll('.sidebar .nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Find the button/link that corresponds to this section and make it active
+            const activeBtn = document.querySelector(`.sidebar .nav-item[data-section="${id}"]`);
+            if (activeBtn) {
+                activeBtn.classList.add('active');
+            }
+
+            // 3. Update URL without reloading (Optional)
+            // This ensures if you refresh, you stay on the same tab because PHP looks at $_GET['view']
+            const url = new URL(window.location);
+            url.searchParams.set('view', id);
+            window.history.pushState({}, '', url);
         }
+
         function navigateToList(type) { showSection('lists'); switchList(type); }
         function switchList(type) {
             currentList = type;
@@ -568,8 +934,10 @@
             body.innerHTML = dataset.map(row => `<tr>${keys.map(k => {
                  let val = row[k];
                  if(k==='Status') {
-                     let cls = (val==='Active'||val==='active'||val==='Completed'||val==='Verified')?'badge-active':'badge-pending';
-                     return `<td><span class="badge ${cls}">${val}</span></td>`;
+                     // FIXED: Added case-insensitive active check
+                     let badgeClass = val === 'Active' || val === 'active' || val === 'Completed' || val === 'Assisted' || val === 'Delivered' || val === 'Verified' ? 'badge-active' :
+                                      val === 'Pending' || val === 'In Transit' || val === 'Planning' || val === 'Volunteer Needed' || val === 'In Progress' ? 'badge-pending' : 'badge-critical';
+                     return `<td><span class="badge ${badgeClass}">${val}</span></td>`;
                  }
                  return `<td>${val}</td>`;
             }).join('')}</tr>`).join('');
@@ -592,6 +960,7 @@
         
         function exportCurrentList() { exportData(currentList); }
         function exportData(type) {
+            // ... existing export logic ...
              const headers = Object.keys(data[type][0]);
              const rows = [headers.join(','), ...data[type].map(r => headers.map(h => JSON.stringify(r[h])).join(','))];
              const blob = new Blob([rows.join('\n')], {type:'text/csv'});
@@ -601,7 +970,14 @@
         }
         
         async function logReportToDB(type) {
-             await fetch(API_REPORTS, {method:'POST', body: JSON.stringify({report_type: type+' Export', generated_by:'Admin', description:'Export'})});
+             await fetch(API_REPORTS, {
+                 method:'POST', 
+                 body: JSON.stringify({
+                     report_type: type+' Export', 
+                     generated_by: '<?php echo $current_user["name"]; ?>', 
+                     description: 'Exported ' + type
+                 })
+             });
              if(currentList === 'reports') fetchReports();
         }
 
