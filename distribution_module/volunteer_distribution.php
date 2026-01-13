@@ -224,6 +224,35 @@ function getDisasterInfo($disaster_id) {
 }
 
 /* ----------------------------------------
+   GET VOLUNTEER NAME FROM DATABASE - FALLBACK
+---------------------------------------- */
+function getVolunteerNameFromDB($volunteer_id, $db) {
+    try {
+        $query = "SELECT full_name, first_name, last_name, name FROM volunteers WHERE volunteer_id = ?";
+        $stmt = $db->prepare($query);
+        if ($stmt) {
+            $stmt->bind_param("i", $volunteer_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($row = $result->fetch_assoc()) {
+                // Try different field names
+                if (!empty($row['full_name'])) {
+                    return $row['full_name'];
+                } elseif (!empty($row['first_name']) && !empty($row['last_name'])) {
+                    return $row['first_name'] . ' ' . $row['last_name'];
+                } elseif (!empty($row['name'])) {
+                    return $row['name'];
+                }
+            }
+            $stmt->close();
+        }
+    } catch (Exception $e) {
+        error_log("Error fetching volunteer name from DB: " . $e->getMessage());
+    }
+    return null;
+}
+
+/* ----------------------------------------
    CHECK FOR NEW ASSIGNMENT NOTIFICATIONS
 ---------------------------------------- */
 $new_assignment_notifications = [];
@@ -332,7 +361,22 @@ try {
         if ($specificResult['success']) {
             $foundVolunteer = $specificResult['data'];
         } else {
-            throw new Exception("Volunteer ID $volunteer_id not found in API data!");
+            // Fallback: Get from database if API fails
+            $db_query = "SELECT * FROM volunteers WHERE volunteer_id = ?";
+            $stmt = $db->prepare($db_query);
+            if ($stmt) {
+                $stmt->bind_param("i", $volunteer_id);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                if ($row = $result->fetch_assoc()) {
+                    $foundVolunteer = $row;
+                }
+                $stmt->close();
+            }
+            
+            if (!$foundVolunteer) {
+                throw new Exception("Volunteer ID $volunteer_id not found!");
+            }
         }
     }
     
@@ -342,6 +386,7 @@ try {
         'name' => $foundVolunteer['FullName'] ?? 
                  $foundVolunteer['full_name'] ?? 
                  $foundVolunteer['name'] ?? 
+                 ($foundVolunteer['FirstName'] ?? '') . ' ' . ($foundVolunteer['LastName'] ?? '') ?: 
                  'Volunteer ' . $volunteer_id,
         'email' => $foundVolunteer['Email'] ?? 
                   $foundVolunteer['email'] ?? '',
@@ -350,7 +395,8 @@ try {
         'address' => $foundVolunteer['Address'] ?? 
                     $foundVolunteer['address'] ?? '',
         'ngo_affiliation' => $foundVolunteer['AssignedNGO'] ?? 
-                            $foundVolunteer['ngo_affiliation'] ?? '',
+                            $foundVolunteer['ngo_affiliation'] ?? 
+                            $foundVolunteer['NGO_Affiliation'] ?? '',
         'skill_category' => $foundVolunteer['SkillCategory'] ?? 
                            $foundVolunteer['skill_category'] ?? 
                            'Volunteer',
@@ -359,6 +405,25 @@ try {
                    'Active',
         'role' => 'Volunteer'
     ];
+    
+    // After mapping API fields, check if name is still generic
+    if (strpos($volunteer_info['name'], 'Volunteer ') === 0 || 
+        strpos($volunteer_info['name'], 'Demo Volunteer') === 0 ||
+        empty(trim($volunteer_info['name'])) ||
+        $volunteer_info['name'] == 'Volunteer ' . $volunteer_id) {
+        
+        // Try to get name from database
+        $db_name = getVolunteerNameFromDB($volunteer_id, $db);
+        if ($db_name) {
+            $volunteer_info['name'] = $db_name;
+        } else {
+            // Use session name if available
+            if (!empty($_SESSION['volunteer_name']) && 
+                !strpos($_SESSION['volunteer_name'], 'Demo Volunteer') === 0) {
+                $volunteer_info['name'] = $_SESSION['volunteer_name'];
+            }
+        }
+    }
     
 } catch (Exception $e) {
     $error = "Error loading volunteer information: " . $e->getMessage();
@@ -420,16 +485,20 @@ if ($volunteer_info && $is_volunteer_active) {
                 )
             ) dt ON dv.distribution_id = dt.distribution_id AND dv.volunteer_id = dt.volunteer_id
             WHERE dv.volunteer_id = ? 
-            AND dv.status IN ('Assigned', 'Active')
-            AND d.status != 'Completed'
+            AND dv.status IN ('Assigned', 'Active', 'In Progress', 'In Transit', 'Arrived', 'Delayed', 'Completed')
             AND dv.distribution_id NOT IN (
                 SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dv.volunteer_id
             )
             ORDER BY 
-                CASE dv.status
-                    WHEN 'Active' THEN 1
-                    WHEN 'Assigned' THEN 2
-                    ELSE 3
+                CASE 
+                    WHEN dv.status = 'Active' THEN 1
+                    WHEN dv.status = 'In Progress' THEN 2
+                    WHEN dv.status = 'In Transit' THEN 3
+                    WHEN dv.status = 'Arrived' THEN 4
+                    WHEN dv.status = 'Delayed' THEN 5
+                    WHEN dv.status = 'Completed' THEN 6
+                    WHEN dv.status = 'Assigned' THEN 7
+                    ELSE 8
                 END,
                 d.date ASC
         ";
@@ -622,10 +691,23 @@ if ($volunteer_info && $is_volunteer_active) {
                     $last_update_formatted = date('h:i A', strtotime($assignment['last_update'])) . ' (' . $time_ago . ')';
                 }
                 
+                // Get volunteer's current status for this distribution
+                $volunteer_status = $assignment['status'] ?? 'Assigned';
+                
+                // Determine button text based on status
+                $button_text = 'Start Distribution';
+                if ($volunteer_status == 'Active' || $volunteer_status == 'In Progress') {
+                    $button_text = 'Continue Distribution';
+                } elseif ($volunteer_status == 'In Transit' || $volunteer_status == 'Arrived' || $volunteer_status == 'Delayed') {
+                    $button_text = 'Resume Distribution';
+                } elseif ($volunteer_status == 'Completed') {
+                    $button_text = 'View Completed';
+                }
+                
                 $upcoming_assignments[] = [
                     'distribution_id' => $assignment['distribution_id'],
                     'date' => $assignment['date'],
-                    'status' => $assignment['status'],
+                    'status' => $volunteer_status, // Use volunteer's status
                     'latest_tracking_status' => $assignment['latest_tracking_status'] ?? $assignment['distribution_tracking_status'] ?? null,
                     'latest_location' => $assignment['latest_location'] ?? null,
                     'last_update' => $last_update_formatted,
@@ -637,7 +719,8 @@ if ($volunteer_info && $is_volunteer_active) {
                     'total_needs' => $needs_count,
                     'disaster_id' => $assignment['disaster_id'],
                     'distribution_status' => $assignment['status'] ?? 'In Transit',
-                    'distribution_location' => $assignment['location'] ?? 'N/A'
+                    'distribution_location' => $assignment['location'] ?? 'N/A',
+                    'button_text' => $button_text
                 ];
             }
         }
@@ -840,58 +923,220 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     
-    try {
-        if (!$distribution_id || !$action) {
-            throw new Exception("Invalid request.");
+    // Handle start distribution - FIXED: Pass status to execute_distribution.php
+    if ($action === 'start_distribution') {
+        if ($distribution_id) {
+            // Get current status for this distribution
+            $status_query = "SELECT status FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
+            $stmt = $db->prepare($status_query);
+            if ($stmt) {
+                $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $row = $result->fetch_assoc();
+                $stmt->close();
+                
+                $current_status = $row['status'] ?? 'Assigned';
+                
+                // Update to Active if it's still Assigned
+                if ($current_status == 'Assigned') {
+                    $update_query = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
+                    $update_stmt = $db->prepare($update_query);
+                    if ($update_stmt) {
+                        $update_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                        $update_stmt->execute();
+                        $update_stmt->close();
+                        $current_status = 'Active';
+                    }
+                }
+                
+                // Redirect to execute_distribution.php with the current status
+                header("Location: execute_distribution.php?distribution_id=" . $distribution_id . "&status=" . urlencode($current_status));
+                exit;
+            } else {
+                header("Location: execute_distribution.php?distribution_id=" . $distribution_id);
+                exit;
+            }
         }
-        
-        if ($action === 'start_distribution') {
-            header("Location: execute_distribution.php?distribution_id=" . $distribution_id);
+    }
+    
+    // Handle assignment confirmation
+    elseif ($action === 'confirm_assignment') {
+        try {
+            $db->begin_transaction();
+            
+            $distribution_id = $_POST['distribution_id'] ?? 0;
+            $volunteer_id = $_SESSION['volunteer_id'];
+            
+            if (!$distribution_id || !$volunteer_id) {
+                throw new Exception("Missing distribution ID or volunteer ID");
+            }
+            
+            // 1. Update distribution_volunteer status to 'Active'
+            $update_query = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
+            $stmt = $db->prepare($update_query);
+            if ($stmt) {
+                $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                if (!$stmt->execute()) {
+                    throw new Exception("Failed to update volunteer status: " . $stmt->error);
+                }
+                $stmt->close();
+            } else {
+                throw new Exception("Failed to prepare update query");
+            }
+            
+            // 2. Check if this distribution needs status update in main distribution table
+            $check_distribution_query = "SELECT status FROM distribution WHERE distribution_id = ?";
+            $check_stmt = $db->prepare($check_distribution_query);
+            $current_distribution_status = '';
+            if ($check_stmt) {
+                $check_stmt->bind_param("i", $distribution_id);
+                $check_stmt->execute();
+                $check_result = $check_stmt->get_result();
+                if ($check_row = $check_result->fetch_assoc()) {
+                    $current_distribution_status = $check_row['status'] ?? '';
+                }
+                $check_stmt->close();
+            }
+            
+            // If distribution is still in 'Assigned' status, update it to 'In Progress'
+            if ($current_distribution_status === 'Assigned') {
+                $update_dist_query = "UPDATE distribution SET status = 'In Progress' WHERE distribution_id = ?";
+                $dist_stmt = $db->prepare($update_dist_query);
+                if ($dist_stmt) {
+                    $dist_stmt->bind_param("i", $distribution_id);
+                    $dist_stmt->execute();
+                    $dist_stmt->close();
+                    
+                    // Log the status change if table exists
+                    $new_status = 'In Progress';
+                    $table_check = $db->query("SHOW TABLES LIKE 'status_changes'");
+                    if ($table_check && $table_check->num_rows > 0) {
+                        $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'volunteer', 'Volunteer confirmed assignment')";
+                        $log_change_stmt = $db->prepare($log_change_query);
+                        if ($log_change_stmt) {
+                            $log_change_stmt->bind_param("iss", $distribution_id, $current_distribution_status, $new_status);
+                            $log_change_stmt->execute();
+                            $log_change_stmt->close();
+                        }
+                    }
+                }
+            }
+            
+            // 3. Create volunteer alert/notification if table exists
+            $alert_message = "You have confirmed your assignment for Distribution #{$distribution_id}. You can now start the distribution when ready.";
+            $table_check = $db->query("SHOW TABLES LIKE 'volunteer_alerts'");
+            if ($table_check && $table_check->num_rows > 0) {
+                $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message) VALUES (?, ?, ?)";
+                $alert_stmt = $db->prepare($alert_query);
+                if ($alert_stmt) {
+                    $alert_stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_message);
+                    $alert_stmt->execute();
+                    $alert_stmt->close();
+                }
+            }
+            
+            $db->commit();
+            
+            // Refresh page to show updated status
+            header("Location: volunteer_distribution.php?success=confirmed&distribution_id=" . $distribution_id);
             exit;
+            
+        } catch (Exception $e) {
+            if (isset($db) && is_object($db) && method_exists($db, 'rollback')) {
+                $db->rollback();
+            }
+            $error = "Error confirming assignment: " . $e->getMessage();
         }
-        // FIXED: Handle assignment confirmation - WORKING VERSION
-        elseif ($action === 'confirm_assignment') {
-            try {
-                $db->begin_transaction();
-                
-                $distribution_id = $_POST['distribution_id'] ?? 0;
-                $volunteer_id = $_SESSION['volunteer_id'];
-                
-                if (!$distribution_id || !$volunteer_id) {
-                    throw new Exception("Missing distribution ID or volunteer ID");
-                }
-                
-                // 1. Update distribution_volunteer status to 'Active'
-                $update_query = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
-                $stmt = $db->prepare($update_query);
-                if ($stmt) {
-                    $stmt->bind_param("ii", $distribution_id, $volunteer_id);
-                    if (!$stmt->execute()) {
-                        throw new Exception("Failed to update volunteer status: " . $stmt->error);
+    }
+    // Handle assignment cancellation - COMPLETE CLEANUP VERSION
+    elseif ($action === 'cancel_assignment') {
+        try {
+            $db->begin_transaction();
+            
+            $distribution_id = $_POST['distribution_id'] ?? 0;
+            $volunteer_id = $_SESSION['volunteer_id'];
+            $reason = $_POST['reason'] ?? '';
+            
+            if (!$distribution_id || !$volunteer_id) {
+                throw new Exception("Missing distribution ID or volunteer ID");
+            }
+            
+            // 1. Remove from distribution_volunteer
+            $delete_query = "DELETE FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
+            $delete_stmt = $db->prepare($delete_query);
+            if ($delete_stmt) {
+                $delete_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                $delete_stmt->execute();
+                $delete_stmt->close();
+            }
+            
+            // 2. Update distribution_items if table exists - FIXED: Removed updated_at reference
+            $table_check = $db->query("SHOW TABLES LIKE 'distribution_items'");
+            if ($table_check && $table_check->num_rows > 0) {
+                // Check if assigned_volunteer_id column exists
+                $column_check = $db->query("SHOW COLUMNS FROM distribution_items LIKE 'assigned_volunteer_id'");
+                if ($column_check && $column_check->num_rows > 0) {
+                    $update_items = "UPDATE distribution_items SET assigned_volunteer_id = NULL WHERE distribution_id = ? AND assigned_volunteer_id = ?";
+                    $update_stmt = $db->prepare($update_items);
+                    if ($update_stmt) {
+                        $update_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                        $update_stmt->execute();
+                        $update_stmt->close();
                     }
-                    $stmt->close();
-                } else {
-                    throw new Exception("Failed to prepare update query");
+                }
+            }
+            
+            // 3. CLEANUP: Remove volunteer from distribution_log for this distribution
+            $log_cleanup_query = "DELETE FROM distribution_log WHERE distribution_id = ? AND volunteer_id = ?";
+            $log_stmt = $db->prepare($log_cleanup_query);
+            if ($log_stmt) {
+                $log_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                $log_stmt->execute();
+                $log_stmt->close();
+            }
+            
+            // 4. CLEANUP: Remove volunteer from distribution_tracking for this distribution
+            $tracking_cleanup_query = "DELETE FROM distribution_tracking WHERE distribution_id = ? AND volunteer_id = ?";
+            $tracking_stmt = $db->prepare($tracking_cleanup_query);
+            if ($tracking_stmt) {
+                $tracking_stmt->bind_param("ii", $distribution_id, $volunteer_id);
+                $tracking_stmt->execute();
+                $tracking_stmt->close();
+            }
+            
+            // 5. CHECK REMAINING VOLUNTEERS AND UPDATE DISTRIBUTION STATUS
+            $remaining_volunteers = 0;
+            $check_volunteers_query = "SELECT COUNT(*) as remaining_count FROM distribution_volunteer WHERE distribution_id = ? AND status != 'Cancelled'";
+            $check_stmt = $db->prepare($check_volunteers_query);
+            if ($check_stmt) {
+                $check_stmt->bind_param("i", $distribution_id);
+                $check_stmt->execute();
+                $check_result = $check_stmt->get_result();
+                $check_row = $check_result->fetch_assoc();
+                $check_stmt->close();
+                $remaining_volunteers = $check_row['remaining_count'] ?? 0;
+            }
+            
+            // If no volunteers remain, update distribution status
+            if ($remaining_volunteers == 0) {
+                // Check current status
+                $current_status_query = "SELECT status FROM distribution WHERE distribution_id = ?";
+                $status_stmt = $db->prepare($current_status_query);
+                $current_status = '';
+                if ($status_stmt) {
+                    $status_stmt->bind_param("i", $distribution_id);
+                    $status_stmt->execute();
+                    $status_result = $status_stmt->get_result();
+                    $status_row = $status_result->fetch_assoc();
+                    $status_stmt->close();
+                    $current_status = $status_row['status'] ?? '';
                 }
                 
-                // 2. Check if this distribution needs status update in main distribution table
-                $check_distribution_query = "SELECT status FROM distribution WHERE distribution_id = ?";
-                $check_stmt = $db->prepare($check_distribution_query);
-                $current_distribution_status = '';
-                if ($check_stmt) {
-                    $check_stmt->bind_param("i", $distribution_id);
-                    $check_stmt->execute();
-                    $check_result = $check_stmt->get_result();
-                    if ($check_row = $check_result->fetch_assoc()) {
-                        $current_distribution_status = $check_row['status'] ?? '';
-                    }
-                    $check_stmt->close();
-                }
-                
-                // If distribution is still in 'Assigned' status, update it to 'In Progress'
-                if ($current_distribution_status === 'Assigned') {
-                    // CORRECTED: Removed updated_at column reference
-                    $update_dist_query = "UPDATE distribution SET status = 'In Progress' WHERE distribution_id = ?";
+                // Only update if it's currently in a volunteer-assigned state
+                $volunteer_states = ['Assigned', 'In Transit', 'Active', 'In Progress'];
+                if (in_array($current_status, $volunteer_states)) {
+                    $update_dist_query = "UPDATE distribution SET status = 'Volunteer Needed' WHERE distribution_id = ?";
                     $dist_stmt = $db->prepare($update_dist_query);
                     if ($dist_stmt) {
                         $dist_stmt->bind_param("i", $distribution_id);
@@ -899,188 +1144,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $dist_stmt->close();
                         
                         // Log the status change if table exists
-                        $new_status = 'In Progress';
+                        $new_status = 'Volunteer Needed';
                         $table_check = $db->query("SHOW TABLES LIKE 'status_changes'");
                         if ($table_check && $table_check->num_rows > 0) {
-                            $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'volunteer', 'Volunteer confirmed assignment')";
+                            $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'system', 'All volunteers declined/cancelled')";
                             $log_change_stmt = $db->prepare($log_change_query);
                             if ($log_change_stmt) {
-                                $log_change_stmt->bind_param("iss", $distribution_id, $current_distribution_status, $new_status);
+                                $log_change_stmt->bind_param("iss", $distribution_id, $current_status, $new_status);
                                 $log_change_stmt->execute();
                                 $log_change_stmt->close();
                             }
                         }
                     }
                 }
-                
-                // 3. Create volunteer alert/notification if table exists
-                $alert_message = "You have confirmed your assignment for Distribution #{$distribution_id}. You can now start the distribution when ready.";
-                $table_check = $db->query("SHOW TABLES LIKE 'volunteer_alerts'");
-                if ($table_check && $table_check->num_rows > 0) {
-                    $alert_query = "INSERT INTO volunteer_alerts (volunteer_id, distribution_id, message) VALUES (?, ?, ?)";
-                    $alert_stmt = $db->prepare($alert_query);
-                    if ($alert_stmt) {
-                        $alert_stmt->bind_param("iis", $volunteer_id, $distribution_id, $alert_message);
-                        $alert_stmt->execute();
-                        $alert_stmt->close();
-                    }
-                }
-                
-                $db->commit();
-                
-                // Refresh page to show updated status
-                header("Location: volunteer_distribution.php?success=confirmed&distribution_id=" . $distribution_id);
-                exit;
-                
-            } catch (Exception $e) {
-                if (isset($db) && is_object($db) && method_exists($db, 'rollback')) {
-                    $db->rollback();
-                }
-                $error = "Error confirming assignment: " . $e->getMessage();
             }
-        }
-        // FIXED: Handle assignment cancellation - COMPLETE CLEANUP VERSION
-        elseif ($action === 'cancel_assignment') {
-            try {
-                $db->begin_transaction();
-                
-                $distribution_id = $_POST['distribution_id'] ?? 0;
-                $volunteer_id = $_SESSION['volunteer_id'];
-                $reason = $_POST['reason'] ?? '';
-                
-                if (!$distribution_id || !$volunteer_id) {
-                    throw new Exception("Missing distribution ID or volunteer ID");
-                }
-                
-                // 1. Remove from distribution_volunteer
-                $delete_query = "DELETE FROM distribution_volunteer WHERE distribution_id = ? AND volunteer_id = ?";
-                $delete_stmt = $db->prepare($delete_query);
-                if ($delete_stmt) {
-                    $delete_stmt->bind_param("ii", $distribution_id, $volunteer_id);
-                    $delete_stmt->execute();
-                    $delete_stmt->close();
-                }
-                
-                // 2. Update distribution_items if table exists - FIXED: Removed updated_at reference
-                $table_check = $db->query("SHOW TABLES LIKE 'distribution_items'");
-                if ($table_check && $table_check->num_rows > 0) {
-                    // Check if assigned_volunteer_id column exists
-                    $column_check = $db->query("SHOW COLUMNS FROM distribution_items LIKE 'assigned_volunteer_id'");
-                    if ($column_check && $column_check->num_rows > 0) {
-                        $update_items = "UPDATE distribution_items SET assigned_volunteer_id = NULL WHERE distribution_id = ? AND assigned_volunteer_id = ?";
-                        $update_stmt = $db->prepare($update_items);
-                        if ($update_stmt) {
-                            $update_stmt->bind_param("ii", $distribution_id, $volunteer_id);
-                            $update_stmt->execute();
-                            $update_stmt->close();
-                        }
-                    }
-                }
-                
-                // 3. CLEANUP: Remove volunteer from distribution_log for this distribution
-                $log_cleanup_query = "DELETE FROM distribution_log WHERE distribution_id = ? AND volunteer_id = ?";
-                $log_stmt = $db->prepare($log_cleanup_query);
-                if ($log_stmt) {
-                    $log_stmt->bind_param("ii", $distribution_id, $volunteer_id);
-                    $log_stmt->execute();
-                    $log_stmt->close();
-                }
-                
-                // 4. CLEANUP: Remove volunteer from distribution_tracking for this distribution
-                $tracking_cleanup_query = "DELETE FROM distribution_tracking WHERE distribution_id = ? AND volunteer_id = ?";
-                $tracking_stmt = $db->prepare($tracking_cleanup_query);
-                if ($tracking_stmt) {
-                    $tracking_stmt->bind_param("ii", $distribution_id, $volunteer_id);
-                    $tracking_stmt->execute();
-                    $tracking_stmt->close();
-                }
-                
-                // 5. CHECK REMAINING VOLUNTEERS AND UPDATE DISTRIBUTION STATUS
-                $remaining_volunteers = 0;
-                $check_volunteers_query = "SELECT COUNT(*) as remaining_count FROM distribution_volunteer WHERE distribution_id = ? AND status != 'Cancelled'";
-                $check_stmt = $db->prepare($check_volunteers_query);
-                if ($check_stmt) {
-                    $check_stmt->bind_param("i", $distribution_id);
-                    $check_stmt->execute();
-                    $check_result = $check_stmt->get_result();
-                    $check_row = $check_result->fetch_assoc();
-                    $check_stmt->close();
-                    $remaining_volunteers = $check_row['remaining_count'] ?? 0;
-                }
-                
-                // If no volunteers remain, update distribution status
-                if ($remaining_volunteers == 0) {
-                    // Check current status
-                    $current_status_query = "SELECT status FROM distribution WHERE distribution_id = ?";
-                    $status_stmt = $db->prepare($current_status_query);
-                    $current_status = '';
-                    if ($status_stmt) {
-                        $status_stmt->bind_param("i", $distribution_id);
-                        $status_stmt->execute();
-                        $status_result = $status_stmt->get_result();
-                        $status_row = $status_result->fetch_assoc();
-                        $status_stmt->close();
-                        $current_status = $status_row['status'] ?? '';
-                    }
-                    
-                    // Only update if it's currently in a volunteer-assigned state
-                    $volunteer_states = ['Assigned', 'In Transit', 'Active', 'In Progress'];
-                    if (in_array($current_status, $volunteer_states)) {
-                        // CORRECTED: Removed updated_at column reference
-                        $update_dist_query = "UPDATE distribution SET status = 'Volunteer Needed' WHERE distribution_id = ?";
-                        $dist_stmt = $db->prepare($update_dist_query);
-                        if ($dist_stmt) {
-                            $dist_stmt->bind_param("i", $distribution_id);
-                            $dist_stmt->execute();
-                            $dist_stmt->close();
-                            
-                            // Log status change if table exists
-                            $new_status = 'Volunteer Needed';
-                            $table_check = $db->query("SHOW TABLES LIKE 'status_changes'");
-                            if ($table_check && $table_check->num_rows > 0) {
-                                $log_change_query = "INSERT INTO status_changes (distribution_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, 'system', 'All volunteers declined/cancelled')";
-                                $log_change_stmt = $db->prepare($log_change_query);
-                                if ($log_change_stmt) {
-                                    $log_change_stmt->bind_param("iss", $distribution_id, $current_status, $new_status);
-                                    $log_change_stmt->execute();
-                                    $log_change_stmt->close();
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 6. Log the cancellation for tracking
-                $log_query = "INSERT INTO assignment_cancellations (distribution_id, volunteer_id, reason) VALUES (?, ?, ?)";
-                $log_stmt = $db->prepare($log_query);
-                if ($log_stmt) {
-                    $log_stmt->bind_param("iis", $distribution_id, $volunteer_id, $reason);
-                    $log_stmt->execute();
-                    $log_stmt->close();
-                }
-                
-                $db->commit();
-                
-                // Show appropriate message
-                if ($remaining_volunteers == 0) {
-                    $success_msg = "Assignment cancelled. You were the last volunteer, so distribution status has been updated to 'Volunteer Needed'.";
-                } else {
-                    $success_msg = "Assignment cancelled successfully. " . $remaining_volunteers . " volunteer(s) remain assigned.";
-                }
-                
-                header("Location: volunteer_distribution.php?success=cancelled&msg=" . urlencode($success_msg) . "&distribution_id=" . $distribution_id);
-                exit;
-                
-            } catch (Exception $e) {
-                if (isset($db) && is_object($db) && method_exists($db, 'rollback')) {
-                    $db->rollback();
-                }
-                $error = "Error cancelling assignment: " . $e->getMessage();
+            
+            // 6. Log the cancellation for tracking
+            $log_query = "INSERT INTO assignment_cancellations (distribution_id, volunteer_id, reason) VALUES (?, ?, ?)";
+            $log_stmt = $db->prepare($log_query);
+            if ($log_stmt) {
+                $log_stmt->bind_param("iis", $distribution_id, $volunteer_id, $reason);
+                $log_stmt->execute();
+                $log_stmt->close();
             }
+            
+            $db->commit();
+            
+            // Show appropriate message
+            if ($remaining_volunteers == 0) {
+                $success_msg = "Assignment cancelled. You were the last volunteer, so distribution status has been updated to 'Volunteer Needed'.";
+            } else {
+                $success_msg = "Assignment cancelled successfully. " . $remaining_volunteers . " volunteer(s) remain assigned.";
+            }
+            
+            header("Location: volunteer_distribution.php?success=cancelled&msg=" . urlencode($success_msg) . "&distribution_id=" . $distribution_id);
+            exit;
+            
+        } catch (Exception $e) {
+            if (isset($db) && is_object($db) && method_exists($db, 'rollback')) {
+                $db->rollback();
+            }
+            $error = "Error cancelling assignment: " . $e->getMessage();
         }
-        
-    } catch (Exception $e) {
-        $error = "Error: " . $e->getMessage();
     }
 }
 
@@ -1968,9 +2073,90 @@ if (isset($_GET['success'])) {
             resize: vertical;
         }
         
+        /* Add new status badges for volunteer statuses */
+        .status-in_transit {
+            background-color: #fff3e0;
+            color: #ef6c00;
+        }
+        
+        .status-in_progress {
+            background-color: #ffe0b2;
+            color: #e65100;
+        }
+        
+        .status-departed {
+            background-color: #e1f5fe;
+            color: #0288d1;
+        }
+        
+        .status-arrived {
+            background-color: #c8e6c9;
+            color: #1b5e20;
+        }
+        
+        .status-delayed {
+            background-color: #ffcdd2;
+            color: #b71c1c;
+        }
+        
+        /* Side-by-side assignments layout */
+        .assignments-grid-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .assignments-grid-container .assignments-section {
+            margin: 0;
+        }
+        
+        /* Compact assignment cards */
+        .compact-assignment {
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .compact-assignment .assignment-header {
+            margin-bottom: 10px;
+        }
+        
+        .compact-assignment .assignment-title {
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        
+        .compact-assignment .assignment-details {
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .compact-assignment .detail-item {
+            font-size: 13px;
+        }
+        
+        .compact-assignment .detail-item i {
+            font-size: 12px;
+            width: 16px;
+        }
+        
+        .compact-assignment .assignment-actions {
+            gap: 5px;
+        }
+        
+        .compact-assignment .action-button {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+        
         @media (max-width: 992px) {
             .stats-section {
                 grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .assignments-grid-container {
+                grid-template-columns: 1fr;
             }
         }
         
@@ -2089,6 +2275,9 @@ if (isset($_GET['success'])) {
                     <div>No new notifications</div>
                 </div>
             <?php endif; ?>
+            <div class="notification-item" style="text-align: center; color: #95a5a6; font-size: 12px; padding: 10px;">
+                Last checked: <?php echo date('h:i A'); ?>
+            </div>
         </div>
     </div>
     <?php endif; ?>
@@ -2229,7 +2418,7 @@ if (isset($_GET['success'])) {
                         <div class="profile-info">
                             <?php if ($volunteer_info): ?>
                                 <h2><?php echo htmlspecialchars($volunteer_info['name']); ?></h2>
-                                <div class="role-badge"><?php echo htmlspecialchars($volunteer_info['role']); ?></div>
+                                <div class="role-badge">Volunteer</div>
                                 <?php if (!empty($volunteer_info['skill_category'])): ?>
                                     <div class="skill-badge"><?php echo htmlspecialchars($volunteer_info['skill_category']); ?></div>
                                 <?php endif; ?>
@@ -2240,7 +2429,7 @@ if (isset($_GET['success'])) {
                         </div>
                     </div>
                     
-                    <div class="volunteer-id">VOL<?php echo str_pad($volunteer_id, 4, '0', STR_PAD_LEFT); ?></div>
+                    <div class="volunteer-id">ID: VOL<?php echo str_pad($volunteer_id, 4, '0', STR_PAD_LEFT); ?></div>
                     
                     <?php if ($volunteer_info): ?>
                     <div class="contact-info">
@@ -2261,20 +2450,20 @@ if (isset($_GET['success'])) {
                         <?php if (!empty($volunteer_info['ngo_affiliation'])): ?>
                         <div class="contact-item">
                             <i class="fas fa-hands-helping"></i>
-                            <span>NGO: <?php echo htmlspecialchars($volunteer_info['ngo_affiliation']); ?></span>
-                        </div>
-                        <?php endif; ?>
-                        
-                        <?php if (!empty($volunteer_info['address'])): ?>
-                        <div class="contact-item">
-                            <i class="fas fa-map-marker-alt"></i>
-                            <span><?php echo htmlspecialchars($volunteer_info['address']); ?></span>
+                            <span><?php echo htmlspecialchars($volunteer_info['ngo_affiliation']); ?></span>
                         </div>
                         <?php endif; ?>
                         
                         <div class="contact-item">
                             <i class="fas fa-user-circle"></i>
-                            <span>Status: <strong><?php echo htmlspecialchars($volunteer_info['status']); ?></strong></span>
+                            <span>Status: <strong style="color: 
+                                <?php 
+                                $status = strtolower($volunteer_info['status']);
+                                if ($status == 'active') echo '#2ecc71';
+                                elseif ($status == 'inactive') echo '#e74c3c';
+                                elseif ($status == 'pending') echo '#f39c12';
+                                else echo '#3498db';
+                                ?>"><?php echo htmlspecialchars($volunteer_info['status']); ?></strong></span>
                         </div>
                     </div>
                     <?php endif; ?>
@@ -2282,258 +2471,264 @@ if (isset($_GET['success'])) {
                 
                 <div class="quick-actions">
                     <h3>Quick Actions</h3>
-                    <!-- Removed "Start Next Distribution" and "Emergency Alert" buttons -->
                     <button class="action-btn" onclick="window.open('http://10.147.17.30:8000/volunteer_dashboard.php?volunteer_id=<?php echo $_SESSION['volunteer_id']; ?>', '_blank')">
                         <i class="fas fa-external-link-alt"></i> Back to Main Dashboard 
+                    </button>
+                    <button class="action-btn" onclick="window.open('http://10.147.17.30:8000/settings.php?volunteer_id=<?php echo $_SESSION['volunteer_id']; ?>', '_blank')">
+                        <i class="fas fa-cog"></i> Settings & Profile
                     </button>
                 </div>
             </div>
             
             <!-- Right Column: Assignments -->
             <div>
-                <!-- Active Assignments -->
-                <div class="assignments-section">
+                <!-- Main Assignments Container with Side-by-Side Layout -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+                    
+                    <!-- Left: Active Assignments -->
+                    <div class="assignments-section" style="margin: 0;">
+                        <div class="section-header">
+                            <h2>Active Distributions</h2>
+                            <span class="badge"><?php echo count($upcoming_assignments); ?></span>
+                        </div>
+                        
+                        <div class="assignments-list" style="min-height: 300px;">
+                            <?php if (empty($upcoming_assignments)): ?>
+                                <div class="empty-state">
+                                    <i class="fas fa-clipboard-list"></i>
+                                    <h3>No Active Assignments</h3>
+                                    <p>You don't have any active distribution assignments.</p>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($upcoming_assignments as $assignment): 
+                                    $status_class = strtolower(str_replace(' ', '_', $assignment['status']));
+                                ?>
+                                <div class="assignment-card <?php echo $status_class; ?>">
+                                    <div class="assignment-header">
+                                        <h3 class="assignment-title">
+                                            <?php echo htmlspecialchars($assignment['Disaster_Name']); ?>
+                                        </h3>
+                                        <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                                            <span class="assignment-status status-<?php echo $status_class; ?>">
+                                                <?php echo $assignment['status']; ?>
+                                            </span>
+                                            
+                                            <?php if (!empty($assignment['latest_tracking_status'])): ?>
+                                            <div style="margin-top: 5px; display: flex; align-items: center;">
+                                                <span class="assignment-status status-<?php echo strtolower($assignment['latest_tracking_status']); ?>" 
+                                                      style="font-size: 11px; padding: 2px 8px;">
+                                                    <i class="fas fa-map-marker-alt" style="margin-right: 3px;"></i>
+                                                    <?php echo ucfirst(str_replace('_', ' ', $assignment['latest_tracking_status'])); ?>
+                                                </span>
+                                                <?php if (!empty($assignment['last_update'])): ?>
+                                                <span style="font-size: 10px; color: #7f8c8d; margin-left: 5px;">
+                                                    <?php echo $assignment['last_update']; ?>
+                                                </span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="assignment-details" style="grid-template-columns: 1fr;">
+                                        <div class="detail-item">
+                                            <i class="fas fa-hashtag"></i>
+                                            <span class="detail-label">ID:</span>
+                                            <span>DIST<?php echo str_pad($assignment['distribution_id'], 6, '0', STR_PAD_LEFT); ?></span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-calendar"></i>
+                                            <span class="detail-label">Date:</span>
+                                            <span><?php echo date('d/m/Y', strtotime($assignment['date'])); ?></span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-map-marker-alt"></i>
+                                            <span class="detail-label">Location:</span>
+                                            <span>
+                                                <?php if (!empty($assignment['latest_location'])): ?>
+                                                    <?php echo htmlspecialchars($assignment['latest_location']); ?>
+                                                <?php else: ?>
+                                                    <?php echo htmlspecialchars($assignment['distribution_location']); ?>
+                                                <?php endif; ?>
+                                            </span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-users"></i>
+                                            <span class="detail-label">Families:</span>
+                                            <span><?php echo $assignment['total_victims']; ?></span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-box"></i>
+                                            <span class="detail-label">Items:</span>
+                                            <span><?php echo $assignment['total_needs']; ?></span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="assignment-actions">
+                                        <form method="POST" style="display: inline;">
+                                            <input type="hidden" name="distribution_id" value="<?php echo $assignment['distribution_id']; ?>">
+                                            <input type="hidden" name="action" value="start_distribution">
+                                            <button type="submit" class="action-button start-btn">
+                                                <i class="fas fa-play-circle"></i> 
+                                                <?php echo $assignment['button_text']; ?>
+                                            </button>
+                                        </form>
+                                        
+                                        <?php if (isset($assignment['status']) && $assignment['status'] === 'Assigned'): ?>
+                                            <button type="button" class="action-button confirm-btn" 
+                                                    onclick="if(confirm('Are you sure you want to confirm this assignment?')) { document.getElementById('confirm-form-<?php echo $assignment['distribution_id']; ?>').submit(); }">
+                                                <i class="fas fa-check"></i> Confirm
+                                            </button>
+                                            <form id="confirm-form-<?php echo $assignment['distribution_id']; ?>" method="POST" style="display: none;">
+                                                <input type="hidden" name="distribution_id" value="<?php echo $assignment['distribution_id']; ?>">
+                                                <input type="hidden" name="action" value="confirm_assignment">
+                                            </form>
+                                            
+                                            <button class="action-button cancel-btn" onclick="showCancelModal(<?php echo $assignment['distribution_id']; ?>, '<?php echo htmlspecialchars($assignment['Disaster_Name']); ?>')">
+                                                <i class="fas fa-times"></i> Decline
+                                            </button>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <!-- Right: Completed Distributions -->
+                    <div class="assignments-section" style="margin: 0;">
+                        <div class="section-header">
+                            <h2>Completed Distributions</h2>
+                            <span class="badge"><?php echo count($past_assignments); ?></span>
+                        </div>
+                        
+                        <div class="assignments-list" style="min-height: 300px;">
+                            <?php if (empty($past_assignments)): ?>
+                                <div class="empty-state">
+                                    <i class="fas fa-check-circle"></i>
+                                    <h3>No Completed Distributions</h3>
+                                    <p>Your completed distributions will appear here.</p>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($past_assignments as $assignment): ?>
+                                <div class="assignment-card completed">
+                                    <div class="assignment-header">
+                                        <h3 class="assignment-title">
+                                            <?php echo htmlspecialchars($assignment['Disaster_Name']); ?>
+                                        </h3>
+                                        <span class="assignment-status status-completed">Completed</span>
+                                    </div>
+                                    
+                                    <div class="assignment-details" style="grid-template-columns: 1fr;">
+                                        <div class="detail-item">
+                                            <i class="fas fa-hashtag"></i>
+                                            <span class="detail-label">ID:</span>
+                                            <span>DIST<?php echo str_pad($assignment['distribution_id'], 6, '0', STR_PAD_LEFT); ?></span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-calendar"></i>
+                                            <span class="detail-label">Date:</span>
+                                            <span><?php echo date('d/m/Y', strtotime($assignment['date'])); ?></span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-users"></i>
+                                            <span class="detail-label">Helped:</span>
+                                            <span><?php echo $assignment['victims_helped'] ?? 0; ?> families</span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-box"></i>
+                                            <span class="detail-label">Distributed:</span>
+                                            <span><?php echo $assignment['items_distributed'] ?? 0; ?> items</span>
+                                        </div>
+                                        <div class="detail-item">
+                                            <i class="fas fa-map-marker-alt"></i>
+                                            <span class="detail-label">Location:</span>
+                                            <span><?php echo htmlspecialchars($assignment['disaster_location']); ?></span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="assignment-actions">
+                                        <button class="action-button view-btn" onclick="viewDistributionReport(<?php echo $assignment['distribution_id']; ?>)">
+                                            <i class="fas fa-chart-bar"></i> Report
+                                        </button>
+                                        <button class="action-button details-btn" onclick="viewAssignmentDetails(<?php echo $assignment['distribution_id']; ?>)">
+                                            <i class="fas fa-info-circle"></i> Details
+                                        </button>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Tracking Section (if there are active assignments) -->
+                <?php if (!empty($upcoming_assignments)): ?>
+                <div class="assignments-section" style="margin-top: 0;">
                     <div class="section-header">
-                        <h2>Active Distribution Assignments</h2>
-                        <span class="badge"><?php echo count($upcoming_assignments); ?> assignments</span>
+                        <h2>Real-time Tracking</h2>
+                        <span class="badge">Live Updates</span>
                     </div>
                     
                     <div class="assignments-list">
-                        <?php if (empty($upcoming_assignments)): ?>
-                            <div class="empty-state">
-                                <i class="fas fa-clipboard-list"></i>
-                                <h3>No Active Assignments</h3>
-                                <p>You don't have any active distribution assignments. Check back later or contact your coordinator.</p>
-                            </div>
-                        <?php else: ?>
-                            <?php foreach ($upcoming_assignments as $assignment): ?>
-                            <div class="assignment-card <?php echo strtolower(str_replace(' ', '_', $assignment['status'])); ?>">
+                        <?php foreach ($upcoming_assignments as $assignment): 
+                            if (!empty($assignment['latest_tracking_status'])): ?>
+                            <div class="assignment-card" style="border-left-color: 
+                                <?php 
+                                if ($assignment['latest_tracking_status'] == 'departed') echo '#3498db';
+                                elseif ($assignment['latest_tracking_status'] == 'in_transit') echo '#e67e22';
+                                elseif ($assignment['latest_tracking_status'] == 'arrived') echo '#27ae60';
+                                elseif ($assignment['latest_tracking_status'] == 'delayed') echo '#e74c3c';
+                                else echo '#7f8c8d';
+                                ?>;">
                                 <div class="assignment-header">
                                     <h3 class="assignment-title">
                                         <?php echo htmlspecialchars($assignment['Disaster_Name']); ?>
-                                    </h3>
-                                    <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                                        <span class="assignment-status status-<?php echo strtolower(str_replace(' ', '_', $assignment['status'])); ?>">
-                                            <?php echo $assignment['status']; ?>
+                                        <span style="font-size: 14px; color: #7f8c8d; font-weight: normal;">
+                                            (ID: DIST<?php echo str_pad($assignment['distribution_id'], 6, '0', STR_PAD_LEFT); ?>)
                                         </span>
-                                        
-                                        <!-- TRACKING STATUS BADGE -->
-                                        <?php if (!empty($assignment['latest_tracking_status'])): ?>
-                                        <div style="margin-top: 5px; display: flex; align-items: center;">
-                                            <span class="assignment-status status-<?php echo strtolower($assignment['latest_tracking_status']); ?>" 
-                                                  style="font-size: 11px; padding: 2px 8px;">
-                                                <i class="fas fa-map-marker-alt" style="margin-right: 3px;"></i>
-                                                <?php echo ucfirst(str_replace('_', ' ', $assignment['latest_tracking_status'])); ?>
-                                            </span>
-                                            <?php if (!empty($assignment['last_update'])): ?>
-                                            <span style="font-size: 10px; color: #7f8c8d; margin-left: 5px;">
-                                                <?php echo $assignment['last_update']; ?>
-                                            </span>
-                                            <?php endif; ?>
+                                    </h3>
+                                    <div>
+                                        <span class="assignment-status status-<?php echo strtolower($assignment['latest_tracking_status']); ?>">
+                                            <i class="fas fa-map-marker-alt"></i>
+                                            <?php echo ucfirst(str_replace('_', ' ', $assignment['latest_tracking_status'])); ?>
+                                        </span>
+                                        <?php if (!empty($assignment['last_update'])): ?>
+                                        <div style="font-size: 11px; color: #95a5a6; margin-top: 5px;">
+                                            <i class="fas fa-clock"></i> <?php echo $assignment['last_update']; ?>
                                         </div>
                                         <?php endif; ?>
                                     </div>
                                 </div>
                                 
-                                <div class="assignment-details">
-                                    <div class="detail-item">
-                                        <i class="fas fa-hashtag"></i>
-                                        <span class="detail-label">Distribution ID:</span>
-                                        <span>DIST<?php echo str_pad($assignment['distribution_id'], 6, '0', STR_PAD_LEFT); ?></span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-calendar"></i>
-                                        <span class="detail-label">Date:</span>
-                                        <span><?php echo date('d/m/Y', strtotime($assignment['date'])); ?></span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-map-marker-alt"></i>
-                                        <span class="detail-label">Location:</span>
-                                        <span>
-                                            <?php if (!empty($assignment['latest_location'])): ?>
-                                                <?php echo htmlspecialchars($assignment['latest_location']); ?>
-                                            <?php else: ?>
-                                                <?php echo htmlspecialchars($assignment['distribution_location']); ?>
-                                            <?php endif; ?>
-                                        </span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-exclamation-triangle"></i>
-                                        <span class="detail-label">Disaster:</span>
-                                        <span><?php echo htmlspecialchars($assignment['Disaster_Name']); ?></span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-user-tag"></i>
-                                        <span class="detail-label">Your Role:</span>
-                                        <span><?php echo htmlspecialchars($assignment['role'] ?? 'Volunteer'); ?></span>
-                                    </div>
-                                    
-                                    <!-- TRACKING INFO -->
-                                    <?php if (!empty($assignment['latest_tracking_status'])): ?>
-                                    <div class="detail-item">
-                                        <i class="fas fa-satellite-dish"></i>
-                                        <span class="detail-label">Live Status:</span>
-                                        <span>
-                                            <?php 
-                                            $status_text = $assignment['latest_tracking_status'];
-                                            if ($status_text == 'in_transit') $status_text = 'In Transit';
-                                            if ($status_text == 'departed') $status_text = 'Departed';
-                                            echo ucfirst($status_text); 
-                                            ?>
-                                        </span>
-                                    </div>
-                                    <?php endif; ?>
-                                    
-                                    <!-- STATS -->
-                                    <div class="detail-item">
-                                        <i class="fas fa-users"></i>
-                                        <span class="detail-label">Families:</span>
-                                        <span><?php echo $assignment['total_victims']; ?></span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <i class="fas fa-box"></i>
-                                        <span class="detail-label">Items:</span>
-                                        <span><?php echo $assignment['total_needs']; ?></span>
-                                    </div>
-                                </div>
-                                
-                                <!-- Status Indicator -->
-                                <?php if (!empty($assignment['latest_tracking_status'])): ?>
-                                <div class="status-indicator" style="border-left-color: 
-                                    <?php 
-                                    if ($assignment['latest_tracking_status'] == 'departed') echo '#3498db';
-                                    elseif ($assignment['latest_tracking_status'] == 'in_transit') echo '#e67e22';
-                                    elseif ($assignment['latest_tracking_status'] == 'arrived') echo '#27ae60';
-                                    elseif ($assignment['latest_tracking_status'] == 'delayed') echo '#e74c3c';
-                                    else echo '#7f8c8d';
-                                    ?>;">
+                                <div class="status-indicator" style="margin: 0; padding: 10px; background: #f8f9fa;">
                                     <div style="display: flex; align-items: center; justify-content: space-between;">
                                         <div>
-                                            <strong>Current Status:</strong> 
-                                            <span style="color: 
-                                                <?php 
-                                                if ($assignment['latest_tracking_status'] == 'departed') echo '#3498db';
-                                                elseif ($assignment['latest_tracking_status'] == 'in_transit') echo '#e67e22';
-                                                elseif ($assignment['latest_tracking_status'] == 'arrived') echo '#27ae60';
-                                                elseif ($assignment['latest_tracking_status'] == 'delayed') echo '#e74c3c';
-                                                else echo '#7f8c8d';
-                                                ?>; font-weight: 600;">
-                                                <?php echo ucfirst(str_replace('_', ' ', $assignment['latest_tracking_status'])); ?>
+                                            <strong>Latest Location:</strong> 
+                                            <span style="color: #2c3e50; font-weight: 600;">
+                                                <?php echo htmlspecialchars($assignment['latest_location'] ?? $assignment['distribution_location']); ?>
                                             </span>
-                                            <?php if (!empty($assignment['last_update'])): ?>
-                                            <span style="font-size: 12px; color: #95a5a6; margin-left: 10px;">
-                                                <i class="fas fa-clock"></i> Updated: <?php echo $assignment['last_update']; ?>
-                                            </span>
-                                            <?php endif; ?>
                                         </div>
                                         <div class="live-status">
                                             <i class="fas fa-sync-alt"></i> Real-time tracking
                                         </div>
                                     </div>
                                 </div>
-                                <?php endif; ?>
                                 
                                 <div class="assignment-actions">
-                                    <!-- Start/Continue Distribution Button -->
+                                    <button class="action-button tracking-btn" onclick="viewTrackingHistory(<?php echo $assignment['distribution_id']; ?>)">
+                                        <i class="fas fa-map-marked-alt"></i> View Tracking History
+                                    </button>
                                     <form method="POST" style="display: inline;">
                                         <input type="hidden" name="distribution_id" value="<?php echo $assignment['distribution_id']; ?>">
                                         <input type="hidden" name="action" value="start_distribution">
                                         <button type="submit" class="action-button start-btn">
-                                            <i class="fas fa-play-circle"></i> 
-                                            <?php echo (!empty($assignment['latest_tracking_status']) && $assignment['latest_tracking_status'] != 'completed') ? 'Continue' : 'Start'; ?> Distribution
+                                            <i class="fas fa-play-circle"></i> Continue Distribution
                                         </button>
                                     </form>
-                                    
-                                    <!-- Confirm Assignment Button (only shows if status is 'Assigned') -->
-                                    <?php if (isset($assignment['status']) && $assignment['status'] === 'Assigned'): ?>
-                                        <button type="button" class="action-button confirm-btn" 
-                                                onclick="if(confirm('Are you sure you want to confirm this assignment?')) { document.getElementById('confirm-form-<?php echo $assignment['distribution_id']; ?>').submit(); }">
-                                            <i class="fas fa-check"></i> Confirm Assignment
-                                        </button>
-                                        <form id="confirm-form-<?php echo $assignment['distribution_id']; ?>" method="POST" style="display: none;">
-                                            <input type="hidden" name="distribution_id" value="<?php echo $assignment['distribution_id']; ?>">
-                                            <input type="hidden" name="action" value="confirm_assignment">
-                                        </form>
-                                        
-                                        <!-- Cancel Assignment Button -->
-                                        <button class="action-button cancel-btn" onclick="showCancelModal(<?php echo $assignment['distribution_id']; ?>, '<?php echo htmlspecialchars($assignment['Disaster_Name']); ?>')">
-                                            <i class="fas fa-times"></i> Decline Assignment
-                                        </button>
-                                    <?php endif; ?>
-                                    
-                                    <!-- View Details Button -->
-                                    <button class="action-button details-btn" onclick="viewAssignmentDetails(<?php echo $assignment['distribution_id']; ?>)">
-                                        <i class="fas fa-info-circle"></i> Details
-                                    </button>
-                                    
-                                    <!-- View Tracking Button -->
-                                    <?php if (!empty($assignment['latest_tracking_status'])): ?>
-                                    <button class="action-button tracking-btn" onclick="viewTrackingHistory(<?php echo $assignment['distribution_id']; ?>)">
-                                        <i class="fas fa-map-marked-alt"></i> View Tracking
-                                    </button>
-                                    <?php endif; ?>
                                 </div>
                             </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                
-                <!-- Completed Assignments -->
-                <?php if (!empty($past_assignments)): ?>
-                <div class="assignments-section" style="margin-top: 20px;">
-                    <div class="section-header">
-                        <h2>Completed Distributions</h2>
-                        <span class="badge"><?php echo count($past_assignments); ?> completed</span>
-                    </div>
-                    
-                    <div class="assignments-list">
-                        <?php foreach ($past_assignments as $assignment): ?>
-                        <div class="assignment-card completed">
-                            <div class="assignment-header">
-                                <h3 class="assignment-title">
-                                    <?php echo htmlspecialchars($assignment['Disaster_Name']); ?>
-                                </h3>
-                                <span class="assignment-status status-completed">Completed</span>
-                            </div>
-                            
-                            <div class="assignment-details">
-                                <div class="detail-item">
-                                    <i class="fas fa-hashtag"></i>
-                                    <span class="detail-label">Distribution ID:</span>
-                                    <span>DIST<?php echo str_pad($assignment['distribution_id'], 6, '0', STR_PAD_LEFT); ?></span>
-                                </div>
-                                <div class="detail-item">
-                                    <i class="fas fa-calendar"></i>
-                                    <span class="detail-label">Date:</span>
-                                    <span><?php echo date('d/m/Y', strtotime($assignment['date'])); ?></span>
-                                </div>
-                                <div class="detail-item">
-                                    <i class="fas fa-users"></i>
-                                    <span class="detail-label">Victims Helped:</span>
-                                    <span><?php echo $assignment['victims_helped'] ?? 0; ?> families</span>
-                                </div>
-                                <div class="detail-item">
-                                    <i class="fas fa-box"></i>
-                                    <span class="detail-label">Items Distributed:</span>
-                                    <span><?php echo $assignment['items_distributed'] ?? 0; ?> items</span>
-                                </div>
-                                <div class="detail-item">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <span class="detail-label">Location:</span>
-                                    <span><?php echo htmlspecialchars($assignment['disaster_location']); ?></span>
-                                </div>
-                            </div>
-                            
-                            <div class="assignment-actions">
-                                <button class="action-button view-btn" onclick="viewDistributionReport(<?php echo $assignment['distribution_id']; ?>)">
-                                    <i class="fas fa-chart-bar"></i> View Report
-                                </button>
-                                <button class="action-button details-btn" onclick="viewAssignmentDetails(<?php echo $assignment['distribution_id']; ?>)">
-                                    <i class="fas fa-info-circle"></i> Details
-                                </button>
-                            </div>
-                        </div>
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -2624,6 +2819,9 @@ if (isset($_GET['success'])) {
                 <div class="notification-item" style="text-align: center; color: #95a5a6;">
                     <i class="fas fa-bell-slash" style="font-size: 24px; margin-bottom: 10px;"></i>
                     <div>No new notifications</div>
+                </div>
+                <div class="notification-item" style="text-align: center; color: #95a5a6; font-size: 12px; padding: 10px;">
+                    Last checked: ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </div>
             `;
             

@@ -43,6 +43,67 @@ $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 $NGO_API_URL = 'http://10.147.17.30:8000/api_ngo.php';
 
+// ========================================
+// CRITICAL: GET DISTRIBUTION PLAN DATA
+// ========================================
+try {
+    // Get distribution details
+    $distribution_query = "
+        SELECT 
+            d.*,
+            dr.resource_name,
+            dr.quantity_allocated,
+            dr.is_special_request,
+            di.victim_id,
+            va.disaster_id
+        FROM distribution d
+        LEFT JOIN distribution_resources dr ON d.distribution_id = dr.distribution_id
+        LEFT JOIN distribution_items di ON d.distribution_id = di.distribution_id
+        LEFT JOIN victim_approvals va ON di.victim_id = va.victim_id
+        WHERE d.distribution_id = ?
+        ORDER BY dr.is_special_request, dr.resource_name
+    ";
+    
+    $stmt = $db->prepare($distribution_query);
+    $stmt->bind_param("i", $distribution_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $distribution_details = $result->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    
+    if (empty($distribution_details)) {
+        die("Error: Distribution plan not found.");
+    }
+    
+    // Get first row for basic info
+    $distribution_info = $distribution_details[0];
+    $distribution_date = $distribution_info['date'] ?? '';
+    $coordinator_name = $distribution_info['coordinator_name'] ?? '';
+    $coordinator_contact = $distribution_info['coordinator_contact'] ?? '';
+    $disaster_id = $distribution_info['disaster_id'] ?? 0;
+    $estimated_duration = $distribution_info['estimated_duration'] ?? 0;
+    $volunteers_needed = $distribution_info['volunteers_needed'] ?? 0;
+    $comments = $distribution_info['comments'] ?? '';
+    
+    // Parse distribution date and time
+    if ($distribution_date) {
+        $distribution_date_obj = new DateTime($distribution_date);
+        $distribution_date_formatted = $distribution_date_obj->format('Y-m-d');
+        $distribution_time_formatted = $distribution_date_obj->format('H:i');
+    }
+    
+    // Get unique victim IDs from this distribution
+    $victim_ids = [];
+    foreach ($distribution_details as $row) {
+        if ($row['victim_id'] && !in_array($row['victim_id'], $victim_ids)) {
+            $victim_ids[] = $row['victim_id'];
+        }
+    }
+    
+} catch (Exception $e) {
+    die("Error loading distribution plan: " . $e->getMessage());
+}
+
 // Fix missing columns in tables
 $tables_to_fix = [
     'distribution_tracking' => [
@@ -341,82 +402,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     if (isset($_POST['update_tracking'])) {
-        // Check if items have been dispatched first
-        $check_dispatched_query = "
-            SELECT COUNT(*) as dispatched_count 
-            FROM distribution_log 
-            WHERE distribution_id = ? 
-            AND volunteer_id = ?
-            AND shelter_name = ?
-            AND status = 'in_transit'
-        ";
+    // Check if items have been dispatched first
+    $check_dispatched_query = "
+        SELECT COUNT(*) as dispatched_count 
+        FROM distribution_log 
+        WHERE distribution_id = ? 
+        AND volunteer_id = ?
+        AND shelter_name = ?
+        AND status = 'in_transit'
+    ";
+    
+    $stmt = $db->prepare($check_dispatched_query);
+    $shelter_name_for_check = $_POST['shelter_name'] ?? '';
+    $stmt->bind_param("iis", $distribution_id, $volunteer_id, $shelter_name_for_check);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $dispatched_count = $row['dispatched_count'] ?? 0;
+    $stmt->close();
+    
+    if ($dispatched_count == 0) {
+        $error = "You must mark items as dispatched first before updating tracking. Please use the 'Mark as Dispatched' button below.";
+    } else {
+        $current_location = trim($_POST['current_location'] ?? '');
+        $tracking_notes = trim($_POST['tracking_notes'] ?? '');
+        $estimated_arrival = trim($_POST['estimated_arrival'] ?? '');
+        $status_update = trim($_POST['status_update'] ?? 'in_transit');
+        $latitude = floatval($_POST['latitude'] ?? 0);
+        $longitude = floatval($_POST['longitude'] ?? 0);
         
-        $stmt = $db->prepare($check_dispatched_query);
-        $shelter_name_for_check = $_POST['shelter_name'] ?? '';
-        $stmt->bind_param("iis", $distribution_id, $volunteer_id, $shelter_name_for_check);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $row = $result->fetch_assoc();
-        $dispatched_count = $row['dispatched_count'] ?? 0;
-        $stmt->close();
+        // FIX: Validate and sanitize status using exact ENUM values from database
+        $allowed_statuses = ['pending', 'departed', 'in_transit', 'arrived', 'delayed', 'completed', 'cancelled', 'scheduled', 'in_progress'];
+        $status_update = strtolower(trim($status_update));
         
-        if ($dispatched_count == 0) {
-            $error = "You must mark items as dispatched first before updating tracking. Please use the 'Mark as Dispatched' button below.";
-        } else {
-            $current_location = trim($_POST['current_location'] ?? '');
-            $tracking_notes = trim($_POST['tracking_notes'] ?? '');
-            $estimated_arrival = trim($_POST['estimated_arrival'] ?? '');
-            $status_update = trim($_POST['status_update'] ?? 'in_transit');
-            $latitude = floatval($_POST['latitude'] ?? 0);
-            $longitude = floatval($_POST['longitude'] ?? 0);
-            
-            // DEBUG: Let's see exactly what we're getting
-            error_log("DEBUG - Raw status received: '" . $status_update . "'");
-            error_log("DEBUG - Raw POST data: " . print_r($_POST, true));
-            
-            // Define valid ENUM values from database
-            $valid_enum_values = ['pending', 'departed', 'in_transit', 'arrived', 'delayed', 'completed', 'cancelled', 'scheduled', 'in_progress'];
-            
-            // Clean the status - remove any whitespace, convert to lowercase
-            $status_update = strtolower(trim($status_update));
-            $status_update = preg_replace('/\s+/', '_', $status_update); // Replace spaces with underscores
-            
-            error_log("DEBUG - After cleaning: '" . $status_update . "'");
-            
-            // DIRECT FIX: If it's not a valid ENUM, force it to 'in_transit'
-            if (!in_array($status_update, $valid_enum_values)) {
-                error_log("DEBUG - Status '" . $status_update . "' is not valid. Changing to 'in_transit'");
-                $status_update = 'in_transit';
-            }
-            
-            error_log("DEBUG - Final status to insert: '" . $status_update . "'");
-            
-            if (!empty($current_location)) {
-                try {
-                    $shelter_name_for_tracking = $_POST['shelter_name'] ?? '';
-                    
-                    // TEST QUERY FIRST - Let's see what we're trying to insert
-                    error_log("TEST - Attempting to insert with status: " . $status_update);
-                    
-                    // FIXED TRACKING QUERY with exact ENUM value
-                    $tracking_query = "INSERT INTO distribution_tracking (distribution_id, volunteer_id, shelter_name, current_location, tracking_notes, estimated_arrival, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
-                    $stmt = $db->prepare($tracking_query);
-                    
-                    // Debug the parameters
-                    error_log("DEBUG - Parameters: " . $distribution_id . ", " . $volunteer_id . ", " . $shelter_name_for_tracking . ", " . $current_location . ", " . $tracking_notes . ", " . $estimated_arrival . ", " . $status_update);
-                    
-                    $stmt->bind_param("iisssss", $distribution_id, $volunteer_id, $shelter_name_for_tracking, $current_location, $tracking_notes, $estimated_arrival, $status_update);
-                    
-                    if (!$stmt->execute()) {
-                        $error_msg = "Database error: " . $stmt->error;
-                        error_log("ERROR - " . $error_msg);
-                        throw new Exception($error_msg);
-                    }
-                    
-                    $tracking_id = $stmt->insert_id;
-                    $stmt->close();
-                    
-                    error_log("SUCCESS - Tracking inserted with ID: " . $tracking_id . " and status: " . $status_update);
+        // Remove any non-alphabet characters except underscore
+        $status_update = preg_replace('/[^a-z_]/', '', $status_update);
+        
+        // If status is empty or not valid, default to 'in_transit'
+        if (empty($status_update) || !in_array($status_update, $allowed_statuses)) {
+            $status_update = 'in_transit';
+        }
+        
+        // DEBUG: Log the status
+        error_log("Final status to insert: " . $status_update);
+        
+        if (!empty($current_location)) {
+            try {
+                $shelter_name_for_tracking = $_POST['shelter_name'] ?? '';
+                
+                // FIXED QUERY: Use prepared statement with correct status
+                $tracking_query = "INSERT INTO distribution_tracking 
+                    (distribution_id, volunteer_id, shelter_name, current_location, 
+                     tracking_notes, estimated_arrival, status, created_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
+                
+                $stmt = $db->prepare($tracking_query);
+                
+                // Bind parameters with correct types
+                $stmt->bind_param("iisssss", 
+                    $distribution_id, 
+                    $volunteer_id, 
+                    $shelter_name_for_tracking, 
+                    $current_location, 
+                    $tracking_notes, 
+                    $estimated_arrival, 
+                    $status_update
+                );
+                
+                if (!$stmt->execute()) {
+                    throw new Exception("Database error: " . $stmt->error);
+                }
+                
+                $tracking_id = $stmt->insert_id;
+                $stmt->close();
                     
                     // Also save to live tracking if coordinates are provided
                     if ($latitude != 0 && $longitude != 0) {
@@ -427,26 +485,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt->close();
                     }
                     
-                    // Update volunteer status in distribution_volunteer table
-                    $distribution_volunteer_status = 'Active';
-                    
-                    if ($status_update == 'departed' || $status_update == 'in_progress' || $status_update == 'in_transit') {
-                        $distribution_volunteer_status = 'In Progress';
-                    } elseif ($status_update == 'arrived') {
-                        $distribution_volunteer_status = 'Arrived';
-                    } elseif ($status_update == 'delayed') {
-                        $distribution_volunteer_status = 'Delayed';
-                    } elseif ($status_update == 'completed') {
-                        $distribution_volunteer_status = 'Completed';
-                    } elseif ($status_update == 'cancelled') {
-                        $distribution_volunteer_status = 'Cancelled';
-                    }
-                    
-                    $update_volunteer_status_query = "UPDATE distribution_volunteer SET status = ? WHERE distribution_id = ? AND volunteer_id = ?";
-                    $stmt = $db->prepare($update_volunteer_status_query);
-                    $stmt->bind_param("sii", $distribution_volunteer_status, $distribution_id, $volunteer_id);
-                    $stmt->execute();
-                    $stmt->close();
+$distribution_volunteer_status = 'Active';  // Default
+
+if ($status_update == 'departed' || $status_update == 'in_transit' || $status_update == 'arrived' || $status_update == 'delayed') {
+    $distribution_volunteer_status = 'Active';  // Keep as Active while in transit
+} elseif ($status_update == 'completed') {
+    $distribution_volunteer_status = 'Completed';  // ✓ Valid ENUM value
+} elseif ($status_update == 'cancelled') {
+    $distribution_volunteer_status = 'Cancelled';  // ✓ Valid ENUM value
+} elseif ($status_update == 'pending' || $status_update == 'scheduled') {
+    $distribution_volunteer_status = 'Assigned';  // ✓ Valid ENUM value
+}
+
+$update_volunteer_status_query = "UPDATE distribution_volunteer SET status = ? WHERE distribution_id = ? AND volunteer_id = ?";
+$stmt = $db->prepare($update_volunteer_status_query);
+$stmt->bind_param("sii", $distribution_volunteer_status, $distribution_id, $volunteer_id);
+$stmt->execute();
+$stmt->close();
                     
                     $success = "Tracking status updated successfully! (Status: " . ucfirst(str_replace('_', ' ', $status_update)) . ")";
                     
@@ -455,7 +510,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                 } catch (Exception $e) {
                     $error = "Error updating tracking: " . $e->getMessage();
-                    error_log("EXCEPTION - " . $e->getMessage());
                 }
             } else {
                 $error = "Please enter your current location.";
@@ -466,8 +520,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['prepare_distribution'])) {
         $selected_items = $_POST['distributed_items'] ?? [];
         $shelter_name_post = $_POST['shelter_name'] ?? '';
+        $selected_family_ids = isset($_POST['selected_family_ids']) ? explode(',', $_POST['selected_family_ids']) : [];
         
-        if (!empty($selected_items) && $shelter_name_post) {
+        if (!empty($selected_items) && $shelter_name_post && !empty($selected_family_ids)) {
             try {
                 $db->begin_transaction();
                 
@@ -478,7 +533,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $need_id = intval($parts[0] ?? 0);
                     $victim_id = intval($parts[1] ?? 0);
                     
-                    if ($need_id > 0 && $victim_id > 0) {
+                    // Only process if victim is in selected families
+                    if ($need_id > 0 && $victim_id > 0 && in_array($victim_id, $selected_family_ids)) {
                         $check_query = "SELECT id FROM distribution_log WHERE need_id = ? AND victim_id = ? AND shelter_name = ? AND distribution_id = ? AND volunteer_id = ?";
                         $stmt = $db->prepare($check_query);
                         $stmt->bind_param("iisii", $need_id, $victim_id, $shelter_name_post, $distribution_id, $volunteer_id);
@@ -527,7 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = "Error preparing items: " . $e->getMessage();
             }
         } else {
-            $error = "Please select at least one item to prepare for delivery.";
+            $error = "Please select at least one family and items to prepare for delivery.";
         }
     }
     
@@ -535,6 +591,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $selected_items = $_POST['delivered_items'] ?? [];
         $shelter_name_post = $_POST['shelter_name'] ?? '';
         $delivery_remarks = $_POST['delivery_remarks'] ?? '';
+        $selected_family_ids = isset($_POST['selected_family_ids']) ? explode(',', $_POST['selected_family_ids']) : [];
         
         $signature_image_path = null;
         $upload_errors = [];
@@ -579,6 +636,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $error = implode(" ", $upload_errors);
             }
+        } elseif (empty($selected_family_ids)) {
+            $error = "No families selected for delivery.";
         } else {
             try {
                 $db->begin_transaction();
@@ -590,7 +649,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $need_id = intval($parts[0] ?? 0);
                     $victim_id = intval($parts[1] ?? 0);
                     
-                    if ($need_id > 0 && $victim_id > 0) {
+                    // Only process if victim is in selected families
+                    if ($need_id > 0 && $victim_id > 0 && in_array($victim_id, $selected_family_ids)) {
                         $check_query = "SELECT id FROM distribution_log WHERE need_id = ? AND victim_id = ? AND shelter_name = ? AND distribution_id = ? AND volunteer_id = ?";
                         $stmt = $db->prepare($check_query);
                         $stmt->bind_param("iisii", $need_id, $victim_id, $shelter_name_post, $distribution_id, $volunteer_id);
@@ -653,7 +713,7 @@ function getUploadErrorMessage($error_code) {
 }
 
 /* ========================================
-   CHECK VOLUNTEER ASSIGNMENT
+   CHECK VOLUNTEER ASSIGNMENT (FINAL CORRECTED VERSION)
 ======================================== */
 $check_assignment = "
     SELECT dv.*, d.* 
@@ -661,7 +721,7 @@ $check_assignment = "
     JOIN distribution d ON dv.distribution_id = d.distribution_id
     WHERE dv.distribution_id = ? 
     AND dv.volunteer_id = ?
-    AND dv.status IN ('Assigned', 'Active', 'In Progress', 'Arrived', 'Delayed', 'Completed')
+    AND dv.status IN ('Assigned', 'Active', 'Completed')  -- Only statuses that exist in your ENUM
     LIMIT 1
 ";
 
@@ -673,65 +733,58 @@ $assignment = $result->fetch_assoc();
 $stmt->close();
 
 if (!$assignment) {
-    die("Error: You are not assigned to this distribution or assignment not found.");
-}
-
-/* ========================================
-   FETCH DATA FROM APIS
-======================================== */
-// Get disaster details
-$disaster_details = null;
-if (isset($assignment['disaster_id']) && $assignment['disaster_id']) {
-    $all_disasters = fetchAllFromAPI($DISASTER_API_URL);
-    if ($all_disasters['success'] && !empty($all_disasters['data'])) {
-        foreach ($all_disasters['data'] as $disaster) {
-            $disaster_id_from_api = $disaster['disaster_id'] ?? $disaster['Disaster_ID'] ?? $disaster['id'] ?? 0;
-            if (intval($disaster_id_from_api) == $assignment['disaster_id']) {
-                $disaster_details = $disaster;
-                break;
-            }
+    // If not assigned, auto-assign the volunteer
+    $auto_assign_query = "
+        INSERT INTO distribution_volunteer (
+            distribution_id, 
+            volunteer_id, 
+            status, 
+            assigned_timestamp
+        ) VALUES (?, ?, 'Assigned', NOW())
+    ";
+    
+    try {
+        $stmt = $db->prepare($auto_assign_query);
+        $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+        $stmt->execute();
+        $stmt->close();
+        
+        // Re-check assignment
+        $stmt = $db->prepare($check_assignment);
+        $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $assignment = $result->fetch_assoc();
+        $stmt->close();
+        
+    } catch (Exception $e) {
+        error_log("Auto-assign failed: " . $e->getMessage());
+        // Check if it's a duplicate entry error
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false) {
+            // Volunteer already assigned, just fetch the assignment
+            $stmt = $db->prepare($check_assignment);
+            $stmt->bind_param("ii", $distribution_id, $volunteer_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $assignment = $result->fetch_assoc();
+            $stmt->close();
+        } else {
+            $error = "Warning: Database error during assignment: " . $e->getMessage();
         }
     }
-}
-
-// Get volunteer details
-$volunteer_details = null;
-$all_volunteers = fetchAllFromAPI($VOLUNTEER_API_URL);
-if ($all_volunteers['success'] && !empty($all_volunteers['data'])) {
-    foreach ($all_volunteers['data'] as $volunteer) {
-        $volunteer_id_from_api = $volunteer['volunteer_id'] ?? $volunteer['Volunteer_ID'] ?? $volunteer['VolunteerID'] ?? $volunteer['id'] ?? 0;
-        if (intval($volunteer_id_from_api) == $volunteer_id) {
-            $volunteer_details = $volunteer;
-            break;
-        }
+    
+    if (!$assignment) {
+        // If still not assigned, create a minimal assignment object
+        $assignment = [
+            'status' => 'Assigned',
+            'distribution_id' => $distribution_id,
+            'volunteer_id' => $volunteer_id
+        ];
     }
-}
-
-// Get NGO details for this volunteer
-$ngo_details = null;
-if ($volunteer_details && isset($volunteer_details['AssignedNGO'])) {
-    $all_ngos = fetchAllFromAPI($NGO_API_URL);
-    if ($all_ngos['success'] && !empty($all_ngos['data'])) {
-        foreach ($all_ngos['data'] as $ngo) {
-            $ngo_id_from_api = $ngo['NGOID'] ?? $ngo['NGO_ID'] ?? $ngo['id'] ?? 0;
-            if (intval($ngo_id_from_api) == $volunteer_details['AssignedNGO']) {
-                $ngo_details = $ngo;
-                break;
-            }
-        }
-    }
-}
-
-// Get NGO coordinates for map (starting point)
-$ngo_coordinates = null;
-$ngo_address_for_display = "Distribution Center";
-if ($ngo_details) {
-    $ngo_address_for_display = $ngo_details['NGOName'] . " - " . $ngo_details['Address'];
-    $ngo_coordinates = getShelterCoordinates($ngo_details['NGOName'], $ngo_details['Address']);
 }
 
 // Update volunteer status to 'Active' if 'Assigned'
-if ($assignment['status'] == 'Assigned') {
+if ($assignment && $assignment['status'] == 'Assigned') {
     $update_status = "UPDATE distribution_volunteer SET status = 'Active' WHERE distribution_id = ? AND volunteer_id = ?";
     $stmt = $db->prepare($update_status);
     $stmt->bind_param("ii", $distribution_id, $volunteer_id);
@@ -777,6 +830,10 @@ function categorizeResource($resource_name) {
 }
 
 function getNeedStatus($need_id, $victim_id, $shelter_name, $distribution_id, $volunteer_id, $db) {
+    if (!$need_id || !$victim_id) {
+        return 'pending';
+    }
+    
     $check_log_query = "
         SELECT status 
         FROM distribution_log 
@@ -820,10 +877,53 @@ $api_needs = $needs_result['data'] ?? [];
 
 // Get all victims from API
 $all_victims = fetchAllFromAPI($VICTIM_API_URL);
-$shelter_victims = [];
+
+// Get assigned families for this distribution
+$assigned_families = [];
+$assigned_family_ids = [];
+
+// Get victim details for those in our distribution
+if ($all_victims['success'] && !empty($all_victims['data']) && !empty($victim_ids)) {
+    foreach ($all_victims['data'] as $victim) {
+        $victimId = intval($victim['victim_id'] ?? 0);
+        if (in_array($victimId, $victim_ids)) {
+            $assigned_families[] = [
+                'victim_id' => $victimId,
+                'full_name' => $victim['full_name'] ?? 'Unknown',
+                'selected_shelter' => $victim['selected_shelter'] ?? 'Unknown',
+                'family_members' => $victim['family_members'] ?? 1,
+                'has_baby' => isset($victim['has_baby']) && $victim['has_baby'] == 't',
+                'has_elderly' => isset($victim['has_elderly']) && $victim['has_elderly'] == 't',
+                'has_disabled' => isset($victim['has_disabled']) && $victim['has_disabled'] == 't',
+                'special_request' => $victim['special_request'] ?? ''
+            ];
+            $assigned_family_ids[] = $victimId;
+        }
+    }
+}
+
+// Group families by shelter
+$families_by_shelter = [];
+foreach ($assigned_families as $family) {
+    $shelter = $family['selected_shelter'];
+    if (!isset($families_by_shelter[$shelter])) {
+        $families_by_shelter[$shelter] = [];
+    }
+    $families_by_shelter[$shelter][] = $family;
+}
+
+// If shelter not selected, use first shelter with families
+if (!$shelter_name && !empty($families_by_shelter)) {
+    $first_shelter = array_key_first($families_by_shelter);
+    header("Location: execute_distribution.php?distribution_id=$distribution_id&shelter_name=" . urlencode($first_shelter));
+    exit;
+}
 
 if ($shelter_name) {
-    // Get or create shelter coordinates
+    // Get families in selected shelter
+    $shelter_victims = $families_by_shelter[$shelter_name] ?? [];
+    
+    // Get shelter coordinates
     $shelter_coordinates = getShelterCoordinates($shelter_name, $disaster_details['district'] ?? 'Melaka');
     
     // Store shelter coordinates in database
@@ -842,107 +942,41 @@ if ($shelter_name) {
     }
     $stmt->close();
     
-    /* ========================================
-       GET ASSIGNED VICTIMS FOR THIS DISTRIBUTION
-    ======================================== */
-    // Get victims assigned to this distribution
-    $assigned_victims_query = "
-        SELECT DISTINCT victim_id 
-        FROM distribution_items 
-        WHERE distribution_id = ?
-    ";
-    $stmt = $db->prepare($assigned_victims_query);
-    $stmt->bind_param("i", $distribution_id);
-    $stmt->execute();
-    $assigned_result = $stmt->get_result();
-    $assigned_victim_ids = [];
-    while ($row = $assigned_result->fetch_assoc()) {
-        $assigned_victim_ids[] = $row['victim_id'];
-    }
-    $stmt->close();
-    
-    // Get victims in this shelter that are assigned to this distribution
-    if ($all_victims['success'] && !empty($all_victims['data'])) {
-        foreach ($all_victims['data'] as $victim) {
-            $victim_shelter = $victim['selected_shelter'] ?? $victim['shelter'] ?? '';
-            $victim_id_from_api = $victim['victim_id'] ?? $victim['Victim_ID'] ?? 0;
-            
-            if ($victim_shelter == $shelter_name && in_array($victim_id_from_api, $assigned_victim_ids)) {
-                $shelter_victims[] = [
-                    'victim_id' => $victim_id_from_api,
-                    'name' => $victim['full_name'] ?? $victim['FullName'] ?? 'Unknown',
-                    'family_members' => $victim['family_members'] ?? $victim['FamilyMembers'] ?? 1,
-                    'special_needs' => $victim['special_request'] ?? $victim['SpecialRequest'] ?? '',
-                    'has_baby' => isset($victim['has_baby']) && $victim['has_baby'] == 't',
-                    'has_elderly' => isset($victim['has_elderly']) && $victim['has_elderly'] == 't',
-                    'has_disabled' => isset($victim['has_disabled']) && $victim['has_disabled'] == 't'
-                ];
-            }
-        }
-    }
-    
-    /* ========================================
-       GET ASSIGNED NEEDS FOR THIS DISTRIBUTION
-    ======================================== */
-    // Get needs assigned to this distribution
-    $assigned_needs_query = "
-        SELECT need_id, victim_id 
-        FROM distribution_items 
-        WHERE distribution_id = ?
-    ";
-    $stmt = $db->prepare($assigned_needs_query);
-    $stmt->bind_param("i", $distribution_id);
-    $stmt->execute();
-    $assigned_needs_result = $stmt->get_result();
-    $assigned_needs = [];
-    while ($row = $assigned_needs_result->fetch_assoc()) {
-        $assigned_needs[$row['need_id']] = $row['victim_id'];
-    }
-    $stmt->close();
-    
-    // Get needs for victims in this shelter that are assigned to this distribution
-    $needs_data = [];
+    // Get needs for victims in this shelter
     if (!empty($shelter_victims) && !empty($api_needs)) {
-        foreach ($shelter_victims as $victim) {
-            $victim_id = $victim['victim_id'];
-            
+        $shelter_victim_ids = array_column($shelter_victims, 'victim_id');
+        
+        foreach ($shelter_victim_ids as $victim_id) {
             // Find needs for this victim
             foreach ($api_needs as $api_need) {
                 $need_victim_id = $api_need['victim_id'] ?? 0;
-                $need_shelter = $api_need['selected_shelter'] ?? '';
-                $need_id = $api_need['need_id'] ?? 0;
                 
-                // Check if this need is assigned to this distribution
-                if (intval($need_victim_id) == $victim_id && 
-                    $need_shelter == $shelter_name &&
-                    isset($assigned_needs[$need_id])) {
-                    
+                if (intval($need_victim_id) == $victim_id) {
                     $resource_name = $api_need['temp_resource_name'] ?? $api_need['ResourceName'] ?? $api_need['resource_name'] ?? 'Resource';
                     
-                    // Split multiple resources if needed
-                    $resources = explode("\n", $resource_name);
-                    foreach ($resources as $resource) {
-                        $resource = trim($resource);
-                        if (!$resource) continue;
-                        
-                        $quantity = $api_need['quantity_needed'] ?? 1;
-                        $priority = $api_need['priority'] ?? 'Medium';
-                        
-                        $needs_data[] = [
-                            'need_id' => $need_id,
-                            'victim_id' => $victim_id,
-                            'resource_name' => $resource,
-                            'quantity_needed' => $quantity,
-                            'unit' => 'units',
-                            'type' => categorizeResource($resource),
-                            'priority' => $priority,
-                            'need_status' => getNeedStatus($need_id, $victim_id, $shelter_name, $distribution_id, $volunteer_id, $db),
-                            'api_status' => $api_need['Status'] ?? $api_need['status'] ?? 'Pending',
-                            'victim_name' => $victim['name'],
-                            'family_members' => $victim['family_members'],
-                            'has_special_needs' => !empty($victim['special_needs'])
-                        ];
-                    }
+                    // Get victim info
+                    $victim_info = array_filter($shelter_victims, function($v) use ($victim_id) {
+                        return $v['victim_id'] == $victim_id;
+                    });
+                    $victim_info = reset($victim_info);
+                    
+                    $needs_data[] = [
+                        'need_id' => $api_need['need_id'] ?? 0,
+                        'victim_id' => $victim_id,
+                        'resource_name' => $resource_name,
+                        'quantity_needed' => $api_need['quantity_needed'] ?? 1,
+                        'unit' => 'units',
+                        'type' => categorizeResource($resource_name),
+                        'priority' => $api_need['priority'] ?? 'Medium',
+                        'need_status' => getNeedStatus($api_need['need_id'] ?? 0, $victim_id, $shelter_name, $distribution_id, $volunteer_id, $db),
+                        'api_status' => $api_need['Status'] ?? $api_need['status'] ?? 'Pending',
+                        'victim_name' => $victim_info['full_name'] ?? 'Unknown',
+                        'family_members' => $victim_info['family_members'] ?? 1,
+                        'has_baby' => $victim_info['has_baby'] ?? false,
+                        'has_elderly' => $victim_info['has_elderly'] ?? false,
+                        'has_disabled' => $victim_info['has_disabled'] ?? false,
+                        'special_request' => $victim_info['special_request'] ?? ''
+                    ];
                 }
             }
         }
@@ -980,32 +1014,7 @@ if ($shelter_name) {
     }
     
 } else {
-    // No shelter selected, get list of shelters from assigned victims
-    $shelters_with_assigned_victims = [];
-    
-    // Get shelters with victims assigned to this distribution
-    if (!empty($assigned_victim_ids)) {
-        $shelter_list_query = "
-            SELECT DISTINCT v.selected_shelter 
-            FROM victims v 
-            WHERE v.victim_id IN (" . implode(',', array_map('intval', $assigned_victim_ids)) . ")
-            AND v.selected_shelter IS NOT NULL 
-            AND v.selected_shelter != ''
-        ";
-        $shelter_result = $db->query($shelter_list_query);
-        while ($row = $shelter_result->fetch_assoc()) {
-            $shelters_with_assigned_victims[] = $row['selected_shelter'];
-        }
-    }
-    
-    if (!empty($shelters_with_assigned_victims)) {
-        // Select the first shelter
-        $shelter_name = $shelters_with_assigned_victims[0];
-        header("Location: execute_distribution.php?distribution_id=$distribution_id&shelter_name=" . urlencode($shelter_name));
-        exit;
-    } else {
-        $error = "No shelters with assigned victims found for this distribution.";
-    }
+    $error = "No shelters with assigned victims found for this distribution.";
 }
 
 /* ========================================
@@ -1077,6 +1086,17 @@ if (!empty($needs_data)) {
     }
 }
 
+// Check for pending items
+$has_pending_items = false;
+if (!empty($needs_data)) {
+    foreach ($needs_data as $need) {
+        if ($need['need_status'] == 'pending') {
+            $has_pending_items = true;
+            break;
+        }
+    }
+}
+
 /* ========================================
    GET STATISTICS FOR SHELTERS
 ======================================== */
@@ -1126,19 +1146,6 @@ $stmt->execute();
 $result = $stmt->get_result();
 $personal_stats = $result->fetch_assoc();
 $stmt->close();
-
-$has_pending_items = false;
-$has_in_transit_items = false;
-if (!empty($needs_data)) {
-    foreach ($needs_data as $need) {
-        if ($need['need_status'] == 'pending') {
-            $has_pending_items = true;
-        }
-        if ($need['need_status'] == 'in_transit') {
-            $has_in_transit_items = true;
-        }
-    }
-}
 
 $progress = min(max($progress, 0), 100);
 ?>
@@ -2027,6 +2034,55 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
+        /* Family Card Styles */
+        .family-card {
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            background: #f8f9fa;
+            cursor: pointer;
+        }
+        
+        .family-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        
+        .family-card.selected {
+            border-color: var(--primary);
+            background: linear-gradient(135deg, rgba(67, 97, 238, 0.05), rgba(114, 9, 183, 0.05));
+            box-shadow: 0 5px 15px rgba(67, 97, 238, 0.1);
+        }
+        
+        .family-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: transparent;
+            transition: var(--transition);
+        }
+        
+        .family-card.selected::before {
+            background: var(--primary);
+        }
+        
+        /* Family Counter Badge */
+        .family-counter {
+            background: var(--primary);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
         /* Responsive */
         @media (max-width: 768px) {
             .container {
@@ -2067,6 +2123,15 @@ $progress = min(max($progress, 0), 100);
                 text-align: center;
             }
         }
+        
+        /* Ensure items section is visible when shown */
+        #items-section[style*="display: block"] {
+            display: block !important;
+        }
+        
+        .item-card[style*="display: block"] {
+            display: block !important;
+        }
     </style>
 </head>
 <body>
@@ -2090,16 +2155,25 @@ $progress = min(max($progress, 0), 100);
                         <i class="fas fa-user-circle"></i>
                         <?php echo htmlspecialchars($volunteer_details['FullName'] ?? $volunteer_details['fullName'] ?? $volunteer_name); ?>
                     </h3>
-                    <?php if ($disaster_details): ?>
-                    <div style="color: var(--gray);">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <?php echo htmlspecialchars($disaster_details['disaster_name'] ?? $disaster_details['Disaster_Name'] ?? 'Disaster'); ?>
+                    
+                    <?php if ($distribution_date): ?>
+                    <div style="color: var(--info); margin-bottom: 5px;">
+                        <i class="fas fa-calendar"></i>
+                        Scheduled: <?php echo htmlspecialchars($distribution_date_formatted ?? ''); ?> at <?php echo htmlspecialchars($distribution_time_formatted ?? ''); ?>
                     </div>
                     <?php endif; ?>
-                    <?php if ($ngo_details): ?>
-                    <div style="color: var(--info); margin-top: 5px;">
-                        <i class="fas fa-hands-helping"></i>
-                        <?php echo htmlspecialchars($ngo_details['NGOName'] ?? 'NGO'); ?>
+                    
+                    <?php if ($coordinator_name): ?>
+                    <div style="color: var(--success); margin-bottom: 5px;">
+                        <i class="fas fa-user-tie"></i>
+                        Coordinator: <?php echo htmlspecialchars($coordinator_name); ?>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if ($estimated_duration): ?>
+                    <div style="color: var(--warning);">
+                        <i class="fas fa-clock"></i>
+                        Estimated Duration: <?php echo $estimated_duration; ?> hours
                     </div>
                     <?php endif; ?>
                 </div>
@@ -2112,11 +2186,63 @@ $progress = min(max($progress, 0), 100);
                         <div>
                             <strong>Current Shelter:</strong>
                             <div><?php echo htmlspecialchars($shelter_name); ?></div>
+                            <div style="font-size: 0.8rem; opacity: 0.9;">
+                                <?php echo $shelter_data['total_families'] ?? 0; ?> assigned families
+                            </div>
                         </div>
                     </div>
                 </div>
                 <?php endif; ?>
             </div>
+            
+            <!-- Distribution Plan Summary -->
+            <?php if (!empty($distribution_details) && !empty($victim_ids)): ?>
+            <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee;">
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="background: var(--primary); color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.9rem; color: var(--gray);">Total Families</div>
+                            <div style="font-weight: bold; color: var(--dark);"><?php echo count($victim_ids); ?></div>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="background: var(--info); color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-box"></i>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.9rem; color: var(--gray);">Resource Types</div>
+                            <div style="font-weight: bold; color: var(--dark);">
+                                <?php 
+                                $resource_count = 0;
+                                $unique_resources = [];
+                                foreach ($distribution_details as $row) {
+                                    if ($row['resource_name'] && !in_array($row['resource_name'], $unique_resources)) {
+                                        $unique_resources[] = $row['resource_name'];
+                                        $resource_count++;
+                                    }
+                                }
+                                echo $resource_count;
+                                ?>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="background: var(--success); color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-map-marker-alt"></i>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.9rem; color: var(--gray);">Shelters</div>
+                            <div style="font-weight: bold; color: var(--dark);"><?php echo count($families_by_shelter); ?></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
         
         <!-- Progress Section -->
@@ -2233,9 +2359,9 @@ $progress = min(max($progress, 0), 100);
                 <div style="display: flex; gap: 20px; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 250px;">
                         <div class="step-number">1</div>
-                        <span style="font-weight: 600; color: var(--dark);">Select shelter items below</span>
+                        <span style="font-weight: 600; color: var(--dark);">Select families and their items below</span>
                         <p style="color: var(--gray); margin-top: 5px; font-size: 0.9rem;">
-                            Check all items for the shelter
+                            Choose which families to deliver to first
                         </p>
                     </div>
                     <div style="flex: 1; min-width: 250px;">
@@ -2268,9 +2394,9 @@ $progress = min(max($progress, 0), 100);
                 <p style="color: var(--gray); margin-bottom: 20px; max-width: 300px;">
                     Please mark items as dispatched first to unlock live tracking features.
                 </p>
-                <a href="#items-section" class="btn btn-warning" style="padding: 10px 20px;">
+                <a href="#family-selection-section" class="btn btn-warning" style="padding: 10px 20px;">
                     <i class="fas fa-arrow-down"></i>
-                    Go to Items Section
+                    Go to Family Selection
                 </a>
             </div>
             <?php endif; ?>
@@ -2347,30 +2473,29 @@ $progress = min(max($progress, 0), 100);
                             Select your current delivery status to the shelter
                         </div>
                         
-                        <!-- In your HTML, ensure buttons have exact ENUM values -->
-<div class="status-buttons">
-    <button type="button" class="status-btn" data-status="departed" onclick="selectStatus('departed', this)">
-        <i class="fas fa-flag-checkered status-icon"></i>
-        <span class="status-label">Just Departed</span>
-    </button>
-    <button type="button" class="status-btn active" data-status="in_transit" onclick="selectStatus('in_transit', this)">
-        <i class="fas fa-truck-moving status-icon"></i>
-        <span class="status-label">On The Way</span>
-    </button>
-    <button type="button" class="status-btn" data-status="arrived" onclick="selectStatus('arrived', this)">
-        <i class="fas fa-check-circle status-icon"></i>
-        <span class="status-label">Arrived at Shelter</span>
-    </button>
-    <button type="button" class="status-btn" data-status="delayed" onclick="selectStatus('delayed', this)">
-        <i class="fas fa-exclamation-triangle status-icon"></i>
-        <span class="status-label">Delayed</span>
-    </button>
-    <button type="button" class="status-btn" data-status="completed" onclick="selectStatus('completed', this)">
-        <i class="fas fa-check-double status-icon"></i>
-        <span class="status-label">Completed</span>
-    </button>
-</div>
-<input type="hidden" name="status_update" id="statusUpdate" value="in_transit">
+                        <div class="status-buttons">
+                            <button type="button" class="status-btn" data-status="departed" onclick="selectStatus('departed', this)">
+                                <i class="fas fa-flag-checkered status-icon"></i>
+                                <span class="status-label">Just Departed</span>
+                            </button>
+                            <button type="button" class="status-btn active" data-status="in_transit" onclick="selectStatus('in_transit', this)">
+                                <i class="fas fa-truck-moving status-icon"></i>
+                                <span class="status-label">On The Way</span>
+                            </button>
+                            <button type="button" class="status-btn" data-status="arrived" onclick="selectStatus('arrived', this)">
+                                <i class="fas fa-check-circle status-icon"></i>
+                                <span class="status-label">Arrived at Shelter</span>
+                            </button>
+                            <button type="button" class="status-btn" data-status="delayed" onclick="selectStatus('delayed', this)">
+                                <i class="fas fa-exclamation-triangle status-icon"></i>
+                                <span class="status-label">Delayed</span>
+                            </button>
+                            <button type="button" class="status-btn" data-status="completed" onclick="selectStatus('completed', this)">
+                                <i class="fas fa-check-double status-icon"></i>
+                                <span class="status-label">Completed</span>
+                            </button>
+                        </div>
+                        <input type="hidden" name="status_update" id="statusUpdate" value="in_transit">
                     </div>
                     
                     <!-- Step 2: Location Details -->
@@ -2443,95 +2568,167 @@ $progress = min(max($progress, 0), 100);
             </div>
         </div>
         
-        <!-- Shelter Information -->
-        <?php if ($shelter_data): ?>
-        <div class="simple-form" style="border-color: var(--shelter);">
-            <div class="step-title" style="border-color: var(--shelter); color: var(--shelter);">
-                <i class="fas fa-home"></i>
-                Shelter Information: <?php echo htmlspecialchars($shelter_name); ?>
+        <!-- Shelter Families Selection Section - ONLY SHOW IF ITEMS NOT DISPATCHED -->
+        <?php if ($shelter_data && !$items_dispatched && $has_pending_items): ?>
+        <div class="simple-form" style="border-color: var(--info); margin-top: 30px;" id="family-selection-section">
+            <div class="step-title" style="border-color: var(--info);">
+                <i class="fas fa-users"></i>
+                Step 1: Select Assigned Families to Deliver To
+                <span style="font-size: 0.9rem; color: var(--gray); margin-left: 15px;">
+                    (You have <?php echo count($shelter_victims); ?> assigned families in this shelter)
+                </span>
             </div>
             
-            <div class="victim-info-grid">
-                <div class="info-item">
-                    <div class="info-label">
-                        <i class="fas fa-users"></i>
-                        Families in Shelter
-                    </div>
-                    <div class="info-value">
-                        <?php echo $shelter_data['total_families']; ?> families
-                    </div>
+            <div class="alert alert-info">
+                <div class="alert-icon">
+                    <i class="fas fa-info-circle"></i>
                 </div>
-                
-                <div class="info-item">
-                    <div class="info-label">
-                        <i class="fas fa-user-friends"></i>
-                        Total People
-                    </div>
-                    <div class="info-value">
-                        <?php echo $shelter_data['total_people']; ?> people
-                    </div>
-                </div>
-                
-                <div class="info-item">
-                    <div class="info-label">
-                        <i class="fas fa-map-marker-alt"></i>
-                        District
-                    </div>
-                    <div class="info-value">
-                        <?php echo htmlspecialchars($shelter_data['district']); ?>
-                    </div>
-                </div>
-                
-                <div class="info-item">
-                    <div class="info-label">
-                        <i class="fas fa-boxes"></i>
-                        Total Needs
-                    </div>
-                    <div class="info-value">
-                        <?php echo $shelter_data['total_needs']; ?> items
-                    </div>
+                <div>
+                    <strong>Select assigned families to deliver to:</strong> Choose one or more families to see their specific needs.
+                    Items will only be shown for selected families below.
                 </div>
             </div>
             
-            <!-- Shelter Victims Summary -->
-            <?php if (!empty($shelter_victims)): ?>
-            <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #eee;">
-                <div class="step-title" style="font-size: 1.1rem; color: var(--dark);">
-                    <i class="fas fa-users"></i>
-                    Families in this Shelter (Assigned to this Distribution)
+            <div id="familySelectionContainer">
+                <?php if (empty($shelter_victims)): ?>
+                <div style="text-align: center; padding: 40px 20px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 3rem; color: var(--info); margin-bottom: 15px;">
+                        <i class="fas fa-users-slash"></i>
+                    </div>
+                    <h3 style="color: var(--dark); margin-bottom: 10px;">No Assigned Families</h3>
+                    <p style="color: var(--gray); margin-bottom: 25px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                        You don't have any families assigned to you in <strong><?php echo htmlspecialchars($shelter_name); ?></strong> 
+                        for this distribution. Please contact your coordinator if you believe this is an error.
+                    </p>
                 </div>
-                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 15px;">
-                    <?php foreach ($shelter_victims as $victim): ?>
-                    <div style="background: #f8f9fa; padding: 10px; border-radius: 6px; border-left: 3px solid var(--info);">
-                        <div style="font-weight: 600; color: var(--dark);">
-                            <?php echo htmlspecialchars($victim['name']); ?>
+                <?php else: ?>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; margin-top: 15px;">
+                    <?php 
+                    $victim_counter = 0;
+                    $total_assigned_families = count($shelter_victims);
+                    foreach ($shelter_victims as $victim): 
+                        $family_id = 'family_' . $victim_counter;
+                        $victim_counter++;
+                    ?>
+                    <div class="family-card" onclick="toggleFamilySelection('<?php echo $family_id; ?>')"
+                         id="<?php echo $family_id; ?>_card">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                            <div>
+                                <div style="font-weight: 600; color: var(--dark); font-size: 1.1rem;">
+                                    <?php echo htmlspecialchars($victim['full_name']); ?>
+                                </div>
+                                <div style="font-size: 0.9rem; color: var(--gray); margin-top: 5px;">
+                                    <i class="fas fa-user-friends"></i> <?php echo $victim['family_members']; ?> family members
+                                </div>
+                            </div>
+                            <input type="checkbox" 
+                                   name="selected_families[]" 
+                                   value="<?php echo $victim['victim_id']; ?>"
+                                   id="<?php echo $family_id; ?>"
+                                   style="transform: scale(1.3); accent-color: var(--primary);"
+                                   onchange="updateFamilyCard('<?php echo $family_id; ?>')">
                         </div>
-                        <div style="font-size: 0.85rem; color: var(--gray); margin-top: 5px;">
-                            <i class="fas fa-user-friends"></i> <?php echo $victim['family_members']; ?> members
+                        
+                        <!-- Family Special Needs Indicators -->
+                        <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
                             <?php if ($victim['has_baby']): ?>
-                            <span class="badge-shelter" style="margin-left: 5px;">Baby</span>
+                            <span class="badge-shelter" style="font-size: 0.8rem; padding: 3px 8px;">
+                                <i class="fas fa-baby"></i> Has Baby
+                            </span>
                             <?php endif; ?>
                             <?php if ($victim['has_elderly']): ?>
-                            <span class="badge-shelter" style="margin-left: 5px;">Elderly</span>
+                            <span class="badge-shelter" style="font-size: 0.8rem; padding: 3px 8px;">
+                                <i class="fas fa-wheelchair"></i> Has Elderly
+                            </span>
                             <?php endif; ?>
                             <?php if ($victim['has_disabled']): ?>
-                            <span class="badge-shelter" style="margin-left: 5px;">Disabled</span>
+                            <span class="badge-shelter" style="font-size: 0.8rem; padding: 3px 8px;">
+                                <i class="fas fa-universal-access"></i> Has Disabled
+                            </span>
+                            <?php endif; ?>
+                            <?php if (!empty($victim['special_request'])): ?>
+                            <span class="badge-shelter" style="font-size: 0.8rem; padding: 3px 8px;">
+                                <i class="fas fa-star"></i> Special Needs
+                            </span>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <!-- Family Needs Count -->
+                        <?php 
+                        $family_needs_count = 0;
+                        $family_pending_needs = 0;
+                        $family_in_transit_needs = 0;
+                        $family_completed_needs = 0;
+                        
+                        if (!empty($needs_data)) {
+                            foreach ($needs_data as $need) {
+                                if ($need['victim_id'] == $victim['victim_id']) {
+                                    $family_needs_count++;
+                                    if ($need['need_status'] == 'pending') {
+                                        $family_pending_needs++;
+                                    } elseif ($need['need_status'] == 'in_transit') {
+                                        $family_in_transit_needs++;
+                                    } elseif ($need['need_status'] == 'fulfilled') {
+                                        $family_completed_needs++;
+                                    }
+                                }
+                            }
+                        }
+                        ?>
+                        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #e0e0e0;">
+                            <div style="font-size: 0.9rem; color: var(--dark); margin-bottom: 5px;">
+                                <i class="fas fa-boxes"></i> 
+                                <strong><?php echo $family_needs_count; ?></strong> total items
+                            </div>
+                            <?php if ($family_pending_needs > 0): ?>
+                            <div style="font-size: 0.85rem; color: var(--warning);">
+                                <i class="fas fa-clock"></i> <?php echo $family_pending_needs; ?> pending
+                            </div>
+                            <?php endif; ?>
+                            <?php if ($family_in_transit_needs > 0): ?>
+                            <div style="font-size: 0.85rem; color: var(--info);">
+                                <i class="fas fa-truck-moving"></i> <?php echo $family_in_transit_needs; ?> in transit
+                            </div>
+                            <?php endif; ?>
+                            <?php if ($family_completed_needs > 0): ?>
+                            <div style="font-size: 0.85rem; color: var(--success);">
+                                <i class="fas fa-check-circle"></i> <?php echo $family_completed_needs; ?> delivered
+                            </div>
                             <?php endif; ?>
                         </div>
                     </div>
                     <?php endforeach; ?>
                 </div>
+                
+                <?php if ($total_assigned_families > 0): ?>
+                <div style="display: flex; gap: 15px; margin-top: 25px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-outline" onclick="selectAllFamilies()">
+                        <i class="fas fa-check-double"></i>
+                        Select All Families (<?php echo $total_assigned_families; ?>)
+                    </button>
+                    <button type="button" class="btn btn-primary" onclick="viewSelectedFamiliesItems()" id="viewItemsBtn">
+                        <i class="fas fa-eye"></i>
+                        View Items for Selected Families
+                    </button>
+                </div>
+                <?php endif; ?>
+                <?php endif; ?>
             </div>
-            <?php endif; ?>
         </div>
         <?php endif; ?>
         
-        <!-- Items Management Section -->
-        <?php if ($shelter_data && ($has_pending_items || $has_in_transit_items)): ?>
-        <div class="simple-form" style="margin-top: 30px; border-color: var(--warning);" id="items-section">
+        <!-- Items Management Section (Initially Hidden) - ONLY SHOW IF ITEMS NOT DISPATCHED -->
+        <?php if ($shelter_data && $has_pending_items && !$items_dispatched && !empty($shelter_victims)): ?>
+        <div class="simple-form" style="margin-top: 30px; border-color: var(--warning); display: none;" id="items-section">
             <div class="step-title" style="border-color: var(--warning);">
                 <i class="fas fa-boxes"></i>
-                Shelter Items Management (Assigned to this Distribution)
+                Items for Selected Assigned Families
+                <span style="font-size: 0.9rem; color: var(--gray); margin-left: 15px;">
+                    (<span id="selectedFamiliesCount">0</span> families selected, <span id="selectedItemsCount">0</span> items)
+                </span>
+                <button type="button" class="btn btn-outline" onclick="resetFamilyFilter()" style="margin-left: auto; padding: 8px 15px; font-size: 0.9rem;">
+                    <i class="fas fa-times"></i> Reset Filter
+                </button>
             </div>
             
             <?php if ($has_pending_items): ?>
@@ -2540,16 +2737,15 @@ $progress = min(max($progress, 0), 100);
                     <i class="fas fa-info-circle"></i>
                 </div>
                 <div>
-                    <strong>Ready to deliver to shelter?</strong> Select items to mark as dispatched when you're ready to leave for <strong><?php echo htmlspecialchars($shelter_name); ?></strong>.
-                    <?php if (!$items_dispatched): ?>
+                    <strong>Ready to deliver to selected assigned families?</strong> Select items to mark as dispatched when you're ready to leave for <strong><?php echo htmlspecialchars($shelter_name); ?></strong>.
                     <br><strong style="color: var(--warning);">This must be done before using live tracking.</strong>
-                    <?php endif; ?>
                 </div>
             </div>
             
             <form method="POST" id="prepareForm">
                 <input type="hidden" name="prepare_distribution" value="1">
                 <input type="hidden" name="shelter_name" value="<?php echo htmlspecialchars($shelter_name); ?>">
+                <input type="hidden" name="selected_family_ids" id="selectedFamilyIds" value="">
                 
                 <div class="item-grid">
                     <?php foreach ($needs_data as $need): 
@@ -2558,7 +2754,9 @@ $progress = min(max($progress, 0), 100);
                     ?>
                     <div class="item-card" 
                          onclick="toggleItemSelection(this, '<?php echo htmlspecialchars($item_value); ?>')"
-                         id="item-<?php echo htmlspecialchars($item_value); ?>">
+                         id="item-<?php echo htmlspecialchars($item_value); ?>"
+                         data-family-id="<?php echo $need['victim_id']; ?>"
+                         style="display: none;">
                         <div class="item-header">
                             <div class="item-name">
                                 <?php echo htmlspecialchars($need['resource_name']); ?>
@@ -2585,10 +2783,13 @@ $progress = min(max($progress, 0), 100);
                         <div class="victim-info">
                             <div style="font-size: 0.9rem; color: var(--dark);">
                                 <i class="fas fa-user"></i> <?php echo htmlspecialchars($need['victim_name']); ?>
+                                <span style="font-size: 0.8rem; color: var(--gray); margin-left: 10px;">
+                                    (Family ID: <?php echo $need['victim_id']; ?>)
+                                </span>
                             </div>
                             <div style="font-size: 0.8rem; color: var(--gray); margin-top: 5px;">
                                 Family: <?php echo $need['family_members']; ?> members
-                                <?php if ($need['has_special_needs']): ?>
+                                <?php if (!empty($need['special_request'])): ?>
                                 <span class="badge-shelter" style="margin-left: 5px;">Special Needs</span>
                                 <?php endif; ?>
                             </div>
@@ -2606,135 +2807,155 @@ $progress = min(max($progress, 0), 100);
                         <i class="fas fa-check-double"></i>
                         Select All Items
                     </button>
-                    <button type="submit" class="btn btn-warning">
+                    <button type="submit" class="btn btn-warning" onclick="return prepareSelectedFamiliesItems()">
                         <i class="fas fa-truck-loading"></i>
-                        Mark as Dispatched (Leaving for Shelter)
+                        Mark as Dispatched for Selected Families
                     </button>
                 </div>
             </form>
             <?php endif; ?>
+        </div>
+        <?php endif; ?>
+        
+        <!-- Delivery Completion Section - SHOW WHEN ITEMS ARE IN TRANSIT -->
+        <?php if ($shelter_data && $has_in_transit_items && $items_dispatched): ?>
+        <div class="simple-form" style="border-color: var(--success); margin-top: 30px;" id="delivery-completion-section">
+            <div class="step-title" style="border-color: var(--success);">
+                <i class="fas fa-check-circle"></i>
+                Complete Delivery to Shelter
+            </div>
             
-            <?php if ($has_in_transit_items): ?>
-            <div style="margin-top: 40px; padding-top: 30px; border-top: 2px solid var(--info);">
-                <div class="step-title" style="border-color: var(--info); color: var(--info);">
-                    <i class="fas fa-check-circle"></i>
-                    Complete Shelter Delivery
+            <div class="alert alert-success">
+                <div class="alert-icon">
+                    <i class="fas fa-info-circle"></i>
                 </div>
-                <div class="alert alert-info">
-                    <div class="alert-icon">
-                        <i class="fas fa-info-circle"></i>
+                <div>
+                    <strong>Arrived at shelter?</strong> Mark items as delivered and get shelter coordinator confirmation.
+                    You have <strong><?php echo $dispatched_count; ?> items</strong> in transit for <strong><?php echo htmlspecialchars($shelter_name); ?></strong>.
+                </div>
+            </div>
+            
+            <form method="POST" id="completeForm" enctype="multipart/form-data">
+                <input type="hidden" name="complete_delivery" value="1">
+                <input type="hidden" name="shelter_name" value="<?php echo htmlspecialchars($shelter_name); ?>">
+                <input type="hidden" name="selected_family_ids" id="selectedFamilyIdsComplete" value="">
+                
+                <div class="item-grid">
+                    <?php 
+                    $in_transit_items_count = 0;
+                    foreach ($needs_data as $need): 
+                        if ($need['need_status'] == 'in_transit'):
+                            $in_transit_items_count++;
+                            $item_value = $need['need_id'] . '|' . $need['victim_id'];
+                    ?>
+                    <div class="item-card" style="border-color: var(--info); background: #e8f4fc;"
+                         id="delivery-<?php echo htmlspecialchars($item_value); ?>"
+                         data-family-id="<?php echo $need['victim_id']; ?>">
+                        <div class="item-header">
+                            <div class="item-name">
+                                <?php echo htmlspecialchars($need['resource_name']); ?>
+                                <?php if ($need['priority'] == 'High'): ?>
+                                <span class="badge-pending" style="background: #f8d7da; color: #721c24; margin-left: 5px;">HIGH</span>
+                                <?php endif; ?>
+                            </div>
+                            <input type="checkbox" 
+                                   name="delivered_items[]" 
+                                   value="<?php echo htmlspecialchars($item_value); ?>"
+                                   style="transform: scale(1.3); accent-color: var(--success);"
+                                   onchange="updateDeliveryCard(this)">
+                        </div>
+                        <div class="item-details">
+                            <div class="item-detail">
+                                <i class="fas fa-balance-scale"></i>
+                                <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
+                            </div>
+                            <div class="item-detail">
+                                <i class="fas fa-tag"></i>
+                                <?php echo htmlspecialchars($need['type']); ?>
+                            </div>
+                        </div>
+                        <div class="victim-info">
+                            <div style="font-size: 0.9rem; color: var(--dark);">
+                                <i class="fas fa-user"></i> <?php echo htmlspecialchars($need['victim_name']); ?>
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--gray); margin-top: 5px;">
+                                Family: <?php echo $need['family_members']; ?> members
+                                <?php if (!empty($need['special_request'])): ?>
+                                <span class="badge-shelter" style="margin-left: 5px;">Special Needs</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div style="margin-top: 15px;">
+                            <span class="badge-in-transit">In Transit</span>
+                        </div>
                     </div>
-                    <div>
-                        <strong>Arrived at shelter?</strong> Mark items as delivered and get shelter coordinator confirmation.
-                    </div>
+                    <?php endif; ?>
+                    <?php endforeach; ?>
                 </div>
                 
-                <form method="POST" id="completeForm" enctype="multipart/form-data">
-                    <input type="hidden" name="complete_delivery" value="1">
-                    <input type="hidden" name="shelter_name" value="<?php echo htmlspecialchars($shelter_name); ?>">
-                    
-                    <div class="item-grid">
-                        <?php foreach ($needs_data as $need): 
-                            if ($need['need_status'] == 'in_transit'):
-                                $item_value = $need['need_id'] . '|' . $need['victim_id'];
-                        ?>
-                        <div class="item-card" style="border-color: var(--info); background: #e8f4fc;"
-                             onclick="toggleDeliverySelection(this, '<?php echo htmlspecialchars($item_value); ?>')"
-                             id="delivery-<?php echo htmlspecialchars($item_value); ?>">
-                            <div class="item-header">
-                                <div class="item-name">
-                                    <?php echo htmlspecialchars($need['resource_name']); ?>
-                                    <?php if ($need['priority'] == 'High'): ?>
-                                    <span class="badge-pending" style="background: #f8d7da; color: #721c24; margin-left: 5px;">HIGH</span>
-                                    <?php endif; ?>
-                                </div>
-                                <input type="checkbox" 
-                                       name="delivered_items[]" 
-                                       value="<?php echo htmlspecialchars($item_value); ?>"
-                                       style="transform: scale(1.3); accent-color: var(--success);"
-                                       onchange="updateDeliveryCard(this)">
-                            </div>
-                            <div class="item-details">
-                                <div class="item-detail">
-                                    <i class="fas fa-balance-scale"></i>
-                                    <?php echo $need['quantity_needed']; ?> <?php echo $need['unit']; ?>
-                                </div>
-                                <div class="item-detail">
-                                    <i class="fas fa-tag"></i>
-                                    <?php echo htmlspecialchars($need['type']); ?>
-                                </div>
-                            </div>
-                            <div class="victim-info">
-                                <div style="font-size: 0.9rem; color: var(--dark);">
-                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($need['victim_name']); ?>
-                                </div>
-                                <div style="font-size: 0.8rem; color: var(--gray); margin-top: 5px;">
-                                    Family: <?php echo $need['family_members']; ?> members
-                                    <?php if ($need['has_special_needs']): ?>
-                                    <span class="badge-shelter" style="margin-left: 5px;">Special Needs</span>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                            <div style="margin-top: 15px;">
-                                <span class="badge-in-transit">In Transit</span>
-                            </div>
-                        </div>
-                        <?php endif; ?>
-                        <?php endforeach; ?>
+                <?php if ($in_transit_items_count > 0): ?>
+                <!-- DELIVERY NOTES -->
+                <div class="form-group" style="margin-top: 30px;">
+                    <label class="form-label" for="delivery_remarks">
+                        <i class="fas fa-comment-alt"></i>
+                        Delivery Notes (Optional)
+                    </label>
+                    <textarea id="delivery_remarks" name="delivery_remarks" class="form-control form-control-textarea" 
+                              placeholder="Any notes about the shelter delivery... (e.g., Shelter coordinator name, special instructions, observations)"></textarea>
+                </div>
+                
+                <!-- SHELTER COORDINATOR CONFIRMATION -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-file-signature"></i>
+                        Shelter Coordinator Confirmation
+                    </label>
+                    <div class="upload-area" onclick="document.getElementById('signature_image').click()">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p style="font-weight: 600; margin-bottom: 5px;">Upload Shelter Coordinator Signature/Photo</p>
+                        <p style="font-size: 0.9rem; color: var(--gray);">
+                            Click to upload or drag and drop<br>
+                            Max 5MB • JPG, PNG, GIF, WebP
+                        </p>
                     </div>
                     
-                    <!-- DELIVERY NOTES -->
-                    <div class="form-group" style="margin-top: 30px;">
-                        <label class="form-label" for="delivery_remarks">
-                            <i class="fas fa-comment-alt"></i>
-                            Delivery Notes (Optional)
-                        </label>
-                        <textarea id="delivery_remarks" name="delivery_remarks" class="form-control form-control-textarea" 
-                                  placeholder="Any notes about the shelter delivery... (e.g., Shelter coordinator name, special instructions, observations)"></textarea>
+                    <input type="file" 
+                           name="signature_image" 
+                           id="signature_image" 
+                           accept="image/*"
+                           style="display: none;"
+                           onchange="previewSignatureImage(this)">
+                    
+                    <div class="image-preview" id="signaturePreview">
+                        <span style="color: var(--gray);">No image selected</span>
                     </div>
                     
-                    <!-- SHELTER COORDINATOR CONFIRMATION -->
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-file-signature"></i>
-                            Shelter Coordinator Confirmation
-                        </label>
-                        <div class="upload-area" onclick="document.getElementById('signature_image').click()">
-                            <i class="fas fa-cloud-upload-alt"></i>
-                            <p style="font-weight: 600; margin-bottom: 5px;">Upload Shelter Coordinator Signature/Photo</p>
-                            <p style="font-size: 0.9rem; color: var(--gray);">
-                                Click to upload or drag and drop<br>
-                                Max 5MB • JPG, PNG, GIF, WebP
-                            </p>
-                        </div>
-                        
-                        <input type="file" 
-                               name="signature_image" 
-                               id="signature_image" 
-                               accept="image/*"
-                               style="display: none;"
-                               onchange="previewSignatureImage(this)">
-                        
-                        <div class="image-preview" id="signaturePreview">
-                            <span style="color: var(--gray);">No image selected</span>
-                        </div>
-                        
-                        <div id="uploadError" style="color: var(--danger); font-size: 0.9rem; margin-top: 10px;"></div>
+                    <div id="uploadError" style="color: var(--danger); font-size: 0.9rem; margin-top: 10px;"></div>
+                </div>
+                
+                <div style="display: flex; gap: 15px; margin-top: 25px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-outline" onclick="selectAllDeliveryItems()">
+                        <i class="fas fa-check-double"></i>
+                        Select All Items
+                    </button>
+                    <button type="submit" class="btn btn-success" onclick="return completeDelivery()">
+                        <i class="fas fa-check-circle"></i>
+                        Mark as Delivered to Shelter
+                    </button>
+                </div>
+                <?php else: ?>
+                <div style="text-align: center; padding: 40px 20px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 3rem; color: var(--success); margin-bottom: 15px;">
+                        <i class="fas fa-check-circle"></i>
                     </div>
-                    
-                    <div style="display: flex; gap: 15px; margin-top: 25px; flex-wrap: wrap;">
-                        <button type="button" class="btn btn-outline" onclick="selectAllDeliveryItems()">
-                            <i class="fas fa-check-double"></i>
-                            Select All Items
-                        </button>
-                        <button type="submit" class="btn btn-success">
-                            <i class="fas fa-check-circle"></i>
-                            Mark as Delivered to Shelter
-                        </button>
-                    </div>
-                </form>
-            </div>
-            <?php endif; ?>
+                    <h3 style="color: var(--dark); margin-bottom: 10px;">No Items in Transit</h3>
+                    <p style="color: var(--gray); margin-bottom: 25px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                        All items for <strong><?php echo htmlspecialchars($shelter_name); ?></strong> have been processed.
+                        There are no items currently in transit.
+                    </p>
+                </div>
+                <?php endif; ?>
+            </form>
         </div>
         <?php elseif ($shelter_data && !$has_pending_items && !$has_in_transit_items): ?>
         <div class="simple-form" style="border-color: var(--success); text-align: center; padding: 50px 30px;">
@@ -2743,8 +2964,8 @@ $progress = min(max($progress, 0), 100);
             </div>
             <h3 style="color: var(--dark); margin-bottom: 15px;">All Items Delivered to Shelter!</h3>
             <p style="color: var(--gray); margin-bottom: 25px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                All relief items for <strong><?php echo htmlspecialchars($shelter_name); ?></strong> have been delivered successfully. 
-                <?php echo $shelter_data['total_families']; ?> families have received assistance. Thank you for your service!
+                All relief items for your assigned families in <strong><?php echo htmlspecialchars($shelter_name); ?></strong> have been delivered successfully. 
+                <?php echo $shelter_data['total_families']; ?> assigned families have received assistance. Thank you for your service!
             </p>
             <a href="execute_distribution.php?distribution_id=<?php echo $distribution_id; ?>" class="btn btn-primary" style="padding: 12px 30px;">
                 <i class="fas fa-home"></i>
@@ -2771,6 +2992,7 @@ $progress = min(max($progress, 0), 100);
         let searchTimeout = null;
         let itemsDispatched = <?php echo $items_dispatched ? 'true' : 'false'; ?>;
         let hasPendingItems = <?php echo $has_pending_items ? 'true' : 'false'; ?>;
+        let selectedFamilies = new Set();
         
         // NGO coordinates
         const ngoLat = <?php echo $ngo_coordinates['lat'] ?? 2.1896; ?>;
@@ -2784,10 +3006,18 @@ $progress = min(max($progress, 0), 100);
         const shelterLng = <?php echo $shelter_data['longitude']; ?>;
         const shelterName = "<?php echo addslashes($shelter_name); ?>";
         const shelterDistrict = "<?php echo addslashes($shelter_data['district'] ?? 'Melaka'); ?>";
+        const totalShelterFamilies = <?php echo $shelter_data['total_families'] ?? 0; ?>;
         <?php endif; ?>
         
+        // Distribution info
+        const distributionDate = "<?php echo $distribution_date_formatted ?? ''; ?>";
+        const distributionTime = "<?php echo $distribution_time_formatted ?? ''; ?>";
+        const coordinatorName = "<?php echo addslashes($coordinator_name); ?>";
+        const totalDistributionFamilies = <?php echo count($victim_ids) ?? 0; ?>;
+
         // Initialize Map for shelters
         function initMap() {
+            console.log("Initializing map...");
             const defaultCenter = [2.1896, 102.2501];
             map = L.map('liveMap').setView(defaultCenter, 13);
             
@@ -2837,7 +3067,7 @@ $progress = min(max($progress, 0), 100);
                     <i class="fas fa-map-marker-alt"></i> ${shelterDistrict}
                 </div>
                 <div style="font-size: 12px; color: #666;">
-                    <i class="fas fa-users"></i> <?php echo $shelter_data['total_families']; ?> families
+                    <i class="fas fa-users"></i> ${totalShelterFamilies} assigned families
                 </div>
                 <div style="margin-top: 10px;">
                     <span style="background: #9b59b6; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: bold;">SHELTER DESTINATION</span>
@@ -2944,9 +3174,352 @@ $progress = min(max($progress, 0), 100);
                     }
                 });
             }
+            
+            console.log("Map initialized successfully!");
         }
         
-        // Send live location update to server for shelters
+        // ========================================
+        // FAMILY SELECTION FUNCTIONS
+        // ========================================
+        
+        function toggleFamilySelection(familyId) {
+            const checkbox = document.getElementById(familyId);
+            if (checkbox) {
+                checkbox.checked = !checkbox.checked;
+                updateFamilyCard(familyId);
+            }
+        }
+        
+        function updateFamilyCard(familyId) {
+            const checkbox = document.getElementById(familyId);
+            const card = document.getElementById(familyId + '_card');
+            
+            if (!checkbox || !card) {
+                return;
+            }
+            
+            if (checkbox.checked) {
+                card.classList.add('selected');
+                selectedFamilies.add(familyId);
+            } else {
+                card.classList.remove('selected');
+                selectedFamilies.delete(familyId);
+            }
+        }
+        
+        function selectAllFamilies() {
+            const checkboxes = document.querySelectorAll('input[name="selected_families[]"]');
+            
+            let selectedCount = 0;
+            
+            checkboxes.forEach(cb => {
+                if (!cb.checked) {
+                    cb.checked = true;
+                    selectedCount++;
+                    updateFamilyCard(cb.id);
+                }
+            });
+            
+            if (selectedCount > 0) {
+                showNotification(`Selected all ${selectedCount} assigned families`, 'success');
+            } else {
+                showNotification('All assigned families are already selected', 'info');
+            }
+        }
+        
+        function viewSelectedFamiliesItems() {
+            // Get selected families
+            const checkboxes = document.querySelectorAll('input[name="selected_families[]"]:checked');
+            const selectedFamilyIds = Array.from(checkboxes).map(cb => cb.value);
+            
+            if (selectedFamilyIds.length === 0) {
+                showNotification('Please select at least one family first', 'error');
+                return;
+            }
+            
+            // First, show all items
+            const allItems = document.querySelectorAll('.item-card');
+            
+            if (allItems.length === 0) {
+                showNotification('No items found for any families in this shelter', 'warning');
+                return;
+            }
+            
+            // Hide all items first
+            allItems.forEach(card => {
+                card.style.display = 'none';
+            });
+            
+            // Show only items for selected families
+            let itemCount = 0;
+            selectedFamilyIds.forEach(familyId => {
+                const familyItems = document.querySelectorAll('.item-card[data-family-id="' + familyId + '"]');
+                
+                familyItems.forEach(card => {
+                    card.style.display = 'block';
+                    itemCount++;
+                });
+            });
+            
+            if (itemCount === 0) {
+                showNotification('No items found for the selected families', 'warning');
+                return;
+            }
+            
+            // Update display
+            const selectedFamiliesCount = document.getElementById('selectedFamiliesCount');
+            const selectedItemsCount = document.getElementById('selectedItemsCount');
+            
+            if (selectedFamiliesCount) {
+                selectedFamiliesCount.textContent = selectedFamilyIds.length;
+            }
+            if (selectedItemsCount) {
+                selectedItemsCount.textContent = itemCount;
+            }
+            
+            // Store selected family IDs for form submission
+            const selectedFamilyIdsInput = document.getElementById('selectedFamilyIds');
+            const selectedFamilyIdsCompleteInput = document.getElementById('selectedFamilyIdsComplete');
+            
+            if (selectedFamilyIdsInput) {
+                selectedFamilyIdsInput.value = selectedFamilyIds.join(',');
+            }
+            if (selectedFamilyIdsCompleteInput) {
+                selectedFamilyIdsCompleteInput.value = selectedFamilyIds.join(',');
+            }
+            
+            // Show the items section
+            const itemsSection = document.getElementById('items-section');
+            if (itemsSection) {
+                if (itemsSection.style.display === 'none') {
+                    itemsSection.style.display = 'block';
+                }
+                itemsSection.scrollIntoView({ behavior: 'smooth' });
+            }
+            
+            showNotification(`Showing ${itemCount} items for ${selectedFamilyIds.length} selected families`, 'success');
+        }
+        
+        function resetFamilyFilter() {
+            // Show all items
+            const allItems = document.querySelectorAll('.item-card');
+            allItems.forEach(card => {
+                card.style.display = 'none';
+            });
+            
+            // Uncheck all family checkboxes
+            const checkboxes = document.querySelectorAll('input[name="selected_families[]"]');
+            checkboxes.forEach(cb => {
+                cb.checked = false;
+                updateFamilyCard(cb.id);
+            });
+            
+            selectedFamilies.clear();
+            
+            const itemsSection = document.getElementById('items-section');
+            if (itemsSection) {
+                itemsSection.style.display = 'none';
+            }
+            
+            const selectedFamiliesCount = document.getElementById('selectedFamiliesCount');
+            const selectedItemsCount = document.getElementById('selectedItemsCount');
+            
+            if (selectedFamiliesCount) {
+                selectedFamiliesCount.textContent = '0';
+            }
+            if (selectedItemsCount) {
+                selectedItemsCount.textContent = '0';
+            }
+            
+            const selectedFamilyIdsInput = document.getElementById('selectedFamilyIds');
+            const selectedFamilyIdsCompleteInput = document.getElementById('selectedFamilyIdsComplete');
+            
+            if (selectedFamilyIdsInput) {
+                selectedFamilyIdsInput.value = '';
+            }
+            if (selectedFamilyIdsCompleteInput) {
+                selectedFamilyIdsCompleteInput.value = '';
+            }
+            
+            showNotification('Family filter reset. Please select families to view items.', 'info');
+        }
+        
+        // ========================================
+        // ITEM SELECTION FUNCTIONS
+        // ========================================
+        
+        function toggleItemSelection(card, itemValue) {
+            const checkbox = card.querySelector('input[type="checkbox"]');
+            checkbox.checked = !checkbox.checked;
+            updateItemCard(checkbox);
+        }
+
+        function updateItemCard(checkbox) {
+            const card = checkbox.closest('.item-card');
+            if (checkbox.checked) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
+        }
+
+        function selectAllItems() {
+            const checkboxes = document.querySelectorAll('#prepareForm input[type="checkbox"]');
+            let selectedCount = 0;
+            
+            checkboxes.forEach(cb => {
+                if (!cb.checked) {
+                    cb.checked = true;
+                    selectedCount++;
+                    updateItemCard(cb);
+                }
+            });
+            
+            if (selectedCount > 0) {
+                showNotification(`Selected ${selectedCount} items for dispatch`, 'success');
+            } else {
+                showNotification('All items are already selected', 'info');
+            }
+        }
+        
+        // ========================================
+        // DELIVERY SELECTION FUNCTIONS
+        // ========================================
+        
+        function toggleDeliverySelection(card, itemValue) {
+            const checkbox = card.querySelector('input[type="checkbox"]');
+            checkbox.checked = !checkbox.checked;
+            updateDeliveryCard(checkbox);
+        }
+
+        function updateDeliveryCard(checkbox) {
+            const card = checkbox.closest('.item-card');
+            if (checkbox.checked) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
+        }
+
+        function selectAllDeliveryItems() {
+            const checkboxes = document.querySelectorAll('#completeForm input[name="delivered_items[]"]');
+            let selectedCount = 0;
+            
+            checkboxes.forEach(cb => {
+                if (!cb.checked) {
+                    cb.checked = true;
+                    selectedCount++;
+                    updateDeliveryCard(cb);
+                }
+            });
+            
+            if (selectedCount > 0) {
+                showNotification(`Selected ${selectedCount} items for delivery completion`, 'success');
+            } else {
+                showNotification('All items are already selected', 'info');
+            }
+        }
+        
+        // ========================================
+        // FORM SUBMISSION FUNCTIONS
+        // ========================================
+        
+        function prepareSelectedFamiliesItems() {
+            const familyCheckboxes = document.querySelectorAll('input[name="selected_families[]"]:checked');
+            const selectedFamilyIds = Array.from(familyCheckboxes).map(cb => cb.value);
+            
+            if (selectedFamilyIds.length === 0) {
+                showNotification('Please select at least one assigned family first', 'error');
+                return false;
+            }
+            
+            const itemCheckboxes = document.querySelectorAll('#prepareForm input[name="distributed_items[]"]:checked');
+            if (itemCheckboxes.length === 0) {
+                showNotification('Please select at least one item to dispatch', 'error');
+                return false;
+            }
+            
+            // Set the selected assigned family IDs in the form
+            document.getElementById('selectedFamilyIds').value = selectedFamilyIds.join(',');
+            
+            // Show confirmation with details
+            const confirmMsg = `Mark ${itemCheckboxes.length} items for ${selectedFamilyIds.length} selected assigned families as dispatched?`;
+            
+            if (confirm(confirmMsg)) {
+                return true;
+            }
+            
+            return false;
+        }
+
+        function completeDelivery() {
+            const itemCheckboxes = document.querySelectorAll('#completeForm input[name="delivered_items[]"]:checked');
+            const fileInput = document.getElementById('signature_image');
+            
+            if (itemCheckboxes.length === 0) {
+                showNotification('Please select at least one item to mark as delivered', 'error');
+                return false;
+            }
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showNotification('Please upload a shelter coordinator signature/image as confirmation', 'error');
+                return false;
+            }
+            
+            const confirmMsg = `Mark ${itemCheckboxes.length} items as delivered to ${shelterName}?`;
+            
+            if (confirm(confirmMsg)) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        // ========================================
+        // SIGNATURE IMAGE PREVIEW
+        // ========================================
+        
+        function previewSignatureImage(input) {
+            const preview = document.getElementById('signaturePreview');
+            const errorDiv = document.getElementById('uploadError');
+            
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                
+                // Validate file size
+                if (file.size > 5 * 1024 * 1024) {
+                    errorDiv.textContent = 'File size must be less than 5MB.';
+                    input.value = '';
+                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                    return;
+                }
+                
+                // Validate file type
+                const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+                if (!allowedTypes.includes(file.type)) {
+                    errorDiv.textContent = 'Only JPG, PNG, GIF, and WebP images are allowed.';
+                    input.value = '';
+                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                    return;
+                }
+                
+                errorDiv.textContent = '';
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.innerHTML = `<img src="${e.target.result}" style="width: 100%; height: 100%; object-fit: cover;">`;
+                }
+                reader.readAsDataURL(file);
+            } else {
+                preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
+                errorDiv.textContent = '';
+            }
+        }
+        
+        // ========================================
+        // MAP AND TRACKING FUNCTIONS
+        // ========================================
+        
         async function sendLiveLocationUpdate(lat, lng) {
             if (!itemsDispatched && hasPendingItems) {
                 showNotification('Please mark items as dispatched first before using live tracking', 'error');
@@ -2972,7 +3545,7 @@ $progress = min(max($progress, 0), 100);
                 if (!data.success) {
                     if (data.requires_dispatch) {
                         showNotification(data.error, 'error');
-                        document.getElementById('items-section').scrollIntoView({ behavior: 'smooth' });
+                        document.getElementById('family-selection-section').scrollIntoView({ behavior: 'smooth' });
                     }
                     return false;
                 }
@@ -2985,17 +3558,15 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
-        // Check if tracking is allowed
         function checkTrackingAllowed() {
             if (!itemsDispatched && hasPendingItems) {
                 showNotification('Please mark items as dispatched first before updating tracking', 'error');
-                document.getElementById('items-section').scrollIntoView({ behavior: 'smooth' });
+                document.getElementById('family-selection-section').scrollIntoView({ behavior: 'smooth' });
                 return false;
             }
             return true;
         }
         
-        // Search for location
         async function searchLocation(searchQuery = null) {
             if (!checkTrackingAllowed()) {
                 return;
@@ -3119,7 +3690,6 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
-        // Select a search result
         function selectSearchResult(result) {
             if (!checkTrackingAllowed()) {
                 return;
@@ -3192,7 +3762,6 @@ $progress = min(max($progress, 0), 100);
             showNotification(`Location set`, 'success');
         }
         
-        // Get refined location name
         async function getRefinedLocationName(lat, lng, originalName) {
             try {
                 const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16`;
@@ -3287,7 +3856,6 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
-        // Helper function to decide if we should update the name
         function shouldUpdateName(originalName, refinedName) {
             const originalLower = originalName.toLowerCase();
             const refinedLower = refinedName.toLowerCase();
@@ -3308,7 +3876,6 @@ $progress = min(max($progress, 0), 100);
             return containsKeyWords;
         }
         
-        // Update location display from map coordinates
         function updateLocationDisplay(locationName = "", lat = null, lng = null) {
             const locationText = document.getElementById('currentLocationText');
             const locationTitle = document.getElementById('currentLocationTitle');
@@ -3327,7 +3894,6 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
-        // Update location display from input field
         function updateLocationDisplayFromInput(inputValue) {
             const locationText = document.getElementById('currentLocationText');
             const locationTitle = document.getElementById('currentLocationTitle');
@@ -3347,7 +3913,6 @@ $progress = min(max($progress, 0), 100);
             }
         }
         
-        // Get location name from OpenStreetMap Nominatim API
         async function getLocationNameFromOSM(lat, lng) {
             try {
                 document.getElementById('locationLoading').style.display = 'block';
@@ -3446,76 +4011,71 @@ $progress = min(max($progress, 0), 100);
                 return fallbackName;
             }
         }
-        
-        // In your JavaScript section, replace the selectStatus function with this:
-        function selectStatus(status, element) {
-            if (!checkTrackingAllowed()) {
-                return;
-            }
-            
-            document.querySelectorAll('.status-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            
-            element.classList.add('active');
-            
-            // Clean the status - ensure it matches ENUM values exactly
-            let cleanStatus = status.toLowerCase().trim();
-            
-            // Map button labels to exact ENUM values
-            const statusMap = {
-                'departed': 'departed',
-                'in_transit': 'in_transit',
-                'arrived': 'arrived',
-                'delayed': 'delayed',
-                'completed': 'completed',
-                'cancelled': 'cancelled',
-                'scheduled': 'scheduled',
-                'in_progress': 'in_progress',
-                'pending': 'pending',
-                'on the way': 'in_transit',
-                'on_the_way': 'in_transit',
-                'just departed': 'departed',
-                'arrived at shelter': 'arrived'
-            };
-            
-            // Get the exact ENUM value
-            let exactStatus = statusMap[cleanStatus] || 'in_transit';
-            
-            // Log what we're sending
-            console.log("Setting status: original=" + status + ", clean=" + cleanStatus + ", exact=" + exactStatus);
-            
-            document.getElementById('statusUpdate').value = exactStatus;
-            
-            // Auto-fill location input based on status
-            const locationInput = document.getElementById('current_location');
-            if (exactStatus === 'arrived' && locationInput.value === '') {
-                <?php if ($shelter_data): ?>
-                locationInput.value = `At ${shelterName} - Shelter Location`;
-                updateLocationDisplayFromInput(locationInput.value);
-                <?php endif; ?>
-            } else if (exactStatus === 'departed' && locationInput.value === '') {
-                locationInput.value = `${ngoName} - ${ngoAddress}`;
-                updateLocationDisplayFromInput(locationInput.value);
-            }
-            
-            showNotification('Status set to: ' + getStatusDisplayText(exactStatus), 'success');
-        }
-        
-        function getStatusDisplayText(status) {
-            const displayMap = {
-                'departed': 'Just Departed',
-                'in_transit': 'On The Way',
-                'arrived': 'Arrived at Shelter',
-                'delayed': 'Delayed',
-                'completed': 'Completed',
-                'cancelled': 'Cancelled',
-                'scheduled': 'Scheduled',
-                'in_progress': 'In Progress',
-                'pending': 'Pending'
-            };
-            return displayMap[status] || status.replace('_', ' ');
-        }
+
+function selectStatus(status, element) {
+    if (!checkTrackingAllowed()) {
+        return;
+    }
+    
+    document.querySelectorAll('.status-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    element.classList.add('active');
+    
+    // Clean the status - ensure it matches valid values
+    let cleanStatus = status.toLowerCase().trim();
+    
+    // Map button labels to exact database ENUM values
+    const statusMap = {
+        'departed': 'departed',
+        'in_transit': 'in_transit',
+        'arrived': 'arrived',
+        'delayed': 'delayed',
+        'completed': 'completed',
+        'cancelled': 'cancelled',
+        'on the way': 'in_transit',
+        'just departed': 'departed',
+        'arrived at shelter': 'arrived',
+        'in_progress': 'in_progress',
+        'pending': 'pending',
+        'scheduled': 'scheduled'
+    };
+    
+    // Get the exact value
+    let exactStatus = statusMap[cleanStatus] || 'in_transit';
+    
+    document.getElementById('statusUpdate').value = exactStatus;
+    
+    // Auto-fill location input based on status
+    const locationInput = document.getElementById('current_location');
+    if (exactStatus === 'arrived' && locationInput.value === '') {
+        <?php if ($shelter_data): ?>
+        locationInput.value = `At ${shelterName} - Shelter Location`;
+        updateLocationDisplayFromInput(locationInput.value);
+        <?php endif; ?>
+    } else if (exactStatus === 'departed' && locationInput.value === '') {
+        locationInput.value = `${ngoName} - ${ngoAddress}`;
+        updateLocationDisplayFromInput(locationInput.value);
+    }
+    
+    showNotification('Status set to: ' + getStatusDisplayText(exactStatus), 'success');
+}
+
+function getStatusDisplayText(status) {
+    const displayMap = {
+        'pending': 'Pending',
+        'departed': 'Just Departed',
+        'in_transit': 'On The Way',
+        'arrived': 'Arrived at Shelter',
+        'delayed': 'Delayed',
+        'completed': 'Completed',
+        'cancelled': 'Cancelled',
+        'scheduled': 'Scheduled',
+        'in_progress': 'In Progress'
+    };
+    return displayMap[status] || status.replace('_', ' ');
+}
         
         // Show notification
         function showNotification(message, type = 'info') {
@@ -3555,113 +4115,9 @@ $progress = min(max($progress, 0), 100);
             }, 3000);
         }
         
-        // Item selection functions
-        function toggleItemSelection(card, itemValue) {
-            const checkbox = card.querySelector('input[type="checkbox"]');
-            checkbox.checked = !checkbox.checked;
-            updateItemCard(checkbox);
-        }
-        
-        function updateItemCard(checkbox) {
-            const card = checkbox.closest('.item-card');
-            if (checkbox.checked) {
-                card.classList.add('selected');
-            } else {
-                card.classList.remove('selected');
-            }
-        }
-        
-        function selectAllItems() {
-            const checkboxes = document.querySelectorAll('#prepareForm input[type="checkbox"]');
-            let selectedCount = 0;
-            
-            checkboxes.forEach(cb => {
-                if (!cb.checked) {
-                    cb.checked = true;
-                    selectedCount++;
-                    updateItemCard(cb);
-                }
-            });
-            
-            if (selectedCount > 0) {
-                showNotification(`Selected ${selectedCount} items for dispatch`, 'success');
-            } else {
-                showNotification('All items are already selected', 'info');
-            }
-        }
-        
-        // Delivery selection functions
-        function toggleDeliverySelection(card, itemValue) {
-            const checkbox = card.querySelector('input[type="checkbox"]');
-            checkbox.checked = !checkbox.checked;
-            updateDeliveryCard(checkbox);
-        }
-        
-        function updateDeliveryCard(checkbox) {
-            const card = checkbox.closest('.item-card');
-            if (checkbox.checked) {
-                card.classList.add('selected');
-            } else {
-                card.classList.remove('selected');
-            }
-        }
-        
-        function selectAllDeliveryItems() {
-            const checkboxes = document.querySelectorAll('#completeForm input[name="delivered_items[]"]');
-            let selectedCount = 0;
-            
-            checkboxes.forEach(cb => {
-                if (!cb.checked) {
-                    cb.checked = true;
-                    selectedCount++;
-                    updateDeliveryCard(cb);
-                }
-            });
-            
-            if (selectedCount > 0) {
-                showNotification(`Selected ${selectedCount} items for delivery completion`, 'success');
-            } else {
-                showNotification('All items are already selected', 'info');
-            }
-        }
-        
-        // Preview signature image
-        function previewSignatureImage(input) {
-            const preview = document.getElementById('signaturePreview');
-            const errorDiv = document.getElementById('uploadError');
-            
-            if (input.files && input.files[0]) {
-                const file = input.files[0];
-                
-                // Validate file size
-                if (file.size > 5 * 1024 * 1024) {
-                    errorDiv.textContent = 'File size must be less than 5MB.';
-                    input.value = '';
-                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
-                    return;
-                }
-                
-                // Validate file type
-                const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-                if (!allowedTypes.includes(file.type)) {
-                    errorDiv.textContent = 'Only JPG, PNG, GIF, and WebP images are allowed.';
-                    input.value = '';
-                    preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
-                    return;
-                }
-                
-                errorDiv.textContent = '';
-                
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    preview.innerHTML = `<img src="${e.target.result}" style="width: 100%; height: 100%; object-fit: cover;">`;
-                }
-                reader.readAsDataURL(file);
-            } else {
-                preview.innerHTML = '<span style="color: var(--gray);">No image selected</span>';
-                errorDiv.textContent = '';
-            }
-        }
+        // ========================================
+        // FORM VALIDATION
+        // ========================================
         
         // Form validation
         document.getElementById('trackingForm')?.addEventListener('submit', function(e) {
@@ -3689,7 +4145,7 @@ $progress = min(max($progress, 0), 100);
                 showNotification('Please select at least one item to prepare for delivery', 'error');
                 return false;
             }
-            return confirm(`Mark ${checked.length} items as Dispatched? This means you're leaving for ${shelterName} now.`);
+            return true;
         });
         
         document.getElementById('completeForm')?.addEventListener('submit', function(e) {
@@ -3708,11 +4164,22 @@ $progress = min(max($progress, 0), 100);
                 return false;
             }
             
-            return confirm(`Mark ${checked.length} items as Delivered to ${shelterName}? This will complete the delivery for this shelter.`);
+            return true;
         });
         
-        // Initialize map when page loads
-        document.addEventListener('DOMContentLoaded', initMap);
+        // ========================================
+        // INITIALIZATION
+        // ========================================
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("=== PAGE LOADED ===");
+            
+            // Initialize map
+            initMap();
+            
+            console.log("=== INITIALIZATION COMPLETE ===");
+        });
         
         // Click outside to close search results
         document.addEventListener('click', function(e) {

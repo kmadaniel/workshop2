@@ -44,16 +44,58 @@ $create_coordinator_alerts_table = "
     )
 ";
 
+// Create tracking table if it doesn't exist
+$create_tracking_table = "
+    CREATE TABLE IF NOT EXISTS distribution_tracking (
+        tracking_id INT PRIMARY KEY AUTO_INCREMENT,
+        distribution_id INT NOT NULL,
+        volunteer_id INT NOT NULL,
+        victim_id INT DEFAULT NULL,
+        status ENUM('departed', 'in_transit', 'arrived', 'delayed', 'completed', 'cancelled') DEFAULT 'departed',
+        current_location VARCHAR(255) NOT NULL,
+        tracking_notes TEXT,
+        estimated_arrival TIME DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (distribution_id),
+        INDEX (volunteer_id),
+        INDEX (status),
+        INDEX (created_at)
+    )
+";
+
+// Create coordinator_messages table if it doesn't exist
+$create_messages_table = "
+    CREATE TABLE IF NOT EXISTS coordinator_messages (
+        message_id INT PRIMARY KEY AUTO_INCREMENT,
+        distribution_id INT NOT NULL,
+        volunteer_id INT NOT NULL,
+        message TEXT NOT NULL,
+        message_type ENUM('general', 'urgent', 'update', 'reminder', 'instructions') DEFAULT 'general',
+        created_by VARCHAR(100),
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (distribution_id),
+        INDEX (volunteer_id),
+        INDEX (is_read)
+    )
+";
+
 $db->query($create_cancellations_table);
 $db->query($create_coordinator_alerts_table);
+$db->query($create_tracking_table);
+$db->query($create_messages_table);
 
+// ========================================
 // API URLs
+// ========================================
 $VOLUNTEER_API_URL = 'http://10.147.17.30:8000/api_volunteer.php';
 $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 
-// Fetch data functions
+// ========================================
+// FETCH DATA FROM APIS
+// ========================================
 function fetchFromAPI($url) {
     $ch = curl_init();
     curl_setopt_array($ch, [
@@ -61,7 +103,8 @@ function fetchFromAPI($url) {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 10,
         CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_HTTPHEADER => ['Accept: application/json']
     ]);
     
     $response = curl_exec($ch);
@@ -72,7 +115,10 @@ function fetchFromAPI($url) {
     }
     
     if ($httpCode === 200) {
-        return json_decode($response, true);
+        $data = json_decode($response, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $data;
+        }
     }
     
     return null;
@@ -91,11 +137,17 @@ $api_victims = is_array($victims_data) ? $victims_data : [];
 $needs_data = fetchFromAPI($NEEDS_API_URL);
 $api_needs = isset($needs_data['data']) && is_array($needs_data['data']) ? $needs_data['data'] : (is_array($needs_data) ? $needs_data : []);
 
-// Create lookup arrays for fast access
+// ========================================
+// CREATE LOOKUP ARRAYS FOR FAST ACCESS
+// ========================================
 $volunteer_lookup = [];
 foreach ($api_volunteers as $volunteer) {
     if (isset($volunteer['VolunteerID'])) {
         $volunteer_lookup[$volunteer['VolunteerID']] = $volunteer;
+    } elseif (isset($volunteer['volunteer_id'])) {
+        $volunteer_lookup[$volunteer['volunteer_id']] = $volunteer;
+    } elseif (isset($volunteer['id'])) {
+        $volunteer_lookup[$volunteer['id']] = $volunteer;
     }
 }
 
@@ -103,6 +155,8 @@ $victim_lookup = [];
 foreach ($api_victims as $victim) {
     if (isset($victim['victim_id'])) {
         $victim_lookup[$victim['victim_id']] = $victim;
+    } elseif (isset($victim['id'])) {
+        $victim_lookup[$victim['id']] = $victim;
     }
 }
 
@@ -110,10 +164,14 @@ $needs_lookup = [];
 foreach ($api_needs as $need) {
     if (isset($need['need_id'])) {
         $needs_lookup[$need['need_id']] = $need;
+    } elseif (isset($need['id'])) {
+        $needs_lookup[$need['id']] = $need;
     }
 }
 
-// Get all distribution assignments (for statistics only)
+// ========================================
+// GET ALL DISTRIBUTION ASSIGNMENTS
+// ========================================
 $assignments_query = "
     SELECT 
         d.distribution_id,
@@ -124,9 +182,16 @@ $assignments_query = "
         d.coordinator_name,
         d.coordinator_contact,
         d.volunteers_needed,
-        d.estimated_duration
+        d.estimated_duration,
+        COUNT(DISTINCT dv.volunteer_id) as assigned_volunteers
     FROM distribution d
+    LEFT JOIN distribution_volunteer dv ON d.distribution_id = dv.distribution_id 
+        AND dv.status NOT IN ('Cancelled', 'Declined')
+        AND dv.distribution_id NOT IN (
+            SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dv.volunteer_id
+        )
     WHERE d.status NOT IN ('Completed', 'Cancelled')
+    GROUP BY d.distribution_id
     ORDER BY d.date DESC, d.distribution_id DESC
 ";
 
@@ -136,7 +201,36 @@ if ($result = $db->query($assignments_query)) {
 }
 
 // ========================================
-// UPDATED: Get distribution execution data with REAL STATUS from distribution_log
+// GET REAL-TIME TRACKING DATA FROM VOLUNTEERS
+// ========================================
+$tracking_query = "
+    SELECT 
+        dt.*,
+        d.disaster_id,
+        d.date as distribution_date,
+        d.location as distribution_location,
+        d.coordinator_name,
+        dv.status as volunteer_assignment_status
+    FROM distribution_tracking dt
+    JOIN distribution d ON dt.distribution_id = d.distribution_id
+    LEFT JOIN distribution_volunteer dv ON dt.distribution_id = dv.distribution_id 
+        AND dt.volunteer_id = dv.volunteer_id
+        AND dv.status NOT IN ('Cancelled', 'Declined')
+    WHERE dt.created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        AND dt.distribution_id NOT IN (
+            SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dt.volunteer_id
+        )
+    ORDER BY dt.created_at DESC
+    LIMIT 100
+";
+
+$tracking_data = [];
+if ($result = $db->query($tracking_query)) {
+    $tracking_data = $result->fetch_all(MYSQLI_ASSOC);
+}
+
+// ========================================
+// GET DISTRIBUTION EXECUTION DATA WITH REAL STATUS
 // ========================================
 $execution_query = "
     SELECT 
@@ -149,12 +243,17 @@ $execution_query = "
         COALESCE(
             dt.status, 
             dl.status, 
-            'in_transit'
-        ) as real_status
+            dv.status,
+            'pending'
+        ) as real_status,
+        dt.current_location as latest_location,
+        dt.created_at as last_tracking_update
     FROM distribution_log dl
     LEFT JOIN distribution d ON dl.distribution_id = d.distribution_id
+    LEFT JOIN distribution_volunteer dv ON dl.distribution_id = dv.distribution_id 
+        AND dl.volunteer_id = dv.volunteer_id
     LEFT JOIN (
-        SELECT distribution_id, volunteer_id, status, MAX(created_at) as latest_tracking
+        SELECT distribution_id, volunteer_id, status, current_location, MAX(created_at) as created_at
         FROM distribution_tracking
         GROUP BY distribution_id, volunteer_id
     ) dt ON dl.distribution_id = dt.distribution_id AND dl.volunteer_id = dt.volunteer_id
@@ -171,8 +270,8 @@ if ($result = $db->query($execution_query)) {
     
     // Enhance execution data with API information
     foreach ($executions as &$exec) {
-        // Use the REAL status from the query (tracking status first, then log status)
-        $real_status = $exec['real_status'] ?? $exec['status'] ?? 'in_transit';
+        // Use the REAL status from the query
+        $real_status = $exec['real_status'] ?? $exec['status'] ?? 'pending';
         
         // 1. Get VOLUNTEER info from API
         $volunteer_name = 'Unknown Volunteer';
@@ -180,8 +279,15 @@ if ($result = $db->query($execution_query)) {
         
         if (isset($volunteer_lookup[$exec['volunteer_id']])) {
             $volunteer = $volunteer_lookup[$exec['volunteer_id']];
-            $volunteer_name = $volunteer['FullName'] ?? 'Volunteer ' . $exec['volunteer_id'];
-            $volunteer_contact = $volunteer['Phone'] ?? $volunteer['Email'] ?? 'N/A';
+            $volunteer_name = $volunteer['FullName'] ?? 
+                             $volunteer['full_name'] ?? 
+                             $volunteer['name'] ?? 
+                             'Volunteer ' . $exec['volunteer_id'];
+            $volunteer_contact = $volunteer['Phone'] ?? 
+                                $volunteer['phone'] ?? 
+                                $volunteer['Email'] ?? 
+                                $volunteer['email'] ?? 
+                                'N/A';
         }
         
         // 2. Get VICTIM info from API
@@ -191,8 +297,12 @@ if ($result = $db->query($execution_query)) {
         
         if (isset($victim_lookup[$exec['victim_id']])) {
             $victim = $victim_lookup[$exec['victim_id']];
-            $victim_name = $victim['full_name'] ?? 'Victim ' . $exec['victim_id'];
-            $victim_contact = $victim['phone'] ?? $victim['email'] ?? 'N/A';
+            $victim_name = $victim['full_name'] ?? 
+                          $victim['name'] ?? 
+                          'Victim ' . $exec['victim_id'];
+            $victim_contact = $victim['phone'] ?? 
+                            $victim['email'] ?? 
+                            'N/A';
             $family_size = intval($victim['family_members'] ?? 1);
         }
         
@@ -202,11 +312,37 @@ if ($result = $db->query($execution_query)) {
         
         if (isset($needs_lookup[$exec['need_id']])) {
             $need = $needs_lookup[$exec['need_id']];
-            $resource_name = $need['temp_resource_name'] ?? 'Item';
+            $resource_name = $need['temp_resource_name'] ?? 
+                           $need['resource_name'] ?? 
+                           'Item';
             $quantity_needed = $need['quantity_needed'] ?? 1;
         }
         
-        // Update the execution record with the real status
+        // 4. Format last update time
+        $last_update_formatted = '';
+        if (!empty($exec['last_tracking_update'])) {
+            $last_update = new DateTime($exec['last_tracking_update']);
+            $now = new DateTime();
+            $interval = $last_update->diff($now);
+            
+            if ($interval->y > 0) {
+                $time_ago = $interval->y . ' year' . ($interval->y > 1 ? 's' : '') . ' ago';
+            } elseif ($interval->m > 0) {
+                $time_ago = $interval->m . ' month' . ($interval->m > 1 ? 's' : '') . ' ago';
+            } elseif ($interval->d > 0) {
+                $time_ago = $interval->d . ' day' . ($interval->d > 1 ? 's' : '') . ' ago';
+            } elseif ($interval->h > 0) {
+                $time_ago = $interval->h . ' hour' . ($interval->h > 1 ? 's' : '') . ' ago';
+            } elseif ($interval->i > 0) {
+                $time_ago = $interval->i . ' minute' . ($interval->i > 1 ? 's' : '') . ' ago';
+            } else {
+                $time_ago = 'Just now';
+            }
+            
+            $last_update_formatted = date('h:i A', strtotime($exec['last_tracking_update'])) . ' (' . $time_ago . ')';
+        }
+        
+        // Update the execution record
         $exec['status'] = $real_status;
         $exec['volunteer_name'] = $volunteer_name;
         $exec['volunteer_contact'] = $volunteer_contact;
@@ -216,17 +352,22 @@ if ($result = $db->query($execution_query)) {
         $exec['resource_name'] = $resource_name;
         $exec['quantity_needed'] = $quantity_needed;
         $exec['unit'] = 'units';
+        $exec['last_update_formatted'] = $last_update_formatted;
+        $exec['latest_location'] = $exec['latest_location'] ?? 'N/A';
     }
     unset($exec);
 }
 
-// Get statistics - UPDATED to exclude cancelled volunteers
+// ========================================
+// GET STATISTICS - UPDATED TO EXCLUDE CANCELLED VOLUNTEERS
+// ========================================
 $stats_query = "
     SELECT 
         (SELECT COUNT(DISTINCT assigned_volunteer_id) FROM distribution_items WHERE assigned_volunteer_id IS NOT NULL AND distribution_id NOT IN (
             SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = assigned_volunteer_id
         )) as active_volunteers,
-        (SELECT COUNT(*) FROM distribution WHERE status IN ('In Transit', 'In Progress', 'Assigned', 'departed', 'in_transit', 'arrived')) as active_distributions,
+        (SELECT COUNT(*) FROM distribution WHERE status IN ('In Transit', 'In Progress', 'Assigned', 'Active')) as active_distributions,
+        (SELECT COUNT(DISTINCT dt.volunteer_id) FROM distribution_tracking dt WHERE dt.created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)) as active_trackers,
         (SELECT COUNT(DISTINCT victim_id) FROM distribution_log WHERE status = 'completed' AND distribution_id NOT IN (
             SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = volunteer_id
         )) as families_served,
@@ -235,7 +376,9 @@ $stats_query = "
         )) as items_delivered,
         (SELECT COUNT(DISTINCT distribution_id) FROM distribution_items WHERE assigned_volunteer_id IS NULL AND status = 'Scheduled') as pending_assignments,
         (SELECT COUNT(*) FROM distribution WHERE volunteers_needed > 0 AND status != 'Completed') as need_volunteers,
-        (SELECT COUNT(*) FROM distribution WHERE status = 'Completed') as completed_distributions
+        (SELECT COUNT(*) FROM distribution WHERE status = 'Completed') as completed_distributions,
+        (SELECT COUNT(*) FROM distribution_tracking WHERE status = 'arrived' AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)) as arrived_today,
+        (SELECT COUNT(*) FROM distribution_tracking WHERE status = 'delayed' AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)) as delayed_today
 ";
 
 $stats = [];
@@ -243,7 +386,9 @@ if ($result = $db->query($stats_query)) {
     $stats = $result->fetch_assoc();
 }
 
-// Get all unique volunteer IDs from database for filter dropdown
+// ========================================
+// GET ALL UNIQUE VOLUNTEER IDs FOR FILTER
+// ========================================
 $volunteer_ids = [];
 
 $volunteer_items_query = "
@@ -283,9 +428,14 @@ foreach ($volunteer_ids as $volunteer_id) {
         $volunteer = $volunteer_lookup[$volunteer_id];
         $db_volunteers[] = [
             'volunteer_id' => $volunteer_id,
-            'name' => $volunteer['FullName'] ?? "Volunteer $volunteer_id",
-            'phone' => $volunteer['Phone'] ?? '',
-            'email' => $volunteer['Email'] ?? ''
+            'name' => $volunteer['FullName'] ?? 
+                     $volunteer['full_name'] ?? 
+                     $volunteer['name'] ?? 
+                     "Volunteer $volunteer_id",
+            'phone' => $volunteer['Phone'] ?? 
+                      $volunteer['phone'] ?? '',
+            'email' => $volunteer['Email'] ?? 
+                      $volunteer['email'] ?? ''
         ];
     } else {
         $db_volunteers[] = [
@@ -297,9 +447,11 @@ foreach ($volunteer_ids as $volunteer_id) {
     }
 }
 
-// Get coordinator alerts
+// ========================================
+// GET COORDINATOR ALERTS
+// ========================================
 $coordinator_alerts = [];
-$alerts_query = "SELECT * FROM coordinator_alerts WHERE is_read = 0 ORDER BY created_at DESC LIMIT 5";
+$alerts_query = "SELECT * FROM coordinator_alerts WHERE is_read = 0 ORDER BY created_at DESC LIMIT 10";
 if ($result = $db->query($alerts_query)) {
     $coordinator_alerts = $result->fetch_all(MYSQLI_ASSOC);
 }
@@ -310,128 +462,61 @@ if (!empty($coordinator_alerts)) {
     $db->query($mark_read_query);
 }
 
-// Filter options
+// ========================================
+// CHECK FOR NEW TRACKING UPDATES (AJAX ENDPOINT)
+// ========================================
+if (isset($_GET['check_updates']) && $_GET['check_updates'] == '1') {
+    $last_check = $_GET['last_check'] ?? '0';
+    
+    // Check for new tracking updates
+    $updates_query = "
+        SELECT COUNT(*) as new_updates 
+        FROM distribution_tracking 
+        WHERE created_at > FROM_UNIXTIME(?) 
+        AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)
+    ";
+    
+    $stmt = $db->prepare($updates_query);
+    $stmt->bind_param("i", $last_check);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $updates = $result->fetch_assoc();
+    $stmt->close();
+    
+    // Check for cancellations
+    $cancellations_query = "
+        SELECT COUNT(*) as new_cancellations 
+        FROM assignment_cancellations 
+        WHERE created_at > FROM_UNIXTIME(?)
+    ";
+    
+    $stmt = $db->prepare($cancellations_query);
+    $stmt->bind_param("i", $last_check);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $cancellations = $result->fetch_assoc();
+    $stmt->close();
+    
+    header('Content-Type: application/json');
+    echo json_encode([
+        'new_updates' => $updates['new_updates'] ?? 0,
+        'new_cancellations' => $cancellations['new_cancellations'] ?? 0,
+        'current_time' => time()
+    ]);
+    exit;
+}
+
+// ========================================
+// FILTER OPTIONS
+// ========================================
 $filter_disaster = $_GET['disaster_id'] ?? '';
 $filter_status = $_GET['status'] ?? '';
 $filter_date = $_GET['date'] ?? '';
 $filter_volunteer = $_GET['volunteer_id'] ?? '';
 
-// Build filter conditions for execution log
-$execution_where_conditions = ["dl.distribution_id NOT IN (SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dl.volunteer_id)"];
-$execution_params = [];
-$execution_types = '';
-
-if ($filter_disaster) {
-    $execution_where_conditions[] = "d.disaster_id = ?";
-    $execution_params[] = $filter_disaster;
-    $execution_types .= 'i';
-}
-
-if ($filter_status && $filter_status !== 'need_volunteers') {
-    // Use the real_status field for filtering
-    $execution_where_conditions[] = "COALESCE(dt.status, dl.status, 'in_transit') = ?";
-    $execution_params[] = $filter_status;
-    $execution_types .= 's';
-}
-
-if ($filter_date) {
-    $execution_where_conditions[] = "DATE(d.date) = ?";
-    $execution_params[] = $filter_date;
-    $execution_types .= 's';
-}
-
-if ($filter_volunteer) {
-    $execution_where_conditions[] = "dl.volunteer_id = ?";
-    $execution_params[] = $filter_volunteer;
-    $execution_types .= 'i';
-}
-
-// Apply filters to executions
-if (!empty($execution_where_conditions)) {
-    $filtered_execution_query = "
-        SELECT 
-            dl.*,
-            d.disaster_id,
-            d.date as distribution_date,
-            d.location as distribution_location,
-            d.coordinator_name,
-            d.status as overall_distribution_status,
-            COALESCE(
-                dt.status, 
-                dl.status, 
-                'in_transit'
-            ) as real_status
-        FROM distribution_log dl
-        LEFT JOIN distribution d ON dl.distribution_id = d.distribution_id
-        LEFT JOIN (
-            SELECT distribution_id, volunteer_id, status, MAX(created_at) as latest_tracking
-            FROM distribution_tracking
-            GROUP BY distribution_id, volunteer_id
-        ) dt ON dl.distribution_id = dt.distribution_id AND dl.volunteer_id = dt.volunteer_id
-        WHERE " . implode(' AND ', $execution_where_conditions) . "
-        ORDER BY dl.created_at DESC
-        LIMIT 100
-    ";
-    
-    if (!empty($execution_params)) {
-        $stmt = $db->prepare($filtered_execution_query);
-        if ($stmt) {
-            if (!empty($execution_types)) {
-                $stmt->bind_param($execution_types, ...$execution_params);
-            }
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $filtered_executions = $result->fetch_all(MYSQLI_ASSOC);
-            $stmt->close();
-            
-            // Re-enhance execution data with API information
-            foreach ($filtered_executions as &$exec) {
-                $real_status = $exec['real_status'] ?? $exec['status'] ?? 'in_transit';
-                $volunteer_name = 'Unknown Volunteer';
-                $volunteer_contact = 'N/A';
-                $victim_name = 'Unknown Victim';
-                $victim_contact = 'N/A';
-                $family_size = 1;
-                $resource_name = 'Unknown Item';
-                $quantity_needed = 1;
-                
-                if (isset($volunteer_lookup[$exec['volunteer_id']])) {
-                    $volunteer = $volunteer_lookup[$exec['volunteer_id']];
-                    $volunteer_name = $volunteer['FullName'] ?? 'Volunteer ' . $exec['volunteer_id'];
-                    $volunteer_contact = $volunteer['Phone'] ?? $volunteer['Email'] ?? 'N/A';
-                }
-                
-                if (isset($victim_lookup[$exec['victim_id']])) {
-                    $victim = $victim_lookup[$exec['victim_id']];
-                    $victim_name = $victim['full_name'] ?? 'Victim ' . $exec['victim_id'];
-                    $victim_contact = $victim['phone'] ?? $victim['email'] ?? 'N/A';
-                    $family_size = intval($victim['family_members'] ?? 1);
-                }
-                
-                if (isset($needs_lookup[$exec['need_id']])) {
-                    $need = $needs_lookup[$exec['need_id']];
-                    $resource_name = $need['temp_resource_name'] ?? 'Item';
-                    $quantity_needed = $need['quantity_needed'] ?? 1;
-                }
-                
-                // Update the execution record with the real status
-                $exec['status'] = $real_status;
-                $exec['volunteer_name'] = $volunteer_name;
-                $exec['volunteer_contact'] = $volunteer_contact;
-                $exec['victim_name'] = $victim_name;
-                $exec['victim_contact'] = $victim_contact;
-                $exec['family_size'] = $family_size;
-                $exec['resource_name'] = $resource_name;
-                $exec['quantity_needed'] = $quantity_needed;
-                $exec['unit'] = 'units';
-            }
-            unset($exec);
-            $executions = $filtered_executions;
-        }
-    }
-}
-
-// Handle actions
+// ========================================
+// HANDLE ACTIONS
+// ========================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $distribution_id = $_POST['distribution_id'] ?? 0;
@@ -444,6 +529,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $update_query = "UPDATE distribution_items SET assigned_volunteer_id = ? WHERE distribution_id = ? AND assigned_volunteer_id = ?";
             $stmt = $db->prepare($update_query);
             $stmt->bind_param("iii", $new_volunteer_id, $distribution_id, $volunteer_id);
+            $stmt->execute();
+            $stmt->close();
+            
+            // Create alert
+            $alert_message = "Volunteer reassigned: Volunteer {$volunteer_id} replaced with Volunteer {$new_volunteer_id} in Distribution {$distribution_id}";
+            $alert_query = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type) VALUES (?, ?, 'system')";
+            $stmt = $db->prepare($alert_query);
+            $stmt->bind_param("is", $distribution_id, $alert_message);
             $stmt->execute();
             $stmt->close();
             
@@ -460,6 +553,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $update_query = "UPDATE distribution SET status = ? WHERE distribution_id = ?";
             $stmt = $db->prepare($update_query);
             $stmt->bind_param("si", $new_status, $distribution_id);
+            $stmt->execute();
+            $stmt->close();
+            
+            // Create alert
+            $alert_message = "Distribution {$distribution_id} status changed to {$new_status}" . ($reason ? " - Reason: {$reason}" : "");
+            $alert_query = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type) VALUES (?, ?, 'status_change')";
+            $stmt = $db->prepare($alert_query);
+            $stmt->bind_param("is", $distribution_id, $alert_message);
             $stmt->execute();
             $stmt->close();
             
@@ -490,6 +591,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->bind_param("i", $distribution_id);
                     $stmt->execute();
                     
+                    // Create alert
+                    $alert_message = "Volunteer {$volunteer_id} added to Distribution {$distribution_id}";
+                    $alert_query = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type) VALUES (?, ?, 'new_volunteer')";
+                    $stmt = $db->prepare($alert_query);
+                    $stmt->bind_param("is", $distribution_id, $alert_message);
+                    $stmt->execute();
+                    $stmt->close();
+                    
                     header("Location: manage_execution.php?success=volunteer_added");
                     exit;
                 }
@@ -505,9 +614,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bind_param("i", $distribution_id);
             $stmt->execute();
             
+            // Create alert
+            $alert_message = "Volunteer {$volunteer_id} added to Distribution {$distribution_id}";
+            $alert_query = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type) VALUES (?, ?, 'new_volunteer')";
+            $stmt = $db->prepare($alert_query);
+            $stmt->bind_param("is", $distribution_id, $alert_message);
+            $stmt->execute();
+            $stmt->close();
+            
             header("Location: manage_execution.php?success=volunteer_added");
             exit;
         }
+    }
+    
+    if ($action === 'send_message' && $distribution_id && $volunteer_id) {
+        $message = $_POST['message'] ?? '';
+        $message_type = $_POST['message_type'] ?? 'general';
+        
+        if (!empty($message)) {
+            // Store message in database
+            $message_query = "
+                INSERT INTO coordinator_messages 
+                (distribution_id, volunteer_id, message, message_type, created_by) 
+                VALUES (?, ?, ?, ?, ?)
+            ";
+            $stmt = $db->prepare($message_query);
+            $coordinator_name = $_SESSION['user_name'] ?? 'Coordinator';
+            $stmt->bind_param("iisss", $distribution_id, $volunteer_id, $message, $message_type, $coordinator_name);
+            $stmt->execute();
+            $stmt->close();
+            
+            // Create alert
+            $alert_message = "Message sent to Volunteer {$volunteer_id} in Distribution {$distribution_id}";
+            $alert_query = "INSERT INTO coordinator_alerts (distribution_id, message, alert_type) VALUES (?, ?, 'system')";
+            $stmt = $db->prepare($alert_query);
+            $stmt->bind_param("is", $distribution_id, $alert_message);
+            $stmt->execute();
+            $stmt->close();
+            
+            header("Location: manage_execution.php?success=message_sent&distribution_id=" . $distribution_id);
+            exit;
+        }
+    }
+    
+    if ($action === 'clear_alerts') {
+        $clear_query = "UPDATE coordinator_alerts SET is_read = 1 WHERE is_read = 0";
+        $db->query($clear_query);
+        header("Location: manage_execution.php");
+        exit;
     }
 }
 ?>
@@ -583,29 +737,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transform: translateY(-5px);
         }
         
-        .stat-card:nth-child(2) {
-            border-top-color: #2ecc71;
-        }
-        
-        .stat-card:nth-child(3) {
-            border-top-color: #9b59b6;
-        }
-        
-        .stat-card:nth-child(4) {
-            border-top-color: #e74c3c;
-        }
-        
-        .stat-card:nth-child(5) {
-            border-top-color: #f39c12;
-        }
-        
-        .stat-card:nth-child(6) {
-            border-top-color: #1abc9c;
-        }
-        
-        .stat-card:nth-child(7) {
-            border-top-color: #e67e22;
-        }
+        .stat-card:nth-child(2) { border-top-color: #2ecc71; }
+        .stat-card:nth-child(3) { border-top-color: #9b59b6; }
+        .stat-card:nth-child(4) { border-top-color: #e74c3c; }
+        .stat-card:nth-child(5) { border-top-color: #f39c12; }
+        .stat-card:nth-child(6) { border-top-color: #1abc9c; }
+        .stat-card:nth-child(7) { border-top-color: #e67e22; }
+        .stat-card:nth-child(8) { border-top-color: #27ae60; }
+        .stat-card:nth-child(9) { border-top-color: #e74c3c; }
         
         .stat-number {
             font-size: 42px;
@@ -822,6 +961,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #c62828;
         }
         
+        .status-active {
+            background: #2ecc71;
+            color: white;
+        }
+        
         .action-buttons {
             display: flex;
             gap: 8px;
@@ -893,6 +1037,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         .action-btn.add:hover {
             background: #16a085;
+        }
+        
+        .action-btn.message {
+            background: #8e44ad;
+            color: white;
+        }
+        
+        .action-btn.message:hover {
+            background: #7d3c98;
         }
         
         .modal {
@@ -1099,21 +1252,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: white;
         }
         
-        .volunteer-info {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 6px;
-            margin-bottom: 10px;
-            border-left: 4px solid #3498db;
-        }
-        
-        .distribution-info {
-            background: #e8f4fc;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-        }
-        
         /* NEW STYLES FOR TRACKING */
         .tracking-card {
             transition: all 0.3s ease;
@@ -1207,6 +1345,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         
+        /* Real-time update indicator */
+        .live-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background-color: #2ecc71;
+            border-radius: 50%;
+            margin-right: 5px;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        /* Update notification */
+        .update-notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #3498db;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+            display: none;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .update-notification.show {
+            display: flex;
+            animation: slideInUp 0.5s ease;
+        }
+        
+        @keyframes slideInUp {
+            from {
+                transform: translateY(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
         @media (max-width: 768px) {
             .stats-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -1288,6 +1475,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     Status updated successfully!
                 <?php elseif ($_GET['success'] == 'volunteer_added'): ?>
                     Volunteer added to distribution!
+                <?php elseif ($_GET['success'] == 'message_sent'): ?>
+                    Message sent to volunteer!
                 <?php endif; ?>
             </div>
         <?php endif; ?>
@@ -1295,9 +1484,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <!-- Coordinator Alerts -->
         <?php if (!empty($coordinator_alerts)): ?>
             <div class="alert-message">
-                <h4 style="margin-bottom: 10px;"><i class="fas fa-bell"></i> Coordinator Alerts</h4>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h4 style="margin: 0;"><i class="fas fa-bell"></i> Coordinator Alerts</h4>
+                    <form method="POST" style="display: inline;">
+                        <input type="hidden" name="action" value="clear_alerts">
+                        <button type="submit" style="background: none; border: none; color: #856404; cursor: pointer; font-size: 12px;">
+                            <i class="fas fa-times"></i> Clear All
+                        </button>
+                    </form>
+                </div>
                 <?php foreach ($coordinator_alerts as $alert): ?>
-                    <div style="padding: 8px; background: rgba(255, 193, 7, 0.1); border-radius: 4px; margin-bottom: 5px;">
+                    <div style="padding: 8px; background: rgba(255, 193, 7, 0.1); border-radius: 4px; margin-bottom: 5px; font-size: 14px;">
                         <i class="fas fa-info-circle"></i> 
                         <?php echo htmlspecialchars($alert['message']); ?>
                         <span style="font-size: 12px; color: #856404; float: right;">
@@ -1308,6 +1505,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
         
+        <!-- Real-time Update Notification -->
+        <div class="update-notification" id="updateNotification">
+            <i class="fas fa-sync-alt fa-spin"></i>
+            <span id="updateMessage">New updates available</span>
+            <button onclick="refreshPage()" style="background: white; color: #3498db; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 10px;">
+                Refresh
+            </button>
+        </div>
+        
         <!-- Stats Grid -->
         <div class="stats-grid">
             <div class="stat-card">
@@ -1317,6 +1523,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="stat-card">
                 <div class="stat-number"><?php echo $stats['active_distributions'] ?? 0; ?></div>
                 <div class="stat-label">Active Distributions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['active_trackers'] ?? 0; ?></div>
+                <div class="stat-label">Live Trackers</div>
             </div>
             <div class="stat-card">
                 <div class="stat-number"><?php echo $stats['families_served'] ?? 0; ?></div>
@@ -1335,8 +1545,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="stat-label">Need Volunteers</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number"><?php echo $stats['completed_distributions'] ?? 0; ?></div>
-                <div class="stat-label">Completed</div>
+                <div class="stat-number"><?php echo $stats['arrived_today'] ?? 0; ?></div>
+                <div class="stat-label">Arrived Today</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number"><?php echo $stats['delayed_today'] ?? 0; ?></div>
+                <div class="stat-label">Delayed Today</div>
             </div>
         </div>
         
@@ -1367,13 +1581,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <select id="status" name="status" class="filter-control">
                             <option value="">All Status</option>
                             <option value="pending" <?php echo $filter_status == 'pending' ? 'selected' : ''; ?>>Pending</option>
-                            <option value="in_progress" <?php echo $filter_status == 'in_progress' ? 'selected' : ''; ?>>In Progress</option>
-                            <option value="dispatched" <?php echo $filter_status == 'dispatched' ? 'selected' : ''; ?>>Dispatched</option>
-                            <option value="delivered" <?php echo $filter_status == 'delivered' ? 'selected' : ''; ?>>Delivered</option>
-                            <option value="completed" <?php echo $filter_status == 'completed' ? 'selected' : ''; ?>>Completed</option>
+                            <option value="assigned" <?php echo $filter_status == 'assigned' ? 'selected' : ''; ?>>Assigned</option>
+                            <option value="active" <?php echo $filter_status == 'active' ? 'selected' : ''; ?>>Active</option>
                             <option value="departed" <?php echo $filter_status == 'departed' ? 'selected' : ''; ?>>Departed</option>
                             <option value="in_transit" <?php echo $filter_status == 'in_transit' ? 'selected' : ''; ?>>In Transit</option>
                             <option value="arrived" <?php echo $filter_status == 'arrived' ? 'selected' : ''; ?>>Arrived</option>
+                            <option value="delayed" <?php echo $filter_status == 'delayed' ? 'selected' : ''; ?>>Delayed</option>
+                            <option value="completed" <?php echo $filter_status == 'completed' ? 'selected' : ''; ?>>Completed</option>
                         </select>
                     </div>
                     
@@ -1402,17 +1616,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <button type="button" class="reset-btn" onclick="resetFilters()">
                         <i class="fas fa-redo"></i> Reset Filters
                     </button>
+                    <button type="button" class="filter-btn" onclick="checkForUpdates()" style="background: #2ecc71;">
+                        <i class="fas fa-sync-alt"></i> Check Updates
+                    </button>
                 </div>
             </form>
         </div>
         
-        <!-- Tabs (Only 2 tabs now) -->
+        <!-- Tabs -->
         <div class="tabs">
             <div class="tab active" onclick="showTab('execution')">
                 <i class="fas fa-truck-loading"></i> Execution Log
             </div>
             <div class="tab" onclick="showTab('tracking')">
                 <i class="fas fa-map-marked-alt"></i> Live Tracking
+                <?php if ($stats['active_trackers'] > 0): ?>
+                    <span style="background: #e74c3c; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px; margin-left: 5px;">
+                        <?php echo $stats['active_trackers']; ?>
+                    </span>
+                <?php endif; ?>
             </div>
         </div>
         
@@ -1422,7 +1644,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <h3 style="color: #2c3e50;">
                     <i class="fas fa-truck-loading"></i> Distribution Execution Log
                     <span style="font-size: 14px; color: #7f8c8d; font-weight: normal; margin-left: 10px;">
-                        (<?php echo count($executions); ?> log entries)
+                        (<?php echo count($executions); ?> log entries) 
+                        <span class="live-indicator"></span> Live Updates
                     </span>
                 </h3>
                 
@@ -1459,20 +1682,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <th>Item</th>
                                 <th>Quantity</th>
                                 <th>Status</th>
-                                <th>Remarks</th>
+                                <th>Location</th>
+                                <th>Last Update</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($executions as $exec): 
                                 $volunteer_name = $exec['volunteer_name'] ?? 'Volunteer ' . $exec['volunteer_id'];
-                                $volunteer_contact = $exec['volunteer_contact'] ?? 'N/A';
                                 $victim_name = $exec['victim_name'] ?? 'Unknown';
-                                $family_size = $exec['family_size'] ?? 1;
-                                $victim_contact = $exec['victim_contact'] ?? 'N/A';
                                 $resource_name = $exec['resource_name'] ?? 'Item';
-                                $quantity_needed = $exec['quantity_needed'] ?? 1;
-                                $unit = $exec['unit'] ?? 'units';
-                                $status = $exec['status'] ?? 'in_transit';
+                                $quantity = $exec['quantity_distributed'] ?? $exec['quantity_needed'] ?? 1;
+                                $status = $exec['status'] ?? 'pending';
+                                $status_class = strtolower(str_replace(' ', '_', $status));
+                                $latest_location = $exec['latest_location'] ?? 'N/A';
+                                $last_update = $exec['last_update_formatted'] ?? 'Never';
                             ?>
                             <tr>
                                 <td><?php echo date('d/m/Y H:i', strtotime($exec['created_at'])); ?></td>
@@ -1486,49 +1710,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     <div><?php echo htmlspecialchars($volunteer_name); ?></div>
                                     <div style="font-size: 12px; color: #7f8c8d;">
                                         ID: VOL<?php echo str_pad($exec['volunteer_id'], 4, '0', STR_PAD_LEFT); ?>
-                                        <?php if (!empty($volunteer_contact) && $volunteer_contact !== 'N/A'): ?>
-                                            <br>Contact: <?php echo htmlspecialchars($volunteer_contact); ?>
-                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
                                     <div><?php echo htmlspecialchars($victim_name); ?></div>
                                     <div style="font-size: 12px; color: #7f8c8d;">
-                                        Family: <?php echo $family_size; ?> | <?php echo htmlspecialchars($victim_contact); ?>
+                                        Family: <?php echo $exec['family_size'] ?? 1; ?>
                                     </div>
                                 </td>
                                 <td>
                                     <div><?php echo htmlspecialchars($resource_name); ?></div>
-                                    <div style="font-size: 12px; color: #7f8c8d;">
-                                        ID: <?php echo $exec['need_id'] ?? 'N/A'; ?>
-                                    </div>
                                 </td>
                                 <td>
-                                    <?php echo $exec['quantity_distributed'] ?? $quantity_needed; ?> 
-                                    <?php echo htmlspecialchars($unit); ?>
+                                    <?php echo $quantity; ?> units
                                 </td>
                                 <td>
-                                    <?php 
-                                    $status_class = strtolower(str_replace(' ', '_', $status));
-                                    ?>
                                     <span class="status-badge status-<?php echo $status_class; ?>">
                                         <?php echo ucfirst(str_replace('_', ' ', $status)); ?>
                                     </span>
-                                    <?php if ($status === 'departed' || $status === 'in_transit' || $status === 'arrived' || $status === 'delayed'): ?>
-                                        <div style="font-size: 10px; color: #3498db; margin-top: 3px;">
-                                            <i class="fas fa-sync-alt"></i> Live tracking
-                                        </div>
-                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if (!empty($exec['remarks'])): ?>
-                                        <div style="font-size: 12px; color: #7f8c8d; max-width: 200px;">
-                                            <?php echo htmlspecialchars(substr($exec['remarks'], 0, 50)); ?>
-                                            <?php if (strlen($exec['remarks']) > 50): ?>...<?php endif; ?>
-                                        </div>
-                                    <?php else: ?>
-                                        <span style="color: #95a5a6; font-size: 12px;">No remarks</span>
-                                    <?php endif; ?>
+                                    <?php echo htmlspecialchars($latest_location); ?>
+                                </td>
+                                <td>
+                                    <?php echo $last_update; ?>
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <button class="action-btn track" 
+                                                onclick="viewVolunteerTracking(<?php echo $exec['volunteer_id']; ?>, <?php echo $exec['distribution_id']; ?>)"
+                                                title="View tracking">
+                                            <i class="fas fa-map-marker-alt"></i>
+                                        </button>
+                                        <button class="action-btn message"
+                                                onclick="sendMessage(<?php echo $exec['distribution_id']; ?>, <?php echo $exec['volunteer_id']; ?>, '<?php echo htmlspecialchars($volunteer_name); ?>')"
+                                                title="Send message">
+                                            <i class="fas fa-comment"></i>
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -1573,56 +1792,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
                     <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 6px;">
                         <div style="font-size: 24px; font-weight: bold; color: #3498db;">
-                            <?php 
-                            // Get ALL tracking data (not just last 2 hours) - UPDATED TO EXCLUDE CANCELLED VOLUNTEERS
-                            $all_tracking_query = "
-                                SELECT dt.*
-                                FROM distribution_tracking dt
-                                WHERE dt.created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
-                                AND dt.distribution_id NOT IN (
-                                    SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dt.volunteer_id
-                                )
-                                ORDER BY dt.created_at DESC
-                            ";
-                            
-                            $all_tracking_data = [];
-                            if ($result = $db->query($all_tracking_query)) {
-                                $all_tracking_data = $result->fetch_all(MYSQLI_ASSOC);
-                            }
-                            
-                            $active_tracking_count = 0;
-                            foreach ($all_tracking_data as $track) {
-                                $time_diff = time() - strtotime($track['created_at']);
-                                if ($time_diff < 3600) { // Within last hour
-                                    $active_tracking_count++;
-                                }
-                            }
-                            echo $active_tracking_count;
-                            ?>
+                            <?php echo $stats['active_trackers'] ?? 0; ?>
                         </div>
                         <div style="font-size: 12px; color: #7f8c8d;">Active Trackers</div>
                     </div>
                     
                     <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 6px;">
                         <div style="font-size: 24px; font-weight: bold; color: #27ae60;">
-                            <?php 
-                            $arrived_count = 0;
-                            foreach ($all_tracking_data as $track) {
-                                if ($track['status'] == 'arrived' || $track['status'] == 'delivered') {
-                                    $arrived_count++;
-                                }
-                            }
-                            echo $arrived_count;
-                            ?>
+                            <?php echo $stats['arrived_today'] ?? 0; ?>
                         </div>
-                        <div style="font-size: 12px; color: #7f8c8d;">Arrived/Delivered</div>
+                        <div style="font-size: 12px; color: #7f8c8d;">Arrived Today</div>
                     </div>
                     
                     <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 6px;">
                         <div style="font-size: 24px; font-weight: bold; color: #e67e22;">
                             <?php 
                             $transit_count = 0;
-                            foreach ($all_tracking_data as $track) {
+                            foreach ($tracking_data as $track) {
                                 if ($track['status'] == 'in_transit' || $track['status'] == 'departed') {
                                     $transit_count++;
                                 }
@@ -1635,17 +1821,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     <div style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 6px;">
                         <div style="font-size: 24px; font-weight: bold; color: #e74c3c;">
-                            <?php 
-                            $delayed_count = 0;
-                            foreach ($all_tracking_data as $track) {
-                                if ($track['status'] == 'delayed') {
-                                    $delayed_count++;
-                                }
-                            }
-                            echo $delayed_count;
-                            ?>
+                            <?php echo $stats['delayed_today'] ?? 0; ?>
                         </div>
-                        <div style="font-size: 12px; color: #7f8c8d;">Delayed</div>
+                        <div style="font-size: 12px; color: #7f8c8d;">Delayed Today</div>
                     </div>
                 </div>
             </div>
@@ -1683,32 +1861,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             
             <!-- Live Tracking Grid -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;">
-                <?php 
-                // Get ALL tracking data (not just last 2 hours) - UPDATED TO EXCLUDE CANCELLED VOLUNTEERS
-                $all_tracking_query = "
-                    SELECT 
-                        dt.*,
-                        d.distribution_id,
-                        d.disaster_id,
-                        d.location as distribution_location,
-                        d.coordinator_name
-                    FROM distribution_tracking dt
-                    JOIN distribution d ON dt.distribution_id = d.distribution_id
-                    WHERE dt.created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
-                    AND dt.distribution_id NOT IN (
-                        SELECT distribution_id FROM assignment_cancellations WHERE volunteer_id = dt.volunteer_id
-                    )
-                    ORDER BY dt.created_at DESC
-                    LIMIT 50
-                ";
-                
-                $all_tracking_data = [];
-                if ($result = $db->query($all_tracking_query)) {
-                    $all_tracking_data = $result->fetch_all(MYSQLI_ASSOC);
-                }
-                
-                if (empty($all_tracking_data)): ?>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;" id="trackingGrid">
+                <?php if (empty($tracking_data)): ?>
                     <div class="empty-state" style="grid-column: 1 / -1; background: white; padding: 40px;">
                         <i class="fas fa-map-marked-alt"></i>
                         <h3>No Live Tracking Data</h3>
@@ -1716,7 +1870,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 <?php else: 
                     $processed_volunteers = [];
-                    foreach ($all_tracking_data as $track): 
+                    foreach ($tracking_data as $track): 
                         // Get the latest update for each volunteer-distribution combo
                         $track_key = $track['volunteer_id'] . '_' . $track['distribution_id'];
                         
@@ -1762,9 +1916,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         // Get victim info if available
                         $victim_name = '';
+                        $victim_contact = '';
                         if ($track['victim_id'] && isset($victim_lookup[$track['victim_id']])) {
                             $victim = $victim_lookup[$track['victim_id']];
                             $victim_name = $victim['full_name'] ?? '';
+                            $victim_contact = $victim['phone'] ?? '';
                         }
                         
                         // Status mapping for display
@@ -1852,6 +2008,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     title="View detailed tracking">
                                 <i class="fas fa-location-arrow"></i> Track
                             </button>
+                            <button class="action-btn message"
+                                    onclick="sendMessage(<?php echo $track['distribution_id']; ?>, <?php echo $track['volunteer_id']; ?>, '<?php echo htmlspecialchars($volunteer_name); ?>')"
+                                    title="Send message">
+                                <i class="fas fa-comment"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1861,8 +2022,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 
+    <!-- Send Message Modal -->
+    <div class="modal" id="messageModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-comment"></i> Send Message to Volunteer</h3>
+            </div>
+            <div class="modal-body">
+                <form id="messageForm" method="POST">
+                    <input type="hidden" name="action" value="send_message">
+                    <input type="hidden" id="msgDistributionId" name="distribution_id" value="">
+                    <input type="hidden" id="msgVolunteerId" name="volunteer_id" value="">
+                    
+                    <div class="form-group">
+                        <label for="volunteerName">Volunteer:</label>
+                        <input type="text" id="volunteerName" class="form-control" readonly>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="messageType">Message Type:</label>
+                        <select id="messageType" name="message_type" class="form-control">
+                            <option value="general">General Message</option>
+                            <option value="urgent">Urgent</option>
+                            <option value="update">Status Update Request</option>
+                            <option value="reminder">Reminder</option>
+                            <option value="instructions">Instructions</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="message">Message:</label>
+                        <textarea id="message" name="message" class="form-control" rows="4" required 
+                                  placeholder="Type your message to the volunteer..."></textarea>
+                    </div>
+                    
+                    <div style="background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 15px;">
+                        <strong>Quick Messages:</strong>
+                        <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px;">
+                            <button type="button" class="quick-message-btn" onclick="setQuickMessage('Please update your current location and status.')">Request Update</button>
+                            <button type="button" class="quick-message-btn" onclick="setQuickMessage('Are you experiencing any delays?')">Check Delays</button>
+                            <button type="button" class="quick-message-btn" onclick="setQuickMessage('Great work! Keep going.')">Encouragement</button>
+                            <button type="button" class="quick-message-btn" onclick="setQuickMessage('Please proceed to next location.')">Next Location</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="modal-btn secondary" onclick="closeMessageModal()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="button" class="modal-btn primary" onclick="submitMessage()">
+                    <i class="fas fa-paper-plane"></i> Send Message
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        // Tab switching
+        // ========================================
+        // TAB SWITCHING
+        // ========================================
         function showTab(tabName) {
             // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {
@@ -1878,7 +2097,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             event.target.classList.add('active');
         }
         
-        // Search functionality
+        // ========================================
+        // SEARCH FUNCTIONALITY
+        // ========================================
         function searchTable(tableId) {
             const input = document.getElementById('search' + (tableId === 'execution' ? 'Execution' : ''));
             const filter = input.value.toUpperCase();
@@ -1903,17 +2124,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         
-        // Reset filters
+        // ========================================
+        // FILTER FUNCTIONS
+        // ========================================
         function resetFilters() {
             document.getElementById('filterForm').reset();
             window.location.href = 'manage_execution.php';
         }
         
+        function filterTracking() {
+            const statusFilter = document.getElementById('trackingFilter').value;
+            const volunteerFilter = document.getElementById('volunteerFilter').value;
+            const distributionFilter = document.getElementById('distributionFilter').value;
+            
+            const cards = document.querySelectorAll('.tracking-card');
+            
+            cards.forEach(card => {
+                let show = true;
+                
+                // Status filter
+                if (statusFilter !== 'all') {
+                    if (statusFilter === 'active') {
+                        if (card.dataset.active !== 'true') show = false;
+                    } else if (card.dataset.status !== statusFilter) {
+                        show = false;
+                    }
+                }
+                
+                // Volunteer filter
+                if (volunteerFilter !== 'all' && card.dataset.volunteer !== volunteerFilter) {
+                    show = false;
+                }
+                
+                // Distribution filter
+                if (distributionFilter !== 'all' && card.dataset.distribution !== distributionFilter) {
+                    show = false;
+                }
+                
+                card.style.display = show ? 'block' : 'none';
+            });
+        }
+        
+        // ========================================
+        // VIEW VOLUNTEER TRACKING
+        // ========================================
         function viewVolunteerTracking(volId, distId) {
             window.open(`track_volunteer.php?volunteer_id=${volId}&distribution_id=${distId}`, '_blank');
         }
         
-        // Export functionality
+        // ========================================
+        // MESSAGE MODAL FUNCTIONS
+        // ========================================
+        function sendMessage(distId, volId, volName) {
+            document.getElementById('msgDistributionId').value = distId;
+            document.getElementById('msgVolunteerId').value = volId;
+            document.getElementById('volunteerName').value = volName;
+            document.getElementById('message').value = '';
+            
+            const modal = document.getElementById('messageModal');
+            modal.style.display = 'flex';
+        }
+        
+        function closeMessageModal() {
+            const modal = document.getElementById('messageModal');
+            modal.style.display = 'none';
+        }
+        
+        function setQuickMessage(message) {
+            document.getElementById('message').value = message;
+        }
+        
+        function submitMessage() {
+            const message = document.getElementById('message').value.trim();
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+            
+            document.getElementById('messageForm').submit();
+        }
+        
+        // ========================================
+        // EXPORT FUNCTIONALITY
+        // ========================================
         function exportToCSV(type) {
             let table;
             let filename;
@@ -1962,7 +2255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 title = 'Distribution Execution Report';
             }
             
-            // Remove action buttons for printing (if any)
+            // Remove action buttons for printing
             const actionCells = table.querySelectorAll('td:last-child, th:last-child');
             actionCells.forEach(cell => cell.remove());
             
@@ -1992,122 +2285,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             printWindow.print();
         }
         
-        function refreshTracking() {
+        // ========================================
+        // REAL-TIME UPDATES CHECK
+        // ========================================
+        let lastCheckTime = <?php echo time(); ?>;
+        let updateCheckInterval;
+        
+        function checkForUpdates() {
+            fetch(`manage_execution.php?check_updates=1&last_check=${lastCheckTime}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.new_updates > 0 || data.new_cancellations > 0) {
+                        showUpdateNotification(data.new_updates, data.new_cancellations);
+                    }
+                    
+                    lastCheckTime = data.current_time;
+                })
+                .catch(error => {
+                    console.error('Error checking for updates:', error);
+                });
+        }
+        
+        function showUpdateNotification(updates, cancellations) {
+            const notification = document.getElementById('updateNotification');
+            const message = document.getElementById('updateMessage');
+            
+            let msg = '';
+            if (updates > 0 && cancellations > 0) {
+                msg = `${updates} new tracking update(s) and ${cancellations} cancellation(s) detected`;
+            } else if (updates > 0) {
+                msg = `${updates} new tracking update(s) detected`;
+            } else if (cancellations > 0) {
+                msg = `${cancellations} cancellation(s) detected`;
+            }
+            
+            message.textContent = msg;
+            notification.classList.add('show');
+            
+            // Auto-hide after 10 seconds
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 10000);
+        }
+        
+        function refreshPage() {
             window.location.reload();
         }
         
-        // Filter tracking cards
-        function filterTracking() {
-            const statusFilter = document.getElementById('trackingFilter').value;
-            const volunteerFilter = document.getElementById('volunteerFilter').value;
-            const distributionFilter = document.getElementById('distributionFilter').value;
-            
-            const cards = document.querySelectorAll('.tracking-card');
-            
-            cards.forEach(card => {
-                let show = true;
-                
-                // Status filter
-                if (statusFilter !== 'all') {
-                    if (statusFilter === 'active') {
-                        if (card.dataset.active !== 'true') show = false;
-                    } else if (card.dataset.status !== statusFilter) {
-                        show = false;
-                    }
-                }
-                
-                // Volunteer filter
-                if (volunteerFilter !== 'all' && card.dataset.volunteer !== volunteerFilter) {
-                    show = false;
-                }
-                
-                // Distribution filter
-                if (distributionFilter !== 'all' && card.dataset.distribution !== distributionFilter) {
-                    show = false;
-                }
-                
-                card.style.display = show ? 'block' : 'none';
-            });
-        }
-        
-        // Auto-refresh tracking every 30 seconds
-        setInterval(() => {
+        function refreshTracking() {
             if (document.getElementById('tracking-tab').classList.contains('active')) {
-                // Refresh the tracking data
-                fetch('?refresh_tracking=1')
-                    .then(response => {
-                        if (response.ok) {
-                            // You could implement AJAX refresh here
-                            // For demonstration, just show a notification
-                            console.log('Tracking data refreshed at ' + new Date().toLocaleTimeString());
-                        }
-                    });
-            }
-        }, 30000);
-        
-        // ========================================
-        // AUTO-REFRESH FOR CANCELLATIONS
-        // ========================================
-        let lastRefreshTime = new Date().getTime();
-        
-        function checkForCancellations() {
-            // Only check if on the tracking tab or execution tab
-            if (document.getElementById('tracking-tab').classList.contains('active') || 
-                document.getElementById('execution-tab').classList.contains('active')) {
-                
-                fetch('check_cancellations.php?last_check=' + lastRefreshTime)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.has_new_cancellations) {
-                            // Show notification
-                            showCancellationNotification(data.cancellations);
-                            
-                            // Refresh the page after 2 seconds
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 2000);
-                        }
-                        
-                        lastRefreshTime = data.current_time;
-                    })
-                    .catch(error => {
-                        console.error('Error checking for cancellations:', error);
-                    });
+                window.location.reload();
             }
         }
         
-        function showCancellationNotification(cancellations) {
-            const notification = document.createElement('div');
-            notification.className = 'notification-badge';
-            notification.innerHTML = `
-                <div class="notification-content">
-                    <div class="notification-icon">
-                        <i class="fas fa-user-times"></i>
-                    </div>
-                    <div>
-                        <strong>Volunteer Cancellation Detected</strong>
-                        <div style="font-size: 12px; margin-top: 5px;">
-                            ${cancellations} volunteer(s) cancelled assignments. Page will refresh...
-                        </div>
-                    </div>
-                </div>
-                <button class="close-btn" onclick="this.parentElement.remove()">
-                    <i class="fas fa-times"></i>
-                </button>
-            `;
-            document.body.appendChild(notification);
+        // ========================================
+        // AUTO-REFRESH AND INITIALIZATION
+        // ========================================
+        function startAutoRefresh() {
+            // Check for updates every 30 seconds
+            updateCheckInterval = setInterval(checkForUpdates, 30000);
             
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.style.animation = 'slideOut 0.5s ease';
-                    setTimeout(() => notification.parentNode.removeChild(notification), 500);
+            // Auto-refresh tracking tab every 60 seconds if active
+            setInterval(() => {
+                if (document.getElementById('tracking-tab').classList.contains('active')) {
+                    console.log('Auto-refreshing tracking data...');
+                    // You could implement AJAX refresh here instead of full page reload
+                    // For now, just check for updates
+                    checkForUpdates();
                 }
-            }, 5000);
+            }, 60000);
         }
-        
-        // Check for cancellations every 10 seconds
-        setInterval(checkForCancellations, 10000);
         
         // Initialize page
         document.addEventListener('DOMContentLoaded', function() {
@@ -2124,8 +2371,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 filterTracking();
             }
             
-            // Start checking for cancellations
-            checkForCancellations();
+            // Start auto-refresh
+            startAutoRefresh();
+            
+            // Check for updates immediately
+            setTimeout(checkForUpdates, 5000);
+            
+            // Close message modal on outside click
+            document.addEventListener('click', function(event) {
+                const modal = document.getElementById('messageModal');
+                if (event.target === modal) {
+                    closeMessageModal();
+                }
+            });
+            
+            // Close message modal on escape key
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    closeMessageModal();
+                }
+            });
+        });
+        
+        // Stop auto-refresh when page is not visible
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                clearInterval(updateCheckInterval);
+            } else {
+                startAutoRefresh();
+                // Check for updates immediately when page becomes visible
+                checkForUpdates();
+            }
         });
     </script>
 </body>

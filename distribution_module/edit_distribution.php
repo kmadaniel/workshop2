@@ -752,7 +752,7 @@ if (isset($_GET['success']) && $_GET['success'] == 1) {
         }
         
         .quantity-input:focus {
-            border-color = var(--primary);
+            border-color: var(--primary);
             box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.1);
             transform: scale(1.05);
         }
@@ -994,7 +994,7 @@ if (isset($_GET['success']) && $_GET['success'] == 1) {
         
         .loading-spinner {
             width: 50px;
-            height = 50px;
+            height: 50px;
             border: 3px solid #f0f0f0;
             border-top: 3px solid var(--primary);
             border-radius: 50%;

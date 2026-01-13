@@ -1,13 +1,13 @@
 <?php
 // ========================================
 // MANAGE NEEDS - APPROVAL SYSTEM WITH API INTEGRATION
-// manage_needs.php - UPDATED FOR YOUR API STRUCTURE
+// manage_needs.php - WITH "APPROVE ALL" BUTTONS
 // ========================================
 
 require_once 'config.php';
 
-// Increase execution time for API calls
-set_time_limit(60);
+// Increase execution time for bulk operations
+set_time_limit(300);
 
 $database = new Database();
 $db = $database->getConnection();
@@ -19,61 +19,71 @@ $victims = [];
 $needs = [];
 $statistics = [];
 
-// API Configuration - YOUR FRIEND'S APIS
+// API Configuration
 $DISASTER_API_URL = 'http://10.147.17.116:8000/disaster.php';
 $VICTIM_API_URL = 'http://10.147.17.116:8000/victim.php';
 $NEEDS_API_URL = 'http://10.147.17.116:8000/needs.php';
 
-// YOUR API to send status updates to your system
-$YOUR_API_URL = 'http://10.147.17.154:8000/distribution_module/api_victim_approve.php';
+// Pagination settings
+$page = isset($_GET['page']) ? intval($_GET['page']) : 1;
+$per_page = 50;
+$offset = ($page - 1) * $per_page;
 
-// Function to send status update to YOUR API
-function sendStatusToYourAPI($victim_id, $disaster_id, $status) {
-    global $YOUR_API_URL;
-    
-    // Prepare the data to send
-    $data = [
-        'victim_id' => $victim_id,
-        'disaster_id' => $disaster_id,
-        'approval_status' => $status,
-        'approved_at' => date('Y-m-d H:i:s')
-    ];
-    
-    // Initialize cURL
-    $ch = curl_init();
-    
-    // Set cURL options
-    curl_setopt($ch, CURLOPT_URL, $YOUR_API_URL);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Accept: application/json'
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    
-    // Execute and get response
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-    
-    curl_close($ch);
-    
-    // Log the attempt
-    error_log("Sending to YOUR API: Victim $victim_id, Disaster $disaster_id, Status $status");
-    error_log("API Response Code: $httpCode");
-    error_log("API Response: $response");
-    
-    return [
-        'success' => ($httpCode >= 200 && $httpCode < 300),
-        'http_code' => $httpCode,
-        'response' => $response,
-        'error' => $error
-    ];
+// Create cache directory
+if (!is_dir(__DIR__ . '/cache')) {
+    mkdir(__DIR__ . '/cache', 0777, true);
 }
 
-// Create a table to track processed disasters if it doesn't exist
+/* ----------------------------------------
+   OPTIMIZED API FETCH FUNCTIONS
+---------------------------------------- */
+function fetchDataFromAPI($url, $timeout = 10) {
+    $cache_key = 'api_cache_' . md5($url);
+    $cache_file = __DIR__ . '/cache/' . $cache_key . '.json';
+    $cache_time = 300;
+    
+    if (file_exists($cache_file) && (time() - filemtime($cache_file)) < $cache_time) {
+        $cached_data = file_get_contents($cache_file);
+        $data = json_decode($cached_data, true);
+        if ($data !== null) {
+            return ['success' => true, 'data' => $data, 'cached' => true];
+        }
+    }
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json']);
+    
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($response === false || $http_code != 200) {
+        if (file_exists($cache_file)) {
+            $cached_data = file_get_contents($cache_file);
+            $data = json_decode($cached_data, true);
+            if ($data !== null) {
+                return ['success' => true, 'data' => $data, 'cached' => true];
+            }
+        }
+        return ['success' => false, 'error' => "HTTP $http_code"];
+    }
+    
+    $data = json_decode($response, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return ['success' => false, 'error' => 'Invalid JSON'];
+    }
+    
+    file_put_contents($cache_file, $response);
+    return ['success' => true, 'data' => $data];
+}
+
+/* ----------------------------------------
+   CREATE TABLES IF NOT EXISTS
+---------------------------------------- */
 $create_processed_disasters_table = "
     CREATE TABLE IF NOT EXISTS processed_disasters (
         processed_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -91,60 +101,8 @@ if (!$db->query($create_processed_disasters_table)) {
 }
 
 /* ----------------------------------------
-   IMPROVED API FETCH FUNCTIONS FOR YOUR SPECIFIC API STRUCTURE
+   HELPER FUNCTIONS
 ---------------------------------------- */
-function fetchDataFromAPI($url, $timeout = 5) {
-    $context = stream_context_create([
-        'http' => [
-            'timeout' => $timeout,
-            'header' => "Accept: application/json\r\n"
-        ],
-        'ssl' => [
-            'verify_peer' => false,
-            'verify_peer_name' => false,
-        ]
-    ]);
-    
-    try {
-        $response = @file_get_contents($url, false, $context);
-        if ($response === FALSE) {
-            return ['success' => false, 'error' => 'Server not responding: ' . $url];
-        }
-        
-        $data = json_decode($response, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return ['success' => false, 'error' => 'Invalid JSON: ' . json_last_error_msg()];
-        }
-        
-        return ['success' => true, 'data' => $data];
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/* ----------------------------------------
-   MARK DISASTER AS PROCESSED AFTER APPROVALS
----------------------------------------- */
-function markDisasterAsProcessed($db, $disaster_id, $notes = '') {
-    try {
-        $query = "INSERT INTO processed_disasters (disaster_id, notes, processed_date) 
-                  VALUES (?, ?, NOW())
-                  ON DUPLICATE KEY UPDATE 
-                  processed_date = NOW(), 
-                  notes = COALESCE(?, notes)";
-        
-        $stmt = $db->prepare($query);
-        $stmt->bind_param("iss", $disaster_id, $notes, $notes);
-        $result = $stmt->execute();
-        $stmt->close();
-        
-        return $result;
-    } catch (Exception $e) {
-        error_log("Error marking disaster as processed: " . $e->getMessage());
-        return false;
-    }
-}
-
 function isDisasterProcessed($db, $disaster_id) {
     try {
         $query = "SELECT processed_id FROM processed_disasters WHERE disaster_id = ?";
@@ -154,217 +112,182 @@ function isDisasterProcessed($db, $disaster_id) {
         $result = $stmt->get_result();
         $is_processed = $result->num_rows > 0;
         $stmt->close();
-        
         return $is_processed;
     } catch (Exception $e) {
-        error_log("Error checking if disaster is processed: " . $e->getMessage());
         return false;
     }
 }
 
 /* ----------------------------------------
-   HANDLE STATUS UPDATES - MUST BE AT THE TOP!
+   HANDLE "APPROVE ALL" / "REJECT ALL" / "PENDING ALL" ACTIONS
 ---------------------------------------- */
-// Handle single status update via GET - MUST BE BEFORE ANY OUTPUT
-if (isset($_GET['update_status']) && isset($_GET['victim_id']) && isset($_GET['new_status']) && isset($_GET['disaster_id'])) {
-    $victim_id = intval($_GET['victim_id']);
-    $new_status = $_GET['new_status'];
-    $selected_disaster_id = intval($_GET['disaster_id']);
+if (isset($_GET['action_all'])) {
+    $action_all = $_GET['action_all'];
+    $selected_disaster_id = intval($_GET['disaster_id'] ?? 0);
     $selected_status_filter = $_GET['status_filter'] ?? 'Pending';
+    $page = intval($_GET['page'] ?? 1);
     
-    try {
-        $check_query = "SELECT approval_id FROM victim_approvals WHERE victim_id = ? AND disaster_id = ?";
-        $check_stmt = $db->prepare($check_query);
-        $check_stmt->bind_param("ii", $victim_id, $selected_disaster_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
+    if ($selected_disaster_id > 0 && in_array($action_all, ['approve_all', 'reject_all', 'pending_all'])) {
+        $new_status = 'Pending';
+        if ($action_all === 'approve_all') $new_status = 'Approved';
+        if ($action_all === 'reject_all') $new_status = 'Rejected';
         
-        if ($check_result->num_rows > 0) {
-            $update_query = "UPDATE victim_approvals SET approval_status = ?, approved_at = NOW() WHERE victim_id = ? AND disaster_id = ?";
-            $stmt = $db->prepare($update_query);
-            $stmt->bind_param("sii", $new_status, $victim_id, $selected_disaster_id);
-        } else {
-            $update_query = "INSERT INTO victim_approvals (victim_id, disaster_id, approval_status, approved_at) VALUES (?, ?, ?, NOW())";
-            $stmt = $db->prepare($update_query);
-            $stmt->bind_param("iis", $victim_id, $selected_disaster_id, $new_status);
-        }
+        // Get ALL victim IDs for this disaster from the API
+        $victimApiResult = fetchDataFromAPI($VICTIM_API_URL);
+        $allVictimIds = [];
         
-        if ($stmt->execute()) {
-            // SEND STATUS UPDATE TO YOUR API (for your friend to get)
-            $apiResult = sendStatusToYourAPI($victim_id, $selected_disaster_id, $new_status);
-            
-            if ($apiResult['success']) {
-                $success = "✅ Victim #$victim_id status updated to $new_status and sent to your API!";
-            } else {
-                $success = "✅ Victim #$victim_id status updated to $new_status (but failed to send to API: " . $apiResult['error'] . ")";
+        if ($victimApiResult['success'] && is_array($victimApiResult['data'])) {
+            foreach ($victimApiResult['data'] as $victim) {
+                $victimDisasterId = intval($victim['disaster_id'] ?? 0);
+                $victim_id = intval($victim['victim_id'] ?? 0);
+                
+                if ($victimDisasterId == $selected_disaster_id && $victim_id > 0) {
+                    $allVictimIds[] = $victim_id;
+                }
             }
-            
-            // Check if all victims are approved and mark disaster as processed
-            checkAndMarkDisasterAsProcessed($db, $selected_disaster_id);
-        } else {
-            $error = "Failed to update victim status: " . $stmt->error;
         }
         
-        $check_stmt->close();
-        $stmt->close();
-        
-        // Redirect back with success message
-        header("Location: ?disaster_id=$selected_disaster_id&status_filter=$selected_status_filter&success=" . urlencode($success));
-        exit();
-        
-    } catch (Exception $e) {
-        $error = "Error updating victim: " . $e->getMessage();
+        if (!empty($allVictimIds)) {
+            $start_time = microtime(true);
+            
+            try {
+                // Use batch insert/update for efficiency
+                $db->begin_transaction();
+                
+                // Process in chunks of 100
+                $chunks = array_chunk($allVictimIds, 100);
+                $successCount = 0;
+                
+                foreach ($chunks as $chunk) {
+                    $placeholders = [];
+                    $values = [];
+                    
+                    foreach ($chunk as $victim_id) {
+                        $victim_id = intval($victim_id);
+                        $placeholders[] = '(?, ?, ?, NOW())';
+                        $values[] = $victim_id;
+                        $values[] = $selected_disaster_id;
+                        $values[] = $new_status;
+                    }
+                    
+                    $query = "INSERT INTO victim_approvals (victim_id, disaster_id, approval_status, approved_at) 
+                              VALUES " . implode(', ', $placeholders) . "
+                              ON DUPLICATE KEY UPDATE 
+                              approval_status = VALUES(approval_status),
+                              approved_at = VALUES(approved_at)";
+                    
+                    $stmt = $db->prepare($query);
+                    $types = str_repeat('iis', count($chunk));
+                    $stmt->bind_param($types, ...$values);
+                    
+                    if ($stmt->execute()) {
+                        $successCount += count($chunk);
+                    }
+                    
+                    $stmt->close();
+                }
+                
+                $db->commit();
+                
+                $total_time = round(microtime(true) - $start_time, 2);
+                
+                $action_text = ucfirst(str_replace('_all', '', $action_all));
+                $success = "✅ Successfully set ALL $successCount victims to $new_status in {$total_time}s";
+                
+                header("Location: ?disaster_id=$selected_disaster_id&status_filter=$selected_status_filter&page=$page&success=" . urlencode($success));
+                exit();
+                
+            } catch (Exception $e) {
+                $db->rollback();
+                $error = "Error updating victims: " . $e->getMessage();
+            }
+        }
     }
 }
 
 /* ----------------------------------------
-   CHECK AND MARK DISASTER AS PROCESSED IF ALL VICTIMS APPROVED
+   HANDLE BULK ACTIONS (selected victims)
 ---------------------------------------- */
-function checkAndMarkDisasterAsProcessed($db, $disaster_id) {
-    try {
-        // Get total victims for this disaster from API
-        global $allApiVictims;
-        $total_victims = 0;
-        
-        foreach ($allApiVictims as $victim) {
-            $victimDisasterId = intval($victim['disaster_id'] ?? 0);
-            if ($victimDisasterId == $disaster_id) {
-                $total_victims++;
-            }
-        }
-        
-        // Get approved count from local database (only those not yet distributed)
-        $approved_query = "
-            SELECT COUNT(DISTINCT va.victim_id) as approved_count 
-            FROM victim_approvals va
-            LEFT JOIN distribution_items di ON va.victim_id = di.victim_id 
-                AND di.status IN ('Scheduled', 'Dispatched', 'Delivered')
-            WHERE va.disaster_id = ? 
-                AND va.approval_status = 'Approved'
-                AND di.victim_id IS NULL
-        ";
-        
-        $stmt = $db->prepare($approved_query);
-        $stmt->bind_param("i", $disaster_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $approved_not_distributed = $row['approved_count'] ?? 0;
-        $stmt->close();
-        
-        // Get total approved (including distributed)
-        $total_approved_query = "SELECT COUNT(*) as total_approved FROM victim_approvals 
-                                WHERE disaster_id = ? AND approval_status = 'Approved'";
-        $stmt2 = $db->prepare($total_approved_query);
-        $stmt2->bind_param("i", $disaster_id);
-        $stmt2->execute();
-        $result2 = $stmt2->get_result();
-        $row2 = $result2->fetch_assoc();
-        $total_approved = $row2['total_approved'] ?? 0;
-        $stmt2->close();
-        
-        // If all victims are approved AND all approved victims have been distributed, mark as processed
-        if ($total_victims > 0 && $total_approved >= $total_victims && $approved_not_distributed == 0) {
-            markDisasterAsProcessed($db, $disaster_id, "All $total_approved victims approved and distributed. Disaster processed.");
-            return true;
-        }
-        
-        return false;
-    } catch (Exception $e) {
-        error_log("Error checking disaster status: " . $e->getMessage());
-        return false;
-    }
-}
-
-// Handle bulk actions (POST method) - MUST BE BEFORE ANY OUTPUT
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action']) && isset($_POST['selected_victims'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_action'])) {
     $action = $_POST['bulk_action'];
-    $selected_victims = $_POST['selected_victims'];
     $selected_disaster_id = intval($_POST['disaster_id'] ?? 0);
     $selected_status_filter = $_POST['status_filter'] ?? 'Pending';
+    $page = intval($_POST['page'] ?? 1);
     
-    if (!empty($selected_victims) && $selected_disaster_id > 0) {
+    if ($selected_disaster_id > 0) {
         $new_status = ($action === 'approve') ? 'Approved' : 'Rejected';
-        $successCount = 0;
-        $apiSuccessCount = 0;
-        $apiFailCount = 0;
+        $selected_victims = $_POST['selected_victims'] ?? [];
         
-        try {
-            // Update approval status in local database
-            foreach ($selected_victims as $victim_id) {
-                $victim_id = intval($victim_id);
+        if (!empty($selected_victims)) {
+            $start_time = microtime(true);
+            
+            try {
+                $db->begin_transaction();
                 
-                // Check if approval record exists
-                $check_query = "SELECT approval_id FROM victim_approvals WHERE victim_id = ? AND disaster_id = ?";
-                $check_stmt = $db->prepare($check_query);
-                $check_stmt->bind_param("ii", $victim_id, $selected_disaster_id);
-                $check_stmt->execute();
-                $check_result = $check_stmt->get_result();
+                $chunks = array_chunk($selected_victims, 100);
+                $successCount = 0;
                 
-                if ($check_result->num_rows > 0) {
-                    // Update existing approval
-                    $update_query = "UPDATE victim_approvals SET approval_status = ?, approved_at = NOW() WHERE victim_id = ? AND disaster_id = ?";
-                    $update_stmt = $db->prepare($update_query);
-                    $update_stmt->bind_param("sii", $new_status, $victim_id, $selected_disaster_id);
-                    $update_stmt->execute();
-                    $update_stmt->close();
-                } else {
-                    // Insert new approval
-                    $insert_query = "INSERT INTO victim_approvals (victim_id, disaster_id, approval_status, approved_at) VALUES (?, ?, ?, NOW())";
-                    $insert_stmt = $db->prepare($insert_query);
-                    $insert_stmt->bind_param("iis", $victim_id, $selected_disaster_id, $new_status);
-                    $insert_stmt->execute();
-                    $insert_stmt->close();
+                foreach ($chunks as $chunk) {
+                    $placeholders = [];
+                    $values = [];
+                    
+                    foreach ($chunk as $victim_id) {
+                        $victim_id = intval($victim_id);
+                        $placeholders[] = '(?, ?, ?, NOW())';
+                        $values[] = $victim_id;
+                        $values[] = $selected_disaster_id;
+                        $values[] = $new_status;
+                    }
+                    
+                    $query = "INSERT INTO victim_approvals (victim_id, disaster_id, approval_status, approved_at) 
+                              VALUES " . implode(', ', $placeholders) . "
+                              ON DUPLICATE KEY UPDATE 
+                              approval_status = VALUES(approval_status),
+                              approved_at = VALUES(approved_at)";
+                    
+                    $stmt = $db->prepare($query);
+                    $types = str_repeat('iis', count($chunk));
+                    $stmt->bind_param($types, ...$values);
+                    
+                    if ($stmt->execute()) {
+                        $successCount += count($chunk);
+                    }
+                    
+                    $stmt->close();
                 }
                 
-                $check_stmt->close();
-                $successCount++;
+                $db->commit();
                 
-                // Send to YOUR API
-                $apiResult = sendStatusToYourAPI($victim_id, $selected_disaster_id, $new_status);
-                if ($apiResult['success']) {
-                    $apiSuccessCount++;
-                } else {
-                    $apiFailCount++;
-                }
+                $total_time = round(microtime(true) - $start_time, 2);
+                $success = "✅ Successfully updated $successCount victim(s) to $new_status in {$total_time}s";
+                
+                header("Location: ?disaster_id=$selected_disaster_id&status_filter=$selected_status_filter&page=$page&success=" . urlencode($success));
+                exit();
+                
+            } catch (Exception $e) {
+                $db->rollback();
+                $error = "Error updating victims: " . $e->getMessage();
             }
-            
-            $success = "✅ Successfully updated $successCount victim(s) to $new_status";
-            if ($apiSuccessCount > 0) {
-                $success .= " ($apiSuccessCount sent to API)";
-            }
-            if ($apiFailCount > 0) {
-                $success .= " ($apiFailCount failed to send to API)";
-            }
-            
-            // Check if all victims are approved and mark disaster as processed
-            if ($action === 'approve') {
-                checkAndMarkDisasterAsProcessed($db, $selected_disaster_id);
-            }
-            
-            header("Location: ?disaster_id=$selected_disaster_id&status_filter=$selected_status_filter&success=" . urlencode($success));
-            exit();
-            
-        } catch (Exception $e) {
-            $error = "Error updating victims: " . $e->getMessage();
         }
     }
 }
 
 /* ----------------------------------------
-   FETCH ALL DATA FROM FRIEND'S API - UPDATED FOR YOUR API STRUCTURE
+   FETCH DATA FROM APIS
 ---------------------------------------- */
+if (isset($_GET['clear_cache'])) {
+    $files = glob(__DIR__ . '/cache/*.json');
+    foreach ($files as $file) {
+        if (is_file($file)) {
+            unlink($file);
+        }
+    }
+    $success = "Cache cleared successfully";
+}
+
 $disasterApiResult = fetchDataFromAPI($DISASTER_API_URL);
 $victimApiResult = fetchDataFromAPI($VICTIM_API_URL);
 $needsApiResult = fetchDataFromAPI($NEEDS_API_URL);
-
-// Debug: Log API responses
-error_log("Disaster API success: " . ($disasterApiResult['success'] ? 'true' : 'false'));
-error_log("Victim API success: " . ($victimApiResult['success'] ? 'true' : 'false'));
-error_log("Needs API success: " . ($needsApiResult['success'] ? 'true' : 'false'));
-
-if ($victimApiResult['success'] && !empty($victimApiResult['data'])) {
-    error_log("First victim data sample: " . json_encode($victimApiResult['data'][0]));
-}
 
 // Initialize arrays
 $allApiVictims = [];
@@ -372,55 +295,44 @@ $allApiNeeds = [];
 $allApiDisasters = [];
 $victimNeedsMap = [];
 
-// Process Disaster API data
+// Process data
 if ($disasterApiResult['success'] && is_array($disasterApiResult['data'])) {
     $allApiDisasters = $disasterApiResult['data'];
 }
 
-// Process Victim API data
 if ($victimApiResult['success'] && is_array($victimApiResult['data'])) {
     $allApiVictims = $victimApiResult['data'];
 }
 
-// Process Needs API data
 if ($needsApiResult['success']) {
-    // Check different possible structures
     if (isset($needsApiResult['data']['data']) && is_array($needsApiResult['data']['data'])) {
         $allApiNeeds = $needsApiResult['data']['data'];
     } elseif (is_array($needsApiResult['data'])) {
         $allApiNeeds = $needsApiResult['data'];
     }
     
-    // Map needs to victims
     foreach ($allApiNeeds as $need) {
         $victimId = intval($need['victim_id'] ?? 0);
-        
         if ($victimId > 0) {
             if (!isset($victimNeedsMap[$victimId])) {
                 $victimNeedsMap[$victimId] = [];
             }
             
             $victimNeedsMap[$victimId][] = [
-                'need_id' => $need['need_id'] ?? 0,
                 'resource_name' => $need['temp_resource_name'] ?? 'Unknown Resource',
                 'quantity_needed' => $need['quantity_needed'] ?? '0',
-                'priority' => $need['priority'] ?? 'Medium',
-                'status' => $need['status'] ?? 'Pending',
-                'has_baby' => isset($need['has_baby']) ? (($need['has_baby'] === 't' || $need['has_baby'] === true) ? true : false) : false,
-                'has_elderly' => isset($need['has_elderly']) ? (($need['has_elderly'] === 't' || $need['has_elderly'] === true) ? true : false) : false,
-                'has_disabled' => isset($need['has_disabled']) ? (($need['has_disabled'] === 't' || $need['has_disabled'] === true) ? true : false) : false
+                'priority' => $need['priority'] ?? 'Medium'
             ];
         }
     }
 }
 
 /* ----------------------------------------
-   PROCESS DISASTERS WITH CORRECT FIELD MAPPING
+   PROCESS DISASTERS
 ---------------------------------------- */
 $selected_disaster_id = intval($_GET['disaster_id'] ?? 0);
 $selected_status_filter = $_GET['status_filter'] ?? 'Pending';
 
-// Check for success message in URL - AFTER header redirects
 if (isset($_GET['success'])) {
     $success = urldecode($_GET['success']);
 }
@@ -429,132 +341,61 @@ foreach ($allApiDisasters as $apiDisaster) {
     $disaster_id = intval($apiDisaster['disaster_id'] ?? 0);
     
     if ($disaster_id > 0) {
-        // Check if disaster is already processed
         $is_processed = isDisasterProcessed($db, $disaster_id);
         
-        // Count victims for this disaster from victim API
+        // Count victims for this disaster
         $victimCount = 0;
-        $needCount = 0;
-        $victimNeedsData = [];
-        
         foreach ($allApiVictims as $victim) {
             $victimDisasterId = intval($victim['disaster_id'] ?? 0);
-            
             if ($victimDisasterId == $disaster_id) {
-                $victim_id = intval($victim['victim_id'] ?? 0);
-                
-                if ($victim_id > 0) {
-                    // Get needs for this victim
-                    $victim['needs'] = $victimNeedsMap[$victim_id] ?? [];
-                    $victim['victim_id'] = $victim_id;
-                    $victimCount++;
-                    
-                    // Count needs
-                    $needCount += count($victim['needs']);
-                    
-                    // Store for later approval calculation
-                    $victimNeedsData[$victim_id] = $victim;
-                }
+                $victimCount++;
             }
         }
         
-        // Calculate approval statistics
+        // Get approval statistics
         $pending = 0;
         $approved = 0;
         $rejected = 0;
-        $approved_not_distributed = 0;
-        $approved_distributed = 0;
         
-        foreach ($victimNeedsData as $victim_id => $victim) {
-            if ($victim_id > 0) {
-                // Get approval status and check if already distributed
-                $approval_query = "
-                    SELECT 
-                        va.approval_status,
-                        CASE WHEN di.victim_id IS NOT NULL THEN 1 ELSE 0 END as is_distributed
-                    FROM victim_approvals va
-                    LEFT JOIN distribution_items di ON va.victim_id = di.victim_id 
-                        AND di.status IN ('Scheduled', 'Dispatched', 'Delivered')
-                    WHERE va.victim_id = ? AND va.disaster_id = ?
-                ";
-                $approval_stmt = $db->prepare($approval_query);
-                $approval_stmt->bind_param("ii", $victim_id, $disaster_id);
-                $approval_stmt->execute();
-                $result = $approval_stmt->get_result();
-                
-                if ($result->num_rows > 0) {
-                    $approval = $result->fetch_assoc();
-                    $approval_status = $approval['approval_status'];
-                    $is_distributed = $approval['is_distributed'];
-                } else {
-                    $approval_status = 'Pending';
-                    $is_distributed = 0;
-                }
-                $approval_stmt->close();
-                
-                // Count based on status
-                if ($approval_status === 'Pending') {
-                    $pending++;
-                } elseif ($approval_status === 'Approved') {
-                    $approved++;
-                    if ($is_distributed) {
-                        $approved_distributed++;
-                    } else {
-                        $approved_not_distributed++;
-                    }
-                } elseif ($approval_status === 'Rejected') {
-                    $rejected++;
-                }
-            } else {
-                $pending++;
+        $query = "SELECT approval_status, COUNT(*) as count 
+                  FROM victim_approvals 
+                  WHERE disaster_id = ? 
+                  GROUP BY approval_status";
+        $stmt = $db->prepare($query);
+        $stmt->bind_param("i", $disaster_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        while ($row = $result->fetch_assoc()) {
+            if ($row['approval_status'] === 'Pending') {
+                $pending = $row['count'];
+            } elseif ($row['approval_status'] === 'Approved') {
+                $approved = $row['count'];
+            } elseif ($row['approval_status'] === 'Rejected') {
+                $rejected = $row['count'];
             }
         }
-        
-        // Get processed date if exists
-        $processed_date = null;
-        $processed_notes = null;
-        if ($is_processed) {
-            $processed_query = "SELECT processed_date, notes FROM processed_disasters WHERE disaster_id = ?";
-            $processed_stmt = $db->prepare($processed_query);
-            $processed_stmt->bind_param("i", $disaster_id);
-            $processed_stmt->execute();
-            $processed_result = $processed_stmt->get_result();
-            if ($processed_result->num_rows > 0) {
-                $processed_data = $processed_result->fetch_assoc();
-                $processed_date = $processed_data['processed_date'];
-                $processed_notes = $processed_data['notes'];
-            }
-            $processed_stmt->close();
-        }
+        $stmt->close();
         
         $disasters[] = [
             'disaster_id' => $disaster_id,
             'Disaster_Name' => $apiDisaster['disaster_name'] ?? 'Unknown',
             'Location' => $apiDisaster['district'] ?? 'Unknown',
             'Disaster_Type' => $apiDisaster['severity'] ?? 'Unknown',
-            'description' => $apiDisaster['description'] ?? '',
-            'status' => $apiDisaster['status'] ?? 'Unknown',
-            'total_needs' => $victimCount,
+            'api_victim_count' => $victimCount,
             'pending' => $pending,
             'approved' => $approved,
             'rejected' => $rejected,
-            'approved_not_distributed' => $approved_not_distributed,
-            'approved_distributed' => $approved_distributed,
-            'api_victim_count' => $victimCount,
-            'api_need_count' => $needCount,
-            'is_processed' => $is_processed,
-            'processed_date' => $processed_date,
-            'processed_notes' => $processed_notes
+            'is_processed' => $is_processed
         ];
     }
 }
 
 /* ----------------------------------------
-   LOAD VICTIMS WITH NEEDS FOR SELECTED DISASTER - UPDATED
+   LOAD VICTIMS WITH PAGINATION
 ---------------------------------------- */
 if ($selected_disaster_id > 0) {
     $disasterVictims = [];
-    $victimNeedsData = [];
     
     // Find victims for this disaster
     foreach ($allApiVictims as $victim) {
@@ -564,11 +405,10 @@ if ($selected_disaster_id > 0) {
             $victim_id = intval($victim['victim_id'] ?? 0);
             
             if ($victim_id > 0) {
-                // Get needs for this victim
                 $victim['needs'] = $victimNeedsMap[$victim_id] ?? [];
                 $victim['victim_id'] = $victim_id;
                 
-                // Calculate priority based on needs
+                // Calculate priority
                 $highPriorityCount = 0;
                 foreach ($victim['needs'] as $need) {
                     if ($need['priority'] === 'High') {
@@ -584,105 +424,102 @@ if ($selected_disaster_id > 0) {
         }
     }
     
-    // Process approval statuses with distribution check
-    foreach ($disasterVictims as &$victim) {
+    // Get total count
+    $total_victims = count($disasterVictims);
+    $total_pages = ceil($total_victims / $per_page);
+    
+    // Apply status filter
+    if ($selected_status_filter !== 'all') {
+        $filteredVictims = [];
+        foreach ($disasterVictims as $victim) {
+            $victim_id = $victim['victim_id'] ?? 0;
+            
+            $query = "SELECT approval_status FROM victim_approvals WHERE victim_id = ? AND disaster_id = ?";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param("ii", $victim_id, $selected_disaster_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            
+            if ($result->num_rows > 0) {
+                $row = $result->fetch_assoc();
+                $approval_status = $row['approval_status'];
+            } else {
+                $approval_status = 'Pending';
+            }
+            $stmt->close();
+            
+            $victim['approval_status'] = $approval_status;
+            
+            if ($approval_status === $selected_status_filter) {
+                $filteredVictims[] = $victim;
+            }
+        }
+        
+        $disasterVictims = $filteredVictims;
+        $total_filtered_victims = count($disasterVictims);
+        $total_pages = ceil($total_filtered_victims / $per_page);
+    }
+    
+    // Apply pagination
+    $paginatedVictims = array_slice($disasterVictims, $offset, $per_page);
+    
+    // Get approval statuses
+    foreach ($paginatedVictims as &$victim) {
         $victim_id = $victim['victim_id'] ?? 0;
         
         if ($victim_id > 0) {
-            // Get approval status and check if already distributed
-            $approval_query = "
-                SELECT 
-                    va.approval_status,
-                    CASE WHEN di.victim_id IS NOT NULL THEN 1 ELSE 0 END as is_distributed
-                FROM victim_approvals va
-                LEFT JOIN distribution_items di ON va.victim_id = di.victim_id 
-                    AND di.status IN ('Scheduled', 'Dispatched', 'Delivered')
-                WHERE va.victim_id = ? AND va.disaster_id = ?
-            ";
-            $approval_stmt = $db->prepare($approval_query);
-            $approval_stmt->bind_param("ii", $victim_id, $selected_disaster_id);
-            $approval_stmt->execute();
-            $approval_result = $approval_stmt->get_result();
+            $query = "SELECT approval_status FROM victim_approvals WHERE victim_id = ? AND disaster_id = ?";
+            $stmt = $db->prepare($query);
+            $stmt->bind_param("ii", $victim_id, $selected_disaster_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
             
-            if ($approval_result->num_rows > 0) {
-                $approval = $approval_result->fetch_assoc();
-                $victim['approval_status'] = $approval['approval_status'];
-                $victim['is_distributed'] = $approval['is_distributed'];
+            if ($result->num_rows > 0) {
+                $row = $result->fetch_assoc();
+                $victim['approval_status'] = $row['approval_status'];
             } else {
                 $victim['approval_status'] = 'Pending';
-                $victim['is_distributed'] = 0;
-                
-                // Auto-insert as Pending
-                $insert_query = "INSERT INTO victim_approvals (victim_id, disaster_id, approval_status) VALUES (?, ?, 'Pending')";
-                $insert_stmt = $db->prepare($insert_query);
-                $insert_stmt->bind_param("ii", $victim_id, $selected_disaster_id);
-                $insert_stmt->execute();
-                $insert_stmt->close();
             }
-            
-            $approval_stmt->close();
-        } else {
-            $victim['approval_status'] = 'Pending';
-            $victim['is_distributed'] = 0;
+            $stmt->close();
         }
     }
     
-    // Filter by status
-    if ($selected_status_filter !== 'all') {
-        $disasterVictims = array_filter($disasterVictims, function($victim) use ($selected_status_filter) {
-            return ($victim['approval_status'] ?? 'Pending') === $selected_status_filter;
-        });
-    }
+    $needs = $paginatedVictims;
     
-    $needs = array_values($disasterVictims);
-    
-    // Get statistics (including distribution status)
-    $total_api_victims = 0;
+    // Get statistics
     $pending = 0;
     $approved = 0;
     $rejected = 0;
-    $approved_not_distributed = 0;
-    $approved_distributed = 0;
     
-    foreach ($disasterVictims as $victim) {
-        $victim_id = $victim['victim_id'] ?? 0;
-        $approval_status = $victim['approval_status'] ?? 'Pending';
-        $is_distributed = $victim['is_distributed'] ?? 0;
-        
-        $total_api_victims++;
-        
-        if ($approval_status === 'Pending') {
-            $pending++;
-        } elseif ($approval_status === 'Approved') {
-            $approved++;
-            if ($is_distributed) {
-                $approved_distributed++;
-            } else {
-                $approved_not_distributed++;
-            }
-        } elseif ($approval_status === 'Rejected') {
-            $rejected++;
+    $query = "SELECT approval_status, COUNT(*) as count 
+              FROM victim_approvals 
+              WHERE disaster_id = ? 
+              GROUP BY approval_status";
+    $stmt = $db->prepare($query);
+    $stmt->bind_param("i", $selected_disaster_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    while ($row = $result->fetch_assoc()) {
+        if ($row['approval_status'] === 'Pending') {
+            $pending = $row['count'];
+        } elseif ($row['approval_status'] === 'Approved') {
+            $approved = $row['count'];
+        } elseif ($row['approval_status'] === 'Rejected') {
+            $rejected = $row['count'];
         }
     }
+    $stmt->close();
     
     $statistics = [
-        'total' => $total_api_victims, 
-        'pending' => $pending, 
-        'approved' => $approved, 
+        'total' => $total_victims,
+        'pending' => $pending,
+        'approved' => $approved,
         'rejected' => $rejected,
-        'approved_not_distributed' => $approved_not_distributed,
-        'approved_distributed' => $approved_distributed
+        'total_pages' => $total_pages,
+        'current_page' => $page,
+        'per_page' => $per_page
     ];
-    
-    // Check if disaster is processed
-    $selected_disaster_processed = isDisasterProcessed($db, $selected_disaster_id);
-}
-
-// Check database table exists
-$table_exists = false;
-$table_check = $db->query("SHOW TABLES LIKE 'victim_approvals'");
-if ($table_check->num_rows > 0) {
-    $table_exists = true;
 }
 ?>
 
@@ -695,205 +532,173 @@ if ($table_check->num_rows > 0) {
     <link rel="stylesheet" href="../css/needs.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Add all your existing CSS styles here */
-        /* ... (keep all your existing CSS styles) ... */
-        
-        /* Add new styles for distribution status */
-        .badge-distributed {
-            background: #6c757d;
-            color: white;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 0.7em;
-            font-weight: 600;
-            margin-left: 5px;
-        }
-        
-        .badge-not-distributed {
-            background: #28a745;
-            color: white;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 0.7em;
-            font-weight: 600;
-            margin-left: 5px;
-        }
-        
-        .distribution-status {
-            font-size: 0.8em;
-            color: #6c757d;
-            margin-top: 3px;
-        }
-        
-        /* API Debug Styles */
-        .api-debug-section {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
+        .performance-warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
             border-radius: 8px;
             padding: 15px;
             margin-bottom: 20px;
-            font-family: monospace;
-            font-size: 0.9em;
-            max-height: 300px;
-            overflow-y: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
         
-        .api-debug-section h4 {
-            color: #495057;
-            border-bottom: 1px solid #dee2e6;
-            padding-bottom: 5px;
-            margin-bottom: 10px;
+        #selection-counter {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #3498db;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            z-index: 1000;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            display: none;
         }
         
-        .api-data-item {
-            padding: 3px 0;
-            border-bottom: 1px dashed #e9ecef;
+        .large-selection-warning {
+            background: #ffeaa7;
+            border: 2px solid #f39c12;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            text-align: center;
+            font-weight: bold;
+            display: none;
         }
         
-        .api-success { color: #28a745; }
-        .api-error { color: #dc3545; }
-        .api-warning { color: #ffc107; }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            display: none;
+            flex-direction: column;
+        }
         
-        /* Field mapping helper */
-        .field-map {
-            background: #e9ecef;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            margin: 2px;
-            display: inline-block;
+        .progress-bar {
+            width: 300px;
+            height: 20px;
+            background: #eee;
+            border-radius: 10px;
+            margin-top: 20px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #3498db;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            gap: 10px;
+        }
+        
+        .page-info {
+            margin: 0 15px;
+            font-weight: 600;
+        }
+        
+        /* NEW: Bulk Action Buttons Container */
+        .bulk-all-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin: 15px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .bulk-all-btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .bulk-all-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .bulk-approve-all {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+        
+        .bulk-reject-all {
+            background: linear-gradient(135deg, #dc3545, #fd7e14);
+            color: white;
+        }
+        
+        .bulk-pending-all {
+            background: linear-gradient(135deg, #6c757d, #adb5bd);
+            color: white;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Debug API Status Section -->
-        <div class="api-status-section">
-            <h3><i class="fas fa-bug"></i> API Status</h3>
-            
-            <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;'>
-                <!-- Disaster API -->
-                <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
-                    <h4><i class="fas fa-exclamation-triangle"></i> Disaster API</h4>
-                    <p class="<?php echo ($disasterApiResult['success'] ? 'api-success' : 'api-error'); ?>">
-                        Status: <?php echo ($disasterApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
-                    </p>
-                    <?php if ($disasterApiResult['success']): ?>
-                        <?php $disasterCount = is_array($disasterApiResult['data']) ? count($disasterApiResult['data']) : 'N/A'; ?>
-                        <p>Items: <strong><?php echo $disasterCount; ?></strong></p>
-                        <?php if ($disasterCount > 0): ?>
-                        <p>First disaster: <strong><?php echo htmlspecialchars($disasterApiResult['data'][0]['disaster_name'] ?? 'Unknown'); ?></strong></p>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <p>Error: <?php echo htmlspecialchars($disasterApiResult['error'] ?? 'Unknown error'); ?></p>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Victim API -->
-                <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
-                    <h4><i class="fas fa-users"></i> Victim API</h4>
-                    <p class="<?php echo ($victimApiResult['success'] ? 'api-success' : 'api-error'); ?>">
-                        Status: <?php echo ($victimApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
-                    </p>
-                    <?php if ($victimApiResult['success']): ?>
-                        <?php $victimCount = is_array($victimApiResult['data']) ? count($victimApiResult['data']) : 'N/A'; ?>
-                        <p>Items: <strong><?php echo $victimCount; ?></strong></p>
-                        <?php if ($victimCount > 0): ?>
-                        <p>First victim: <strong><?php echo htmlspecialchars($victimApiResult['data'][0]['full_name'] ?? 'Unknown'); ?></strong></p>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <p>Error: <?php echo htmlspecialchars($victimApiResult['error'] ?? 'Unknown error'); ?></p>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Needs API -->
-                <div style='background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;'>
-                    <h4><i class="fas fa-heart"></i> Needs API</h4>
-                    <p class="<?php echo ($needsApiResult['success'] ? 'api-success' : 'api-error'); ?>">
-                        Status: <?php echo ($needsApiResult['success'] ? '✅ Connected' : '❌ Failed'); ?>
-                    </p>
-                    <?php if ($needsApiResult['success']): ?>
-                        <?php 
-                        $needsCount = 0;
-                        if (isset($needsApiResult['data']['data']) && is_array($needsApiResult['data']['data'])) {
-                            $needsCount = count($needsApiResult['data']['data']);
-                        } elseif (isset($needsApiResult['data']['summary'])) {
-                            $needsCount = $needsApiResult['data']['summary']['total_needs'] ?? 0;
-                        }
-                        ?>
-                        <p>Total Needs: <strong><?php echo $needsCount; ?></strong></p>
-                        <?php if ($needsCount > 0): ?>
-                        <p>High Priority: <strong><?php echo $needsApiResult['data']['summary']['high_priority'] ?? 0; ?></strong></p>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <p>Error: <?php echo htmlspecialchars($needsApiResult['error'] ?? 'Unknown error'); ?></p>
-                    <?php endif; ?>
-                </div>
+    <!-- Selection Counter -->
+    <div id="selection-counter">
+        <i class="fas fa-check-square"></i> <span id="selected-count">0</span> selected
+    </div>
+    
+    <!-- Large Selection Warning -->
+    <div id="large-selection-warning" class="large-selection-warning">
+        <i class="fas fa-exclamation-triangle"></i>
+        <span id="warning-message"></span>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content" style="text-align: center;">
+            <div class="loading-spinner" style="
+                border: 5px solid #f3f3f3;
+                border-top: 5px solid #3498db;
+                border-radius: 50%;
+                width: 50px;
+                height: 50px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 20px;
+            "></div>
+            <h3 id="loadingTitle">Processing...</h3>
+            <p id="loadingMessage"></p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
             </div>
-            
-            <!-- Debug Data -->
-            <div style="margin-top: 20px;">
-                <button type="button" class="btn btn-sm btn-info" onclick="toggleDebugData()">
-                    <i class="fas fa-code"></i> Toggle Debug Data
-                </button>
-                
-                <div id="debugData" style="display: none; margin-top: 15px;">
-                    <div class="api-debug-section">
-                        <h4>Disaster Data Structure</h4>
-                        <?php if ($disasterApiResult['success'] && is_array($disasterApiResult['data']) && count($disasterApiResult['data']) > 0): ?>
-                            <?php $firstDisaster = $disasterApiResult['data'][0]; ?>
-                            <div class="api-data-item"><strong>First Disaster Fields:</strong></div>
-                            <?php foreach ($firstDisaster as $key => $value): ?>
-                                <div class="api-data-item">
-                                    <span class="field-map"><?php echo htmlspecialchars($key); ?></span> => 
-                                    <?php echo is_array($value) ? json_encode($value) : htmlspecialchars($value); ?>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <div class="api-data-item api-error">No disaster data available</div>
-                        <?php endif; ?>
-                    </div>
-                    
-                    <div class="api-debug-section">
-                        <h4>Victim Data Structure</h4>
-                        <?php if ($victimApiResult['success'] && is_array($victimApiResult['data']) && count($victimApiResult['data']) > 0): ?>
-                            <?php $firstVictim = $victimApiResult['data'][0]; ?>
-                            <div class="api-data-item"><strong>First Victim Fields:</strong></div>
-                            <?php foreach ($firstVictim as $key => $value): ?>
-                                <div class="api-data-item">
-                                    <span class="field-map"><?php echo htmlspecialchars($key); ?></span> => 
-                                    <?php echo is_array($value) ? json_encode($value) : htmlspecialchars($value); ?>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <div class="api-data-item api-error">No victim data available</div>
-                        <?php endif; ?>
-                    </div>
-                    
-                    <div class="api-debug-section">
-                        <h4>Field Mapping Summary</h4>
-                        <div class="api-data-item">
-                            <strong>Disaster ID field:</strong> <span class="field-map">disaster_id</span>
-                        </div>
-                        <div class="api-data-item">
-                            <strong>Victim ID field:</strong> <span class="field-map">victim_id</span>
-                        </div>
-                        <div class="api-data-item">
-                            <strong>Disaster Name field:</strong> <span class="field-map">disaster_name</span>
-                        </div>
-                        <div class="api-data-item">
-                            <strong>Victim Name field:</strong> <span class="field-map">full_name</span>
-                        </div>
-                        <div class="api-data-item">
-                            <strong>Total processed:</strong> <?php echo count($disasters); ?> disasters found
-                        </div>
-                        <?php if ($selected_disaster_id > 0): ?>
-                        <div class="api-data-item">
-                            <strong>Selected disaster victims:</strong> <?php echo count($needs); ?> victims found
-                        </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
+            <p><small id="loadingETA"></small></p>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Performance Warning -->
+        <div class="performance-warning">
+            <i class="fas fa-exclamation-triangle"></i>
+            <div>
+                <strong>Bulk Action Notice:</strong> Use the buttons below to approve/reject all victims at once.
+                <a href="?clear_cache=1&disaster_id=<?php echo $selected_disaster_id; ?>" style="margin-left: 10px; color: #3498db;">
+                    <i class="fas fa-sync-alt"></i> Clear Cache
+                </a>
             </div>
         </div>
 
@@ -902,35 +707,11 @@ if ($table_check->num_rows > 0) {
             <div class="header-content">
                 <h1><i class="fas fa-clipboard-check"></i> Manage Victim Requests</h1>
                 <p>Approve/reject victim requests with needs assessment</p>
-                <div class="schema-info">
-                    <strong><i class="fas fa-database"></i> Data Integration:</strong><br>
-                    <small>Combining Victim data with Needs assessment for better decision making</small>
-                </div>
             </div>
             <div class="header-actions">
                 <a href="distribution_main.php" class="btn btn-secondary">
                     <i class="fas fa-arrow-left"></i> Back to Dashboard
                 </a>
-                <?php if ($selected_disaster_id && isset($statistics) && $statistics['approved_not_distributed'] > 0): ?>
-                    <a href="create_distribution_plan.php?disaster_id=<?php echo $selected_disaster_id; ?>" 
-                       class="btn btn-success">
-                        <i class="fas fa-plus-circle"></i> Create Distribution Plan
-                        <span class="badge-approved" style="margin-left: 10px;">
-                            <?php echo $statistics['approved_not_distributed']; ?> available
-                        </span>
-                    </a>
-                <?php endif; ?>
-            </div>
-        </div>
-
-        <!-- Data Source Info -->
-        <div class="data-source-info">
-            <strong><i class="fas fa-info-circle"></i> Data Integration:</strong>
-            <div style="margin-top: 5px;">
-                • <strong>Victim data</strong> from victim.php (personal information)<br>
-                • <strong>Needs data</strong> from needs.php (resources & priorities)<br>
-                • <strong>Disaster data</strong> from disaster.php (context)<br>
-                • Total victims with needs: <strong><?php echo count($needs); ?></strong> for selected disaster
             </div>
         </div>
 
@@ -946,40 +727,15 @@ if ($table_check->num_rows > 0) {
                 <i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error); ?>
             </div>
         <?php endif; ?>
-        
-        <?php if (!$table_exists): ?>
-            <div class="alert alert-danger">
-                <i class="fas fa-exclamation-triangle"></i> 
-                <strong>Database table missing!</strong> The 'victim_approvals' table does not exist.
-                <a href="create_table.php" style="margin-left: 10px;" class="btn btn-sm btn-primary">
-                    <i class="fas fa-plus"></i> Create Table
-                </a>
-            </div>
-        <?php endif; ?>
 
-        <!-- Disaster Selection Section -->
+        <!-- Disaster Selection -->
         <div class="card-3d" style="margin-bottom: 25px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <div>
-                    <h2><i class="fas fa-exclamation-triangle"></i> Select Disaster</h2>
-                    <p>Choose a disaster to manage victim requests with needs assessment</p>
-                </div>
-                <div style="background: #e8f5e9; color: #2e7d32; padding: 10px 20px; border-radius: 8px; font-weight: 600;">
-                    <i class="fas fa-database"></i> Integrated Victim + Needs Data
-                </div>
-            </div>
+            <h2><i class="fas fa-exclamation-triangle"></i> Select Disaster</h2>
             
             <?php if (empty($disasters)): ?>
                 <div class="empty-state">
                     <div class="empty-state-icon">📭</div>
                     <h3>No disasters found</h3>
-                    <p>No active disasters in the external system.</p>
-                    <?php if (!$disasterApiResult['success']): ?>
-                    <p style="color: #dc3545;">
-                        <i class="fas fa-exclamation-triangle"></i> 
-                        Could not connect to Disaster API: <?php echo htmlspecialchars($disasterApiResult['error'] ?? 'Unknown error'); ?>
-                    </p>
-                    <?php endif; ?>
                 </div>
             <?php else: ?>
                 <div class="table-container" style="max-height: 400px;">
@@ -990,60 +746,25 @@ if ($table_check->num_rows > 0) {
                                 <th>Disaster Name</th>
                                 <th>District</th>
                                 <th>Severity</th>
-                                <th>Status</th>
-                                <th>API Victims</th>
-                                <th>API Needs</th>
+                                <th>Victims</th>
                                 <th>Pending</th>
                                 <th>Approved</th>
                                 <th>Rejected</th>
-                                <th>Distribution Status</th>
-                                <th>Processed</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($disasters as $disaster): ?>
-                            <?php 
-                            $is_complete = $disaster['api_victim_count'] > 0 && 
-                                         $disaster['approved'] >= $disaster['api_victim_count'];
-                            ?>
-                            <tr style="<?php echo $disaster['is_processed'] ? 'background-color: #f8f9fa;' : ''; ?>">
+                            <tr>
                                 <td><strong>#<?php echo $disaster['disaster_id']; ?></strong></td>
-                                <td>
-                                    <div style="font-weight: 600;"><?php echo htmlspecialchars($disaster['Disaster_Name']); ?></div>
-                                    <?php if (!empty($disaster['description'])): ?>
-                                    <div style="font-size: 0.85em; color: #7f8c8d;">
-                                        <?php echo htmlspecialchars(substr($disaster['description'], 0, 50)); ?>...
-                                    </div>
-                                    <?php endif; ?>
-                                    <?php if ($disaster['is_processed'] && $disaster['processed_date']): ?>
-                                    <div style="font-size: 0.75em; color: #6c757d; margin-top: 3px;">
-                                        <i class="fas fa-calendar-check"></i> 
-                                        Processed: <?php echo date('M d, Y', strtotime($disaster['processed_date'])); ?>
-                                    </div>
-                                    <?php endif; ?>
-                                </td>
+                                <td><?php echo htmlspecialchars($disaster['Disaster_Name']); ?></td>
                                 <td><?php echo htmlspecialchars($disaster['Location']); ?></td>
                                 <td>
                                     <span class="badge-<?php echo strtolower($disaster['Disaster_Type']); ?>">
                                         <?php echo htmlspecialchars($disaster['Disaster_Type']); ?>
                                     </span>
                                 </td>
-                                <td>
-                                    <span class="badge-<?php echo strtolower($disaster['status']); ?>">
-                                        <?php echo htmlspecialchars($disaster['status']); ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <strong><?php echo $disaster['api_victim_count']; ?></strong> victims
-                                </td>
-                                <td>
-                                    <?php if ($disaster['api_need_count'] > 0): ?>
-                                        <span class="needs-count-badge"><?php echo $disaster['api_need_count']; ?> needs</span>
-                                    <?php else: ?>
-                                        <span style="color: #bdc3c7;">0</span>
-                                    <?php endif; ?>
-                                </td>
+                                <td><strong><?php echo $disaster['api_victim_count']; ?></strong></td>
                                 <td>
                                     <?php if ($disaster['pending'] > 0): ?>
                                         <span class="badge-pending"><?php echo $disaster['pending']; ?></span>
@@ -1054,12 +775,6 @@ if ($table_check->num_rows > 0) {
                                 <td>
                                     <?php if ($disaster['approved'] > 0): ?>
                                         <span class="badge-approved"><?php echo $disaster['approved']; ?></span>
-                                        <div style="font-size: 0.75em; color: #28a745;">
-                                            <?php echo $disaster['approved_not_distributed']; ?> available
-                                        </div>
-                                        <?php if ($is_complete): ?>
-                                            <br><small style="color: #28a745; font-size: 0.7em;">✓ Complete</small>
-                                        <?php endif; ?>
                                     <?php else: ?>
                                         <span style="color: #bdc3c7;">0</span>
                                     <?php endif; ?>
@@ -1072,37 +787,10 @@ if ($table_check->num_rows > 0) {
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if ($disaster['approved'] > 0): ?>
-                                        <div style="font-size: 0.85em;">
-                                            <div><?php echo $disaster['approved_not_distributed']; ?> not distributed</div>
-                                            <div><?php echo $disaster['approved_distributed']; ?> distributed</div>
-                                        </div>
-                                    <?php else: ?>
-                                        <span style="color: #bdc3c7;">-</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($disaster['is_processed']): ?>
-                                        <span class="badge-processed">
-                                            <i class="fas fa-check"></i> Processed
-                                        </span>
-                                    <?php else: ?>
-                                        <span style="color: #bdc3c7;">-</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($disaster['is_processed']): ?>
-                                        <button class="btn-sm btn-secondary" 
-                                                onclick="showProcessedInfo(<?php echo $disaster['disaster_id']; ?>)"
-                                                title="View Processed Details">
-                                            <i class="fas fa-eye"></i> View
-                                        </button>
-                                    <?php else: ?>
-                                        <a href="?disaster_id=<?php echo $disaster['disaster_id']; ?>" 
-                                           class="btn-sm btn-primary" style="text-decoration: none;">
-                                            <i class="fas fa-edit"></i> Manage
-                                        </a>
-                                    <?php endif; ?>
+                                    <a href="?disaster_id=<?php echo $disaster['disaster_id']; ?>" 
+                                       class="btn-sm btn-primary" style="text-decoration: none;">
+                                        <i class="fas fa-edit"></i> Manage
+                                    </a>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -1114,113 +802,34 @@ if ($table_check->num_rows > 0) {
 
         <?php if ($selected_disaster_id && isset($statistics)): ?>
         <!-- Selected Disaster Info -->
-        <?php 
-        $selected_disaster_info = null;
+        <?php $selected_disaster_info = null;
         foreach ($disasters as $d) {
             if ($d['disaster_id'] == $selected_disaster_id) {
                 $selected_disaster_info = $d;
                 break;
             }
-        }
-        ?>
+        } ?>
         
         <?php if ($selected_disaster_info): ?>
         <div class="card-3d" style="margin-bottom: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <h3 style="color: white; margin-bottom: 15px;">
+                <i class="fas fa-info-circle"></i> Disaster #<?php echo $selected_disaster_id; ?> - <?php echo htmlspecialchars($selected_disaster_info['Disaster_Name']); ?>
+            </h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
                 <div>
-                    <h3 style="color: white; margin-bottom: 15px;">
-                        <i class="fas fa-info-circle"></i> Disaster #<?php echo $selected_disaster_id; ?> - <?php echo htmlspecialchars($selected_disaster_info['Disaster_Name']); ?>
-                    </h3>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                        <div>
-                            <div style="opacity: 0.9; font-size: 0.9em;">District</div>
-                            <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Location']); ?></div>
-                        </div>
-                        <div>
-                            <div style="opacity: 0.9; font-size: 0.9em;">Severity</div>
-                            <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Disaster_Type']); ?></div>
-                        </div>
-                        <div>
-                            <div style="opacity: 0.9; font-size: 0.9em;">Status</div>
-                            <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['status']); ?></div>
-                        </div>
-                        <div>
-                            <div style="opacity: 0.9; font-size: 0.9em;">Needs in API</div>
-                            <div style="font-weight: 600; font-size: 1.1em;"><?php echo $selected_disaster_info['api_need_count']; ?> needs</div>
-                        </div>
-                    </div>
+                    <div style="opacity: 0.9; font-size: 0.9em;">District</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo htmlspecialchars($selected_disaster_info['Location']); ?></div>
                 </div>
-                
-                <?php if (isset($selected_disaster_processed) && $selected_disaster_processed): ?>
-                <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px; min-width: 200px;">
-                    <div style="font-weight: bold; margin-bottom: 5px;">
-                        <i class="fas fa-check-circle"></i> Disaster Processed
-                    </div>
-                    <?php if ($selected_disaster_info['processed_date']): ?>
-                    <div style="font-size: 0.9em;">
-                        Date: <?php echo date('M d, Y H:i', strtotime($selected_disaster_info['processed_date'])); ?>
-                    </div>
-                    <?php endif; ?>
-                    <?php if ($selected_disaster_info['processed_notes']): ?>
-                    <div style="font-size: 0.85em; margin-top: 5px;">
-                        <?php echo htmlspecialchars($selected_disaster_info['processed_notes']); ?>
-                    </div>
-                    <?php endif; ?>
-                    <button type="button" class="btn btn-sm btn-warning" style="margin-top: 10px;"
-                            onclick="resetProcessedStatus(<?php echo $selected_disaster_id; ?>)">
-                        <i class="fas fa-redo"></i> Reset Status
-                    </button>
-                </div>
-                <?php endif; ?>
-            </div>
-            
-            <?php 
-            $total_victims = $selected_disaster_info['api_victim_count'];
-            $approved = $selected_disaster_info['approved'];
-            $approved_not_distributed = $selected_disaster_info['approved_not_distributed'];
-            $is_complete = $total_victims > 0 && $approved >= $total_victims && $approved_not_distributed == 0;
-            ?>
-            
-            <div class="disaster-status-row" style="margin-top: 15px; background: rgba(255,255,255,0.1);">
-                <div style="flex-grow: 1;">
-                    <div style="font-weight: 600; margin-bottom: 5px;">Distribution Status</div>
-                    <div style="display: flex; gap: 15px; font-size: 0.9em;">
-                        <div>
-                            <i class="fas fa-check-circle" style="color: #28a745;"></i>
-                            Approved: <strong><?php echo $approved; ?></strong>
-                        </div>
-                        <div>
-                            <i class="fas fa-box-open" style="color: #17a2b8;"></i>
-                            Available for distribution: <strong><?php echo $approved_not_distributed; ?></strong>
-                        </div>
-                        <div>
-                            <i class="fas fa-truck" style="color: #6c757d;"></i>
-                            Already distributed: <strong><?php echo $selected_disaster_info['approved_distributed']; ?></strong>
-                        </div>
-                    </div>
-                    <?php if ($approved_not_distributed > 0): ?>
-                    <div style="font-size: 0.9em; margin-top: 5px; color: #90ee90;">
-                        <i class="fas fa-info-circle"></i>
-                        <?php echo $approved_not_distributed; ?> victims ready for distribution plan
-                    </div>
-                    <?php endif; ?>
-                </div>
-                
-                <?php if ($approved_not_distributed > 0): ?>
                 <div>
-                    <a href="create_distribution_plan.php?disaster_id=<?php echo $selected_disaster_id; ?>" 
-                       class="btn btn-success">
-                        <i class="fas fa-plus-circle"></i> Create Distribution Plan
-                    </a>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Total Victims</div>
+                    <div style="font-weight: 600; font-size: 1.1em;"><?php echo $statistics['total']; ?></div>
                 </div>
-                <?php elseif ($is_complete && !$selected_disaster_processed): ?>
                 <div>
-                    <button type="button" class="btn btn-success" 
-                            onclick="markAsProcessed(<?php echo $selected_disaster_id; ?>)">
-                        <i class="fas fa-check-double"></i> Mark as Processed
-                    </button>
+                    <div style="opacity: 0.9; font-size: 0.9em;">Page</div>
+                    <div style="font-weight: 600; font-size: 1.1em;">
+                        <?php echo $statistics['current_page']; ?> of <?php echo $statistics['total_pages']; ?>
+                    </div>
                 </div>
-                <?php endif; ?>
             </div>
         </div>
         <?php endif; ?>
@@ -1229,7 +838,7 @@ if ($table_check->num_rows > 0) {
         <div class="stats-grid">
             <div class="stat-card total">
                 <div class="stat-label">Total Victims</div>
-                <div class="stat-value"><?php echo $selected_disaster_info['api_victim_count']; ?></div>
+                <div class="stat-value"><?php echo $statistics['total']; ?></div>
             </div>
             <div class="stat-card pending">
                 <div class="stat-label"><i class="fas fa-clock"></i> Pending</div>
@@ -1238,71 +847,36 @@ if ($table_check->num_rows > 0) {
             <div class="stat-card approved">
                 <div class="stat-label"><i class="fas fa-check-circle"></i> Approved</div>
                 <div class="stat-value"><?php echo $statistics['approved']; ?></div>
-                <?php if ($selected_disaster_info['api_victim_count'] > 0): ?>
-                <div style="font-size: 0.8em; color: #28a745; margin-top: 5px;">
-                    <?php echo round(($statistics['approved'] / $selected_disaster_info['api_victim_count']) * 100, 1); ?>% approved
-                </div>
-                <?php endif; ?>
             </div>
             <div class="stat-card rejected">
                 <div class="stat-label"><i class="fas fa-times-circle"></i> Rejected</div>
                 <div class="stat-value"><?php echo $statistics['rejected']; ?></div>
             </div>
-            <div class="stat-card" style="border-top: 4px solid #17a2b8;">
-                <div class="stat-label"><i class="fas fa-box-open"></i> Available</div>
-                <div class="stat-value"><?php echo $statistics['approved_not_distributed']; ?></div>
-                <div style="font-size: 0.8em; color: #17a2b8; margin-top: 5px;">
-                    Ready for distribution
-                </div>
-            </div>
-            <?php if ($selected_disaster_processed): ?>
-            <div class="stat-card processed">
-                <div class="stat-label"><i class="fas fa-check-double"></i> Processed</div>
-                <div class="stat-value">✓</div>
-                <div style="font-size: 0.8em; color: #6c757d; margin-top: 5px;">
-                    All distributed
-                </div>
-            </div>
-            <?php endif; ?>
         </div>
 
-        <!-- Warning if no victims available for distribution -->
-        <?php if ($statistics['approved_not_distributed'] == 0 && $statistics['approved'] > 0): ?>
-        <div class="alert alert-info">
-            <i class="fas fa-info-circle"></i>
-            <div style="flex-grow: 1;">
-                <strong>All approved victims have been distributed!</strong>
-                <div style="margin-top: 5px;">
-                    <?php echo $statistics['approved_distributed']; ?> victims already distributed.
-                    <?php if (!$selected_disaster_processed): ?>
-                    <button type="button" class="btn btn-success btn-sm" 
-                            onclick="markAsProcessed(<?php echo $selected_disaster_id; ?>)"
-                            style="margin-left: 10px;">
-                        <i class="fas fa-check-double"></i> Mark as Processed
-                    </button>
-                    <?php endif; ?>
-                </div>
-            </div>
+        <!-- NEW: BULK ACTION BUTTONS FOR ALL VICTIMS -->
+        <div class="bulk-all-actions">
+            <button type="button" class="bulk-all-btn bulk-approve-all" 
+                    onclick="approveAll()">
+                <i class="fas fa-check-double"></i> Approve All <?php echo $statistics['total']; ?> Victims
+            </button>
+            
+            <button type="button" class="bulk-all-btn bulk-reject-all" 
+                    onclick="rejectAll()">
+                <i class="fas fa-times-circle"></i> Reject All <?php echo $statistics['total']; ?> Victims
+            </button>
+            
+            <button type="button" class="bulk-all-btn bulk-pending-all" 
+                    onclick="pendingAll()">
+                <i class="fas fa-clock"></i> Set All <?php echo $statistics['total']; ?> to Pending
+            </button>
         </div>
-        <?php elseif ($statistics['approved_not_distributed'] > 0): ?>
-        <div class="alert alert-success">
-            <i class="fas fa-check-circle"></i>
-            <div style="flex-grow: 1;">
-                <strong><?php echo $statistics['approved_not_distributed']; ?> victims available for distribution!</strong>
-                <div style="margin-top: 5px;">
-                    <a href="create_distribution_plan.php?disaster_id=<?php echo $selected_disaster_id; ?>" 
-                       class="btn btn-success">
-                        <i class="fas fa-plus-circle"></i> Create Distribution Plan
-                    </a>
-                </div>
-            </div>
-        </div>
-        <?php endif; ?>
 
         <!-- Filters -->
         <div class="filter-bar">
             <form method="GET" id="filter-form">
                 <input type="hidden" name="disaster_id" value="<?php echo $selected_disaster_id; ?>">
+                <input type="hidden" name="page" value="1">
                 
                 <div class="filter-grid">
                     <div class="form-group">
@@ -1312,7 +886,6 @@ if ($table_check->num_rows > 0) {
                             <option value="<?php echo $disaster['disaster_id']; ?>"
                                     <?php echo $selected_disaster_id == $disaster['disaster_id'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($disaster['Disaster_Name']); ?>
-                                <?php if ($disaster['is_processed']): ?> (Processed)<?php endif; ?>
                             </option>
                             <?php endforeach; ?>
                         </select>
@@ -1327,35 +900,30 @@ if ($table_check->num_rows > 0) {
                             <option value="Rejected" <?php echo $selected_status_filter === 'Rejected' ? 'selected' : ''; ?>>Rejected</option>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <button type="button" class="btn btn-secondary" 
-                                onclick="window.location.href='?disaster_id=<?php echo $selected_disaster_id; ?>'">
-                            <i class="fas fa-times"></i> Clear Filters
-                        </button>
-                    </div>
                 </div>
             </form>
         </div>
 
-        <!-- Bulk Actions Form -->
-        <form method="POST" id="bulk-action-form">
+        <!-- Bulk Actions Form (for selected victims on current page) -->
+        <form method="POST" id="bulk-action-form" onsubmit="return handleBulkSubmit(this)">
             <input type="hidden" name="disaster_id" value="<?php echo $selected_disaster_id; ?>">
             <input type="hidden" name="status_filter" value="<?php echo $selected_status_filter; ?>">
+            <input type="hidden" name="page" value="<?php echo $page; ?>">
             
             <div class="bulk-actions-bar" id="bulk-actions-bar">
                 <div>
                     <strong><i class="fas fa-check-square"></i> 
-                    <span id="selected-count">0</span> victim(s) selected</strong>
+                    <span id="selected-count-text">0</span> victim(s) selected on this page</strong>
                 </div>
                 <div style="display: flex; gap: 10px;">
                     <button type="submit" name="bulk_action" value="approve" 
                             class="btn btn-success"
-                            onclick="return confirm('Approve selected victims?')">
+                            id="bulk-approve-btn">
                         <i class="fas fa-check"></i> Approve Selected
                     </button>
                     <button type="submit" name="bulk_action" value="reject" 
                             class="btn btn-danger"
-                            onclick="return confirm('Reject selected victims?')">
+                            id="bulk-reject-btn">
                         <i class="fas fa-times"></i> Reject Selected
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="clearSelection()">
@@ -1368,16 +936,16 @@ if ($table_check->num_rows > 0) {
             <div class="card-3d">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 style="margin: 0;">
-                        <i class="fas fa-users"></i> Victim Requests with Needs Assessment
+                        <i class="fas fa-users"></i> Victim Requests (Page <?php echo $statistics['current_page']; ?> of <?php echo $statistics['total_pages']; ?>)
                         <span style="font-size: 0.7em; color: #7f8c8d;">
-                            (<?php echo count($needs); ?> victims)
+                            (<?php echo count($needs); ?> victims on this page)
                         </span>
                     </h2>
                     <?php if (count($needs) > 0): ?>
                     <div>
                         <label style="display: flex; align-items: center; font-weight: 600; gap: 10px;">
                             <input type="checkbox" id="select-all" style="transform: scale(1.2);">
-                            Select All (<?php echo count($needs); ?> victims)
+                            Select All on This Page (<?php echo count($needs); ?> victims)
                         </label>
                     </div>
                     <?php endif; ?>
@@ -1389,16 +957,9 @@ if ($table_check->num_rows > 0) {
                         <h3>No victims found</h3>
                         <p>
                             <?php if ($selected_status_filter !== 'all'): ?>
-                                No <?php echo strtolower($selected_status_filter); ?> victims for disaster #<?php echo $selected_disaster_id; ?>.
-                            <?php else: ?>
-                                No victim requests found for disaster #<?php echo $selected_disaster_id; ?>.
+                                No <?php echo strtolower($selected_status_filter); ?> victims on this page.
                             <?php endif; ?>
                         </p>
-                        <div style="margin-top: 15px;">
-                            <a href="?disaster_id=<?php echo $selected_disaster_id; ?>" class="btn btn-secondary">
-                                <i class="fas fa-times"></i> Clear Filter
-                            </a>
-                        </div>
                     </div>
                 <?php else: ?>
                     <div class="table-container">
@@ -1412,7 +973,7 @@ if ($table_check->num_rows > 0) {
                                     <th>Victim Info</th>
                                     <th>Contact</th>
                                     <th>Location</th>
-                                    <th>Needs & Priorities</th>
+                                    <th>Needs</th>
                                     <th>Status</th>
                                     <th>Actions</th>
                                 </tr>
@@ -1420,37 +981,15 @@ if ($table_check->num_rows > 0) {
                             <tbody>
                                 <?php foreach ($needs as $victim): ?>
                                 <?php 
-                                // Get victim info with correct field names from YOUR API
                                 $victim_id = intval($victim['victim_id'] ?? 0);
                                 $full_name = $victim['full_name'] ?? 'Unknown';
                                 $ic_number = $victim['ic_number'] ?? 'N/A';
                                 $email = $victim['email'] ?? 'N/A';
                                 $phone = $victim['phone'] ?? '';
                                 $address = $victim['address'] ?? 'Unknown';
-                                $city = $victim['city'] ?? '';
-                                $postal_code = $victim['postal_code'] ?? '';
                                 $district = $victim['district'] ?? 'N/A';
                                 $family_members = intval($victim['family_members'] ?? 1);
-                                
-                                // Handle boolean fields (t/f or true/false)
-                                $has_baby = false;
-                                if (isset($victim['has_baby'])) {
-                                    $has_baby = ($victim['has_baby'] === 't' || $victim['has_baby'] === true);
-                                }
-                                
-                                $has_elderly = false;
-                                if (isset($victim['has_elderly'])) {
-                                    $has_elderly = ($victim['has_elderly'] === 't' || $victim['has_elderly'] === true);
-                                }
-                                
-                                $has_disabled = false;
-                                if (isset($victim['has_disabled'])) {
-                                    $has_disabled = ($victim['has_disabled'] === 't' || $victim['has_disabled'] === true);
-                                }
-                                
-                                $special_request = $victim['special_request'] ?? '';
                                 $approval_status = $victim['approval_status'] ?? 'Pending';
-                                $is_distributed = $victim['is_distributed'] ?? 0;
                                 $needs_list = $victim['needs'] ?? [];
                                 $priority = $victim['priority'] ?? 'Medium';
                                 $needs_count = $victim['needs_count'] ?? 0;
@@ -1467,22 +1006,6 @@ if ($table_check->num_rows > 0) {
                                         <div style="font-size: 0.85em; color: #7f8c8d;">
                                             <i class="fas fa-id-card"></i> <?php echo htmlspecialchars($ic_number); ?>
                                         </div>
-                                        <div style="font-size: 0.85em; color: #7f8c8d; margin-top: 2px;">
-                                            <i class="fas fa-users"></i> <?php echo $family_members; ?> family members
-                                        </div>
-                                        <?php if ($approval_status === 'Approved'): ?>
-                                        <div class="distribution-status">
-                                            <?php if ($is_distributed): ?>
-                                                <span class="badge-distributed">
-                                                    <i class="fas fa-truck"></i> Distributed
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="badge-not-distributed">
-                                                    <i class="fas fa-box-open"></i> Available
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
-                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <div style="font-size: 0.9em;">
@@ -1496,10 +1019,6 @@ if ($table_check->num_rows > 0) {
                                     </td>
                                     <td>
                                         <div style="font-weight: 500;"><?php echo htmlspecialchars($address); ?></div>
-                                        <div style="font-size: 0.85em; color: #7f8c8d; margin-top: 3px;">
-                                            <?php echo htmlspecialchars($city); ?>
-                                            <?php if (!empty($postal_code)): ?>(<?php echo htmlspecialchars($postal_code); ?>)<?php endif; ?>
-                                        </div>
                                         <div style="font-size: 0.85em; color: #7f8c8d;">
                                             <i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($district); ?>
                                         </div>
@@ -1515,57 +1034,11 @@ if ($table_check->num_rows > 0) {
                                                 </span>
                                             <?php endif; ?>
                                         </div>
-                                        
-                                        <?php if (!empty($needs_list)): ?>
-                                            <div class="needs-container">
-                                                <?php foreach ($needs_list as $need): ?>
-                                                    <div class="need-item">
-                                                        <span class="need-resource">
-                                                            <?php echo htmlspecialchars($need['resource_name'] ?? 'Unknown'); ?>
-                                                        </span>
-                                                        <span class="need-quantity">
-                                                            <?php echo $need['quantity_needed'] ?? 0; ?>
-                                                        </span>
-                                                        <span class="need-priority priority-<?php echo strtolower($need['priority'] ?? 'Medium'); ?>">
-                                                            <?php echo $need['priority'] ?? 'Medium'; ?>
-                                                        </span>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                            </div>
-                                        <?php else: ?>
-                                            <div style="color: #bdc3c7; font-size: 0.9em; margin-top: 5px;">
-                                                No specific needs listed
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <!-- Special needs badges -->
-                                        <div style="margin-top: 8px;">
-                                            <?php if ($has_baby): ?>
-                                                <span class="special-needs-badge badge-baby">
-                                                    <i class="fas fa-baby"></i> Baby
-                                                </span>
-                                            <?php endif; ?>
-                                            <?php if ($has_elderly): ?>
-                                                <span class="special-needs-badge badge-elderly">
-                                                    <i class="fas fa-walking-cane"></i> Elderly
-                                                </span>
-                                            <?php endif; ?>
-                                            <?php if ($has_disabled): ?>
-                                                <span class="special-needs-badge badge-disabled">
-                                                    <i class="fas fa-wheelchair"></i> Disabled
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
                                     </td>
                                     <td>
                                         <span class="badge-<?php echo strtolower($approval_status); ?>">
                                             <?php echo $approval_status; ?>
                                         </span>
-                                        <?php if ($approval_status === 'Approved' && $is_distributed): ?>
-                                        <div style="font-size: 0.75em; color: #6c757d; margin-top: 3px;">
-                                            Already in distribution
-                                        </div>
-                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <div class="action-buttons">
@@ -1599,31 +1072,37 @@ if ($table_check->num_rows > 0) {
                             </tbody>
                         </table>
                     </div>
-                    
-                    <?php if ($statistics['approved_not_distributed'] > 0): ?>
-                        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6; display: flex; justify-content: space-between;">
-                            <a href="create_distribution_plan.php?disaster_id=<?php echo $selected_disaster_id; ?>" 
-                               class="btn btn-success">
-                                <i class="fas fa-plus-circle"></i> Create Distribution Plan
-                                <span class="badge-approved" style="margin-left: 10px;">
-                                    <?php echo $statistics['approved_not_distributed']; ?> available victims
-                                </span>
-                            </a>
-                            <a href="distribution_main.php" class="btn btn-secondary">
-                                <i class="fas fa-arrow-left"></i> Back to Dashboard
-                            </a>
-                        </div>
-                    <?php else: ?>
-                        <div class="alert" style="background: #fff3cd; color: #856404; margin-top: 20px;">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            <strong>No victims available for distribution.</strong>
-                            <?php if ($statistics['approved'] > 0): ?>
-                                All <?php echo $statistics['approved']; ?> approved victims have been distributed.
-                            <?php else: ?>
-                                Approve at least one victim to create a distribution plan.
-                            <?php endif; ?>
-                        </div>
+                <?php endif; ?>
+                
+                <!-- Pagination -->
+                <?php if ($statistics['total_pages'] > 1): ?>
+                <div class="pagination">
+                    <?php if ($page > 1): ?>
+                        <a href="?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=1" 
+                           class="btn btn-sm btn-secondary">
+                            <i class="fas fa-angle-double-left"></i> First
+                        </a>
+                        <a href="?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $page - 1; ?>" 
+                           class="btn btn-sm btn-secondary">
+                            <i class="fas fa-angle-left"></i> Previous
+                        </a>
                     <?php endif; ?>
+                    
+                    <span class="page-info">
+                        Page <?php echo $page; ?> of <?php echo $statistics['total_pages']; ?>
+                    </span>
+                    
+                    <?php if ($page < $statistics['total_pages']): ?>
+                        <a href="?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $page + 1; ?>" 
+                           class="btn btn-sm btn-secondary">
+                            Next <i class="fas fa-angle-right"></i>
+                        </a>
+                        <a href="?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $statistics['total_pages']; ?>" 
+                           class="btn btn-sm btn-secondary">
+                            Last <i class="fas fa-angle-double-right"></i>
+                        </a>
+                    <?php endif; ?>
+                </div>
                 <?php endif; ?>
             </div>
         </form>
@@ -1631,45 +1110,65 @@ if ($table_check->num_rows > 0) {
     </div>
 
     <script>
-        // Select all checkboxes
+        // Update selection counters
+        function updateSelectionCounters() {
+            const checkboxes = document.querySelectorAll('.need-checkbox:checked');
+            const selectedCount = checkboxes.length;
+            
+            document.getElementById('selected-count').textContent = selectedCount;
+            document.getElementById('selected-count-text').textContent = selectedCount;
+            
+            const counter = document.getElementById('selection-counter');
+            if (selectedCount > 0) {
+                counter.style.display = 'block';
+            } else {
+                counter.style.display = 'none';
+            }
+            
+            // Show warning for large selections
+            const warning = document.getElementById('large-selection-warning');
+            if (selectedCount > 20) {
+                warning.style.display = 'block';
+                document.getElementById('warning-message').textContent = 
+                    `You have selected ${selectedCount} victims. This may take time to process.`;
+            } else {
+                warning.style.display = 'none';
+            }
+        }
+        
+        // Select all checkboxes on current page
         document.getElementById('select-all')?.addEventListener('change', function() {
             const checkboxes = document.querySelectorAll('.need-checkbox');
+            const isChecked = this.checked;
+            
             checkboxes.forEach(checkbox => {
-                checkbox.checked = this.checked;
+                checkbox.checked = isChecked;
             });
+            
             const headerCheckbox = document.getElementById('select-all-header');
-            if (headerCheckbox) headerCheckbox.checked = this.checked;
-            updateBulkActionsBar();
+            if (headerCheckbox) headerCheckbox.checked = isChecked;
+            
+            updateSelectionCounters();
         });
         
         document.getElementById('select-all-header')?.addEventListener('change', function() {
             const checkboxes = document.querySelectorAll('.need-checkbox');
-            checkboxes.forEach(checkbox => {
-                checkbox.checked = this.checked;
-            });
-            const mainCheckbox = document.getElementById('select-all');
-            if (mainCheckbox) mainCheckbox.checked = this.checked;
-            updateBulkActionsBar();
-        });
-        
-        // Update bulk actions bar when checkboxes change
-        document.querySelectorAll('.need-checkbox').forEach(checkbox => {
-            checkbox.addEventListener('change', updateBulkActionsBar);
-        });
-        
-        function updateBulkActionsBar() {
-            const checkedBoxes = document.querySelectorAll('.need-checkbox:checked');
-            const count = checkedBoxes.length;
-            const bulkBar = document.getElementById('bulk-actions-bar');
-            const countSpan = document.getElementById('selected-count');
+            const isChecked = this.checked;
             
-            if (count > 0) {
-                bulkBar.classList.add('active');
-                countSpan.textContent = count;
-            } else {
-                bulkBar.classList.remove('active');
-            }
-        }
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = isChecked;
+            });
+            
+            const mainCheckbox = document.getElementById('select-all');
+            if (mainCheckbox) mainCheckbox.checked = isChecked;
+            
+            updateSelectionCounters();
+        });
+        
+        // Update when individual checkboxes change
+        document.querySelectorAll('.need-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', updateSelectionCounters);
+        });
         
         function clearSelection() {
             document.querySelectorAll('.need-checkbox').forEach(checkbox => {
@@ -1679,7 +1178,7 @@ if ($table_check->num_rows > 0) {
             const selectAllHeader = document.getElementById('select-all-header');
             if (selectAll) selectAll.checked = false;
             if (selectAllHeader) selectAllHeader.checked = false;
-            updateBulkActionsBar();
+            updateSelectionCounters();
         }
         
         function updateStatus(victimId, newStatus) {
@@ -1690,48 +1189,107 @@ if ($table_check->num_rows > 0) {
                 url.searchParams.set('new_status', newStatus);
                 url.searchParams.set('disaster_id', <?php echo $selected_disaster_id; ?>);
                 url.searchParams.set('status_filter', '<?php echo $selected_status_filter; ?>');
+                url.searchParams.set('page', <?php echo $page; ?>);
                 window.location.href = url.toString();
             }
         }
         
-        function markAsProcessed(disasterId) {
-            if (confirm('Mark this disaster as processed? It will not appear in the distribution creation page.')) {
-                const url = new URL(window.location.href);
-                url.searchParams.set('mark_processed', '1');
-                url.searchParams.set('disaster_id', disasterId);
-                window.location.href = url.toString();
+        // NEW: Functions to handle "Approve All", "Reject All", "Pending All"
+        function approveAll() {
+            if (confirm(`Approve ALL <?php echo $statistics['total']; ?> victims?\nThis may take a few seconds.`)) {
+                showLoadingOverlay(`Approving <?php echo $statistics['total']; ?> victims...`, <?php echo $statistics['total']; ?>);
+                setTimeout(() => {
+                    window.location.href = `?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $page; ?>&action_all=approve_all`;
+                }, 500);
             }
         }
         
-        function resetProcessedStatus(disasterId) {
-            if (confirm('Reset the processed status for this disaster? It will appear again in distribution creation.')) {
-                const url = new URL(window.location.href);
-                url.searchParams.set('reset_processed', '1');
-                url.searchParams.set('disaster_id', disasterId);
-                window.location.href = url.toString();
+        function rejectAll() {
+            if (confirm(`Reject ALL <?php echo $statistics['total']; ?> victims?\nThis may take a few seconds.`)) {
+                showLoadingOverlay(`Rejecting <?php echo $statistics['total']; ?> victims...`, <?php echo $statistics['total']; ?>);
+                setTimeout(() => {
+                    window.location.href = `?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $page; ?>&action_all=reject_all`;
+                }, 500);
             }
         }
         
-        function showProcessedInfo(disasterId) {
-            // Find the disaster data and show in alert
-            const disasterName = document.querySelector(`tr td:first-child strong[data-id="${disasterId}"]`)?.closest('tr')?.querySelector('td:nth-child(2) div:first-child')?.textContent || 'Disaster #' + disasterId;
-            alert(`Disaster "${disasterName}" has been marked as processed and will not appear in distribution creation.\n\nTo reset this status, click the "Manage" button and use the "Reset Status" option.`);
-        }
-        
-        function toggleDebugData() {
-            const debugDiv = document.getElementById('debugData');
-            if (debugDiv.style.display === 'none') {
-                debugDiv.style.display = 'block';
-            } else {
-                debugDiv.style.display = 'none';
+        function pendingAll() {
+            if (confirm(`Set ALL <?php echo $statistics['total']; ?> victims to Pending?\nThis may take a few seconds.`)) {
+                showLoadingOverlay(`Setting <?php echo $statistics['total']; ?> victims to Pending...`, <?php echo $statistics['total']; ?>);
+                setTimeout(() => {
+                    window.location.href = `?disaster_id=<?php echo $selected_disaster_id; ?>&status_filter=<?php echo $selected_status_filter; ?>&page=<?php echo $page; ?>&action_all=pending_all`;
+                }, 500);
             }
         }
         
-        // Initialize bulk actions bar state
-        document.addEventListener('DOMContentLoaded', function() {
-            updateBulkActionsBar();
+        // Handle bulk form submission for current page
+        function handleBulkSubmit(form) {
+            const checkboxes = document.querySelectorAll('.need-checkbox:checked');
+            const selectedCount = checkboxes.length;
             
-            // Auto-hide success messages after 5 seconds
+            if (selectedCount === 0) {
+                alert('Please select at least one victim.');
+                return false;
+            }
+            
+            const action = form.querySelector('button[type="submit"]:focus')?.value || 'approve';
+            const actionText = action === 'approve' ? 'Approve' : 'Reject';
+            
+            if (selectedCount > 20) {
+                const confirmed = confirm(
+                    `${actionText} ${selectedCount} selected victim(s)?\n` +
+                    `This may take a few seconds to process.`
+                );
+                if (!confirmed) {
+                    return false;
+                }
+                
+                showLoadingOverlay(`${actionText}ing ${selectedCount} victims...`, selectedCount);
+            } else {
+                if (!confirm(`${actionText} ${selectedCount} selected victim(s)?`)) {
+                    return false;
+                }
+            }
+            
+            return true;
+        }
+        
+        function showLoadingOverlay(message, selectedCount) {
+            const overlay = document.getElementById('loadingOverlay');
+            const title = document.getElementById('loadingTitle');
+            const msg = document.getElementById('loadingMessage');
+            const eta = document.getElementById('loadingETA');
+            
+            title.textContent = 'Processing...';
+            msg.textContent = message;
+            eta.textContent = `Estimated time: ${Math.ceil(selectedCount * 0.05)} seconds`;
+            
+            overlay.style.display = 'flex';
+            
+            startProgressAnimation(selectedCount);
+        }
+        
+        function startProgressAnimation(selectedCount) {
+            const progressFill = document.getElementById('progressFill');
+            let progress = 0;
+            const estimatedSeconds = Math.max(2, Math.ceil(selectedCount * 0.05));
+            const totalTime = estimatedSeconds * 1000;
+            
+            const interval = setInterval(() => {
+                progress += 1;
+                progressFill.style.width = progress + '%';
+                
+                if (progress >= 90) {
+                    clearInterval(interval);
+                }
+            }, totalTime / 100);
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateSelectionCounters();
+            
+            // Auto-hide success messages
             setTimeout(() => {
                 const successMsg = document.querySelector('.alert-success');
                 if (successMsg) {
@@ -1745,6 +1303,16 @@ if ($table_check->num_rows > 0) {
                 }
             }, 5000);
         });
+        
+        // Add CSS animation for spinner
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
     </script>
 </body>
 </html>

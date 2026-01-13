@@ -1905,122 +1905,119 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
                         </label>
                     </div>
                     
-<!-- REPLACE the victim card section in the victims-grid with this: -->
-<!-- Remove onclick="toggleVictim(...)" from the div -->
-
-<div class="victims-grid">
-    <?php foreach ($approved_victims as $victim): 
-        $priorityClass = 'priority-' . strtolower($victim['priority']);
-        $needs_count = count($victim['needs'] ?? []);
-        $has_special_request = !empty($victim['special_request']);
-    ?>
-    <div class="victim-card">
-        <div class="victim-header">
-            <div>
-                <div class="victim-name"><?php echo htmlspecialchars($victim['full_name']); ?></div>
-                <div style="font-size: 0.9rem; color: #666; margin-top: 5px;">
-                    <i class="fas fa-id-card"></i> <?php echo htmlspecialchars($victim['ic_number']); ?>
-                </div>
-                <div style="font-size: 0.8rem; color: #28a745; margin-top: 3px;">
-                    <i class="fas fa-check-circle"></i> Approved on <?php echo date('M d, Y', strtotime($victim['approved_at'])); ?>
-                </div>
-            </div>
-            <span class="priority-badge <?php echo $priorityClass; ?>">
-                <?php echo $victim['priority']; ?>
-            </span>
-        </div>
-        
-        <div class="victim-details">
-            <div style="margin-bottom: 8px;">
-                <i class="fas fa-home"></i> <?php echo htmlspecialchars($victim['address']); ?>, <?php echo htmlspecialchars($victim['city']); ?>, <?php echo htmlspecialchars($victim['district']); ?>
-            </div>
-            <?php if (!empty($victim['phone'])): ?>
-            <div style="margin-bottom: 8px;">
-                <i class="fas fa-phone"></i> <?php echo htmlspecialchars($victim['phone']); ?>
-            </div>
-            <?php endif; ?>
-            <div style="margin-bottom: 8px;">
-                <i class="fas fa-hotel"></i> Shelter: <?php echo htmlspecialchars($victim['selected_shelter']); ?>
-            </div>
-            <div>
-                <i class="fas fa-user-friends"></i> Family members: <?php echo $victim['family_members']; ?>
-            </div>
-        </div>
-        
-        <?php if ($has_special_request): ?>
-            <div class="special-request">
-                <div class="special-request-title">
-                    <i class="fas fa-exclamation-circle"></i> Special Request
-                </div>
-                <div class="special-request-content">
-                    "<?php echo htmlspecialchars($victim['special_request']); ?>"
-                </div>
-                <?php if (!empty($victim['special_request_items'])): ?>
-                    <div style="margin-top: 5px; font-size: 0.8rem; color: #856404;">
-                        <strong>Items needed:</strong> 
-                        <?php echo implode(', ', array_slice($victim['special_request_items'], 0, 3)); ?>
-                        <?php if (count($victim['special_request_items']) > 3): ?>
-                            and <?php echo count($victim['special_request_items']) - 3; ?> more
-                        <?php endif; ?>
-                    </div>
-                <?php endif; ?>
-            </div>
-        <?php endif; ?>
-        
-        <?php if (!empty($victim['needs'])): ?>
-            <div class="needs-container">
-                <div style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px; color: #444;">
-                    Additional Needs (<?php echo $needs_count; ?> items):
-                </div>
-                <?php foreach ($victim['needs'] as $need): ?>
-                    <div class="need-item">
-                        <span>
-                            <?php echo htmlspecialchars($need['resource_name']); ?>
-                            <?php if ($need['priority'] === 'High'): ?>
-                                <span class="priority-need-badge" style="margin-left: 5px; font-size: 0.7rem;">
-                                    High Priority
+                    <div class="victims-grid">
+                        <?php foreach ($approved_victims as $victim): 
+                            $priorityClass = 'priority-' . strtolower($victim['priority']);
+                            $needs_count = count($victim['needs'] ?? []);
+                            $has_special_request = !empty($victim['special_request']);
+                        ?>
+                        <div class="victim-card">
+                            <div class="victim-header">
+                                <div>
+                                    <div class="victim-name"><?php echo htmlspecialchars($victim['full_name']); ?></div>
+                                    <div style="font-size: 0.9rem; color: #666; margin-top: 5px;">
+                                        <i class="fas fa-id-card"></i> <?php echo htmlspecialchars($victim['ic_number']); ?>
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: #28a745; margin-top: 3px;">
+                                        <i class="fas fa-check-circle"></i> Approved on <?php echo date('M d, Y', strtotime($victim['approved_at'])); ?>
+                                    </div>
+                                </div>
+                                <span class="priority-badge <?php echo $priorityClass; ?>">
+                                    <?php echo $victim['priority']; ?>
                                 </span>
+                            </div>
+                            
+                            <div class="victim-details">
+                                <div style="margin-bottom: 8px;">
+                                    <i class="fas fa-home"></i> <?php echo htmlspecialchars($victim['address']); ?>, <?php echo htmlspecialchars($victim['city']); ?>, <?php echo htmlspecialchars($victim['district']); ?>
+                                </div>
+                                <?php if (!empty($victim['phone'])): ?>
+                                <div style="margin-bottom: 8px;">
+                                    <i class="fas fa-phone"></i> <?php echo htmlspecialchars($victim['phone']); ?>
+                                </div>
+                                <?php endif; ?>
+                                <div style="margin-bottom: 8px;">
+                                    <i class="fas fa-hotel"></i> Shelter: <?php echo htmlspecialchars($victim['selected_shelter']); ?>
+                                </div>
+                                <div>
+                                    <i class="fas fa-user-friends"></i> Family members: <?php echo $victim['family_members']; ?>
+                                </div>
+                            </div>
+                            
+                            <?php if ($has_special_request): ?>
+                                <div class="special-request">
+                                    <div class="special-request-title">
+                                        <i class="fas fa-exclamation-circle"></i> Special Request
+                                    </div>
+                                    <div class="special-request-content">
+                                        "<?php echo htmlspecialchars($victim['special_request']); ?>"
+                                    </div>
+                                    <?php if (!empty($victim['special_request_items'])): ?>
+                                        <div style="margin-top: 5px; font-size: 0.8rem; color: #856404;">
+                                            <strong>Items needed:</strong> 
+                                            <?php echo implode(', ', array_slice($victim['special_request_items'], 0, 3)); ?>
+                                            <?php if (count($victim['special_request_items']) > 3): ?>
+                                                and <?php echo count($victim['special_request_items']) - 3; ?> more
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
                             <?php endif; ?>
-                        </span>
-                        <span>
-                            <strong><?php echo $need['quantity_needed']; ?></strong>
-                            <span class="priority-badge priority-<?php echo strtolower($need['priority']); ?>" style="margin-left: 10px; font-size: 0.7rem;">
-                                <?php echo $need['priority']; ?>
-                            </span>
-                        </span>
+                            
+                            <?php if (!empty($victim['needs'])): ?>
+                                <div class="needs-container">
+                                    <div style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px; color: #444;">
+                                        Additional Needs (<?php echo $needs_count; ?> items):
+                                    </div>
+                                    <?php foreach ($victim['needs'] as $need): ?>
+                                        <div class="need-item">
+                                            <span>
+                                                <?php echo htmlspecialchars($need['resource_name']); ?>
+                                                <?php if ($need['priority'] === 'High'): ?>
+                                                    <span class="priority-need-badge" style="margin-left: 5px; font-size: 0.7rem;">
+                                                        High Priority
+                                                    </span>
+                                                <?php endif; ?>
+                                            </span>
+                                            <span>
+                                                <strong><?php echo $need['quantity_needed']; ?></strong>
+                                                <span class="priority-badge priority-<?php echo strtolower($need['priority']); ?>" style="margin-left: 10px; font-size: 0.7rem;">
+                                                    <?php echo $need['priority']; ?>
+                                                </span>
+                                            </span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                            
+                            <?php if ($victim['has_baby'] || $victim['has_elderly'] || $victim['has_disabled']): ?>
+                                <div class="special-needs">
+                                    <?php if ($victim['has_baby']): ?>
+                                        <span class="needs-badge needs-baby">
+                                            <i class="fas fa-baby"></i> Baby Care Needed
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($victim['has_elderly']): ?>
+                                        <span class="needs-badge needs-elderly">
+                                            <i class="fas fa-walking-cane"></i> Elderly Care Needed
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($victim['has_disabled']): ?>
+                                        <span class="needs-badge needs-disabled">
+                                            <i class="fas fa-wheelchair"></i> Disability Support Needed
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                            
+                            <input type="checkbox" 
+                                   name="selected_victims[]" 
+                                   value="<?php echo $victim['victim_id']; ?>" 
+                                   class="victim-checkbox"
+                                   style="position: absolute; top: 20px; right: 20px; transform: scale(1.3);">
+                        </div>
+                        <?php endforeach; ?>
                     </div>
-                <?php endforeach; ?>
-            </div>
-        <?php endif; ?>
-        
-        <?php if ($victim['has_baby'] || $victim['has_elderly'] || $victim['has_disabled']): ?>
-            <div class="special-needs">
-                <?php if ($victim['has_baby']): ?>
-                    <span class="needs-badge needs-baby">
-                        <i class="fas fa-baby"></i> Baby Care Needed
-                    </span>
-                <?php endif; ?>
-                <?php if ($victim['has_elderly']): ?>
-                    <span class="needs-badge needs-elderly">
-                        <i class="fas fa-walking-cane"></i> Elderly Care Needed
-                    </span>
-                <?php endif; ?>
-                <?php if ($victim['has_disabled']): ?>
-                    <span class="needs-badge needs-disabled">
-                        <i class="fas fa-wheelchair"></i> Disability Support Needed
-                    </span>
-                <?php endif; ?>
-            </div>
-        <?php endif; ?>
-        
-        <input type="checkbox" 
-               name="selected_victims[]" 
-               value="<?php echo $victim['victim_id']; ?>" 
-               class="victim-checkbox"
-               style="position: absolute; top: 20px; right: 20px; transform: scale(1.3);">
-    </div>
-    <?php endforeach; ?>
-</div>
                     
                     <div class="summary-bar">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -2041,7 +2038,7 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
                         <div class="section-title">
                             <i class="fas fa-boxes"></i>
                             <h2>Allocate Special Request Items</h2>
-                            <span class="available-badge" id="total-resources-count"><?php echo count($special_request_items); ?> special requests</span>
+                            <span class="available-badge" id="special-request-count-badge">0 items</span>
                         </div>
                         
                         <div class="alert alert-info">
@@ -2051,108 +2048,108 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
                                 <br>
                                 <small><strong>Basic Needs:</strong> Automatically allocated to all selected families (fetched from API)</small>
                                 <br>
-                                <small><strong>Special Requests:</strong> Specific items requested by families. Allocate based on actual needs.</small>
+                                <small><strong>Special Requests:</strong> Only showing items requested by selected families. Allocate based on actual needs.</small>
                             </div>
                         </div>
                         
                         <!-- Basic Needs Section (Informational Only) -->
                         <?php if (!empty($standard_basic_needs)): ?>
-    <div class="resource-category" style="border-color: #4CAF50;">
-        <div class="category-header">
-            <div class="category-title">
-                <i class="fas fa-check-circle"></i> 
-                Basic Needs (Automatically Allocated)
-                <span class="category-count"><?php echo count($standard_basic_needs); ?> items</span>
-            </div>
-            <div style="font-size: 0.9rem; color: #28a745;">
-                <i class="fas fa-info-circle"></i> Standard items fetched from Basic Needs API
-            </div>
-        </div>
-        
-        <div style="margin: 15px 0 10px 0; padding-left: 10px; border-left: 3px solid #4CAF50;">
-            <h4 style="margin: 0; color: #495057; font-size: 1rem;">
-                <i class="fas fa-tag"></i> Standard Relief Package
-                <small style="color: #6c757d; font-size: 0.85rem;">
-                    (automatically calculated: <strong><span class="family-count-display">0</span> families</strong> selected)
-                </small>
-            </h4>
-        </div>
-        
-        <div class="resources-columns">
-            <?php foreach ($standard_basic_needs as $index => $basic_need): 
-                $basic_need_hash = md5($basic_need['name']);
-            ?>
-            <div class="resource-item basic-need-item">
-                <div class="resource-header">
-                    <div>
-                        <div class="resource-name"><?php echo htmlspecialchars($basic_need['name']); ?></div>
-                        <span class="basic-need-badge">Basic Need</span>
-                        <span class="resource-unit-badge"><?php echo htmlspecialchars($basic_need['unit']); ?></span>
-                    </div>
-                    <span class="available-badge">Auto-allocated</span>
-                </div>
-                
-                <div class="resource-stats">
-                    <div class="stat-row">
-                        <span class="stat-label-small">
-                            <i class="fas fa-users"></i> Quantity per family:
-                        </span>
-                        <span class="stat-value"><?php echo $basic_need['quantity_per_family']; ?> <?php echo htmlspecialchars($basic_need['unit']); ?></span>
-                    </div>
-                    
-                    <div class="stat-row">
-                        <span class="stat-label-small">
-                            <i class="fas fa-info-circle"></i> Description:
-                        </span>
-                        <span class="stat-value"><?php echo htmlspecialchars($basic_need['description']); ?></span>
-                    </div>
-                    
-                    <?php if (!empty($basic_need['location'])): ?>
-                    <div class="stat-row">
-                        <span class="stat-label-small">
-                            <i class="fas fa-map-marker-alt"></i> Location:
-                        </span>
-                        <span class="stat-value"><?php echo htmlspecialchars($basic_need['location']); ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <?php if (!empty($basic_need['expiry_date'])): ?>
-                    <div class="stat-row">
-                        <span class="stat-label-small">
-                            <i class="fas fa-calendar"></i> Expiry Date:
-                        </span>
-                        <span class="stat-value"><?php echo htmlspecialchars($basic_need['expiry_date']); ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <div class="stat-row">
-                        <span class="stat-label-small">
-                            <i class="fas fa-box"></i> Total Available:
-                        </span>
-                        <span class="stat-value"><?php echo $basic_need['total_quantity_available']; ?> <?php echo htmlspecialchars($basic_need['unit']); ?></span>
-                    </div>
-                </div>
-                
-                <div class="auto-allocation-note">
-                    <i class="fas fa-calculator"></i> Will be automatically calculated: 
-                    <strong id="calc-<?php echo $basic_need_hash; ?>">0 <?php echo htmlspecialchars($basic_need['unit']); ?></strong>
-                    (<span id="calc-per-family-<?php echo $basic_need_hash; ?>"><?php echo $basic_need['quantity_per_family']; ?></span> 
-                    <?php echo htmlspecialchars($basic_need['unit']); ?> × <span class="family-count-display">0</span> families)
-                </div>
-            </div>
-            <?php endforeach; ?>
-        </div>
-    </div>
-<?php else: ?>
-    <div class="alert alert-warning">
-        <i class="fas fa-exclamation-triangle"></i>
-        <div>
-            <strong>No Basic Needs Available</strong>
-            <br>
-            <small>Unable to fetch basic needs from API. Please check the Basic Needs API connection.</small>
-        </div>
-    </div>
-<?php endif; ?>
+                            <div class="resource-category" style="border-color: #4CAF50;">
+                                <div class="category-header">
+                                    <div class="category-title">
+                                        <i class="fas fa-check-circle"></i> 
+                                        Basic Needs (Automatically Allocated)
+                                        <span class="category-count"><?php echo count($standard_basic_needs); ?> items</span>
+                                    </div>
+                                    <div style="font-size: 0.9rem; color: #28a745;">
+                                        <i class="fas fa-info-circle"></i> Standard items fetched from Basic Needs API
+                                    </div>
+                                </div>
+                                
+                                <div style="margin: 15px 0 10px 0; padding-left: 10px; border-left: 3px solid #4CAF50;">
+                                    <h4 style="margin: 0; color: #495057; font-size: 1rem;">
+                                        <i class="fas fa-tag"></i> Standard Relief Package
+                                        <small style="color: #6c757d; font-size: 0.85rem;">
+                                            (automatically calculated: <strong><span class="family-count-display">0</span> families</strong> selected)
+                                        </small>
+                                    </h4>
+                                </div>
+                                
+                                <div class="resources-columns">
+                                    <?php foreach ($standard_basic_needs as $index => $basic_need): 
+                                        $basic_need_hash = md5($basic_need['name']);
+                                    ?>
+                                    <div class="resource-item basic-need-item">
+                                        <div class="resource-header">
+                                            <div>
+                                                <div class="resource-name"><?php echo htmlspecialchars($basic_need['name']); ?></div>
+                                                <span class="basic-need-badge">Basic Need</span>
+                                                <span class="resource-unit-badge"><?php echo htmlspecialchars($basic_need['unit']); ?></span>
+                                            </div>
+                                            <span class="available-badge">Auto-allocated</span>
+                                        </div>
+                                        
+                                        <div class="resource-stats">
+                                            <div class="stat-row">
+                                                <span class="stat-label-small">
+                                                    <i class="fas fa-users"></i> Quantity per family:
+                                                </span>
+                                                <span class="stat-value"><?php echo $basic_need['quantity_per_family']; ?> <?php echo htmlspecialchars($basic_need['unit']); ?></span>
+                                            </div>
+                                            
+                                            <div class="stat-row">
+                                                <span class="stat-label-small">
+                                                    <i class="fas fa-info-circle"></i> Description:
+                                                </span>
+                                                <span class="stat-value"><?php echo htmlspecialchars($basic_need['description']); ?></span>
+                                            </div>
+                                            
+                                            <?php if (!empty($basic_need['location'])): ?>
+                                            <div class="stat-row">
+                                                <span class="stat-label-small">
+                                                    <i class="fas fa-map-marker-alt"></i> Location:
+                                                </span>
+                                                <span class="stat-value"><?php echo htmlspecialchars($basic_need['location']); ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($basic_need['expiry_date'])): ?>
+                                            <div class="stat-row">
+                                                <span class="stat-label-small">
+                                                    <i class="fas fa-calendar"></i> Expiry Date:
+                                                </span>
+                                                <span class="stat-value"><?php echo htmlspecialchars($basic_need['expiry_date']); ?></span>
+                                            </div>
+                                            <?php endif; ?>
+                                            
+                                            <div class="stat-row">
+                                                <span class="stat-label-small">
+                                                    <i class="fas fa-box"></i> Total Available:
+                                                </span>
+                                                <span class="stat-value"><?php echo $basic_need['total_quantity_available']; ?> <?php echo htmlspecialchars($basic_need['unit']); ?></span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="auto-allocation-note">
+                                            <i class="fas fa-calculator"></i> Will be automatically calculated: 
+                                            <strong id="calc-<?php echo $basic_need_hash; ?>">0 <?php echo htmlspecialchars($basic_need['unit']); ?></strong>
+                                            (<span id="calc-per-family-<?php echo $basic_need_hash; ?>"><?php echo $basic_need['quantity_per_family']; ?></span> 
+                                            <?php echo htmlspecialchars($basic_need['unit']); ?> × <span class="family-count-display">0</span> families)
+                                        </div>
+                                    </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        <?php else: ?>
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <div>
+                                    <strong>No Basic Needs Available</strong>
+                                    <br>
+                                    <small>Unable to fetch basic needs from API. Please check the Basic Needs API connection.</small>
+                                </div>
+                            </div>
+                        <?php endif; ?>
                         
                         <!-- Special Requests Section -->
                         <?php if (!empty($special_request_items)): ?>
@@ -2160,140 +2157,45 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
                                 <div class="category-header">
                                     <div class="category-title">
                                         <i class="fas fa-star"></i> 
-                                        Special Requests from Families
-                                        <span class="category-count"><?php echo count($special_request_items); ?> items</span>
+                                        Special Requests from Selected Families
+                                        <span class="category-count" id="special-request-count-badge">0 items</span>
                                     </div>
                                     <div style="font-size: 0.9rem; color: #856404;">
-                                        <i class="fas fa-info-circle"></i> Specific requests from selected families
+                                        <i class="fas fa-info-circle"></i> Only showing requests from selected families
                                     </div>
                                 </div>
                                 
-                                <?php 
-                                // Group special requests by type
-                                $specialRequestsByType = [];
-                                foreach ($special_request_items as $resource) {
-                                    $type = $resource['type'] ?? 'Special Request';
-                                    if (!isset($specialRequestsByType[$type])) {
-                                        $specialRequestsByType[$type] = [];
-                                    }
-                                    $specialRequestsByType[$type][] = $resource;
-                                }
-                                
-                                ksort($specialRequestsByType);
-                                
-                                foreach ($specialRequestsByType as $type => $typeResources): 
-                                    if (empty($typeResources)) continue;
-                                ?>
-                                    <div style="margin: 15px 0 10px 0; padding-left: 10px; border-left: 3px solid #ffc107;">
-                                        <h4 style="margin: 0; color: #495057; font-size: 1rem;">
-                                            <i class="fas fa-tag"></i> <?php echo htmlspecialchars($type); ?>
-                                            <small style="color: #6c757d; font-size: 0.85rem;">(<?php echo count($typeResources); ?> items)</small>
-                                        </h4>
-                                    </div>
-                                    
-                                    <div class="resources-columns">
-                                        <?php foreach ($typeResources as $resource): 
-                                            $resource_key = md5(strtolower($resource['name']) . $resource['type']);
-                                            $input_name = "special_{$resource_key}";
-                                        ?>
-                                        <div class="resource-item special-request-item">
-                                            <div class="resource-header">
-                                                <div>
-                                                    <div class="resource-name"><?php echo htmlspecialchars($resource['name']); ?></div>
-                                                    <span class="special-request-badge">
-                                                        Special Request
-                                                    </span>
-                                                    <span class="resource-unit-badge">
-                                                        <?php echo htmlspecialchars($resource['unit']); ?>
-                                                    </span>
-                                                </div>
-                                                <span class="available-badge">
-                                                    <?php echo $resource['quantity_available']; ?> available
-                                                </span>
-                                            </div>
-                                            
-                                            <?php if (isset($resource['requested_by']) && !empty($resource['requested_by'])): ?>
-                                                <div class="requested-by">
-                                                    <div class="requested-by-title">
-                                                        <i class="fas fa-user-check"></i> Requested by:
-                                                    </div>
-                                                    <div class="requested-by-list">
-                                                        <?php foreach (array_slice($resource['requested_by'], 0, 5) as $victim_name): ?>
-                                                            <span class="requested-by-item"><?php echo htmlspecialchars($victim_name); ?></span>
-                                                        <?php endforeach; ?>
-                                                        <?php if (count($resource['requested_by']) > 5): ?>
-                                                            <span class="requested-by-item">+<?php echo count($resource['requested_by']) - 5; ?> more</span>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </div>
-                                            <?php endif; ?>
-                                            
-                                            <div class="resource-controls">
-                                                <div>
-                                                    <div class="form-label" style="font-size: 0.85rem; margin-bottom: 5px;">Allocate Quantity:</div>
-                                                    <input type="number" 
-                                                           name="<?php echo $input_name; ?>" 
-                                                           class="quantity-input"
-                                                           min="0" 
-                                                           max="<?php echo $resource['quantity_available']; ?>"
-                                                           value="0"
-                                                           onchange="updateResourceTotal()"
-                                                           data-available="<?php echo $resource['quantity_available']; ?>"
-                                                           data-unit="<?php echo htmlspecialchars($resource['unit']); ?>"
-                                                           data-name="<?php echo htmlspecialchars($resource['name']); ?>"
-                                                           style="width: 120px;">
-                                                </div>
-                                                <div class="quantity-label">
-                                                    Max: <?php echo $resource['quantity_available']; ?> <?php echo htmlspecialchars($resource['unit']); ?>
-                                                </div>
-                                            </div>
+                                <div id="filtered-special-requests-container">
+                                    <!-- Will be populated by JavaScript -->
+                                    <div class="alert alert-info">
+                                        <i class="fas fa-info-circle"></i>
+                                        <div>
+                                            <strong>Select families first</strong>
+                                            <br>
+                                            <small>Special requests will appear here when you select families that have made requests.</small>
                                         </div>
-                                        <?php endforeach; ?>
                                     </div>
-                                <?php endforeach; ?>
-                            </div>
-                            
-                            <div class="summary-bar" style="background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div>
-                                        <h3 style="color: white; margin: 0;">Special Request Allocation Summary</h3>
-                                        <p style="color: rgba(255,255,255,0.9); margin: 5px 0 0 0;">
-                                            Special requests allocated: <strong id="special-request-total">0 units</strong>
-                                            (<span id="special-request-count">0</span> items)
-                                        </p>
-                                        <p style="color: rgba(255,255,255,0.8); margin: 5px 0 0 0; font-size: 0.9rem;">
-                                            <i class="fas fa-info-circle"></i> Basic needs: <strong><?php echo count($standard_basic_needs); ?> items</strong> (automatically allocated)
-                                        </p>
-                                    </div>
-                                    <button type="button" class="btn btn-primary" onclick="proceedToDetails()">
-                                        <i class="fas fa-arrow-right"></i> Continue to Plan Details
-                                    </button>
-                                </div>
-                            </div>
-                        <?php else: ?>
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle"></i>
-                                <div>
-                                    <strong>No Special Requests Found</strong>
-                                    <br>
-                                    <small>Selected families have not made any special requests. Basic needs will still be automatically allocated.</small>
-                                </div>
-                            </div>
-                            
-                            <div class="summary-bar" style="background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div>
-                                        <h3 style="color: white; margin: 0;">No Special Requests to Allocate</h3>
-                                        <p style="color: rgba(255,255,255,0.9); margin: 5px 0 0 0;">
-                                            Basic needs: <strong><?php echo count($standard_basic_needs); ?> items</strong> will be automatically allocated
-                                        </p>
-                                    </div>
-                                    <button type="button" class="btn btn-primary" onclick="proceedToDetails()">
-                                        <i class="fas fa-arrow-right"></i> Continue to Plan Details
-                                    </button>
                                 </div>
                             </div>
                         <?php endif; ?>
+                        
+                        <div class="summary-bar" style="background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h3 style="color: white; margin: 0;">Special Request Allocation Summary</h3>
+                                    <p style="color: rgba(255,255,255,0.9); margin: 5px 0 0 0;">
+                                        Special requests allocated: <strong id="special-request-total">0 units</strong>
+                                        (<span id="special-request-count">0</span> items)
+                                    </p>
+                                    <p style="color: rgba(255,255,255,0.8); margin: 5px 0 0 0; font-size: 0.9rem;">
+                                        <i class="fas fa-info-circle"></i> Basic needs: <strong><?php echo count($standard_basic_needs); ?> items</strong> (automatically allocated)
+                                    </p>
+                                </div>
+                                <button type="button" class="btn btn-primary" onclick="proceedToDetails()">
+                                    <i class="fas fa-arrow-right"></i> Continue to Plan Details
+                                </button>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Step 4: Distribution Details -->
@@ -2415,316 +2317,523 @@ error_log("Total page execution time: " . round($execution_time, 4) . " seconds"
         </div>
     </div>
     
-           <script>
- let currentStep = 1;
-let selectedVictims = [];
-let selectedFamiliesCount = 0;
-
-function toggleVictim(victimId) {
-    const checkbox = document.querySelector(`input[name="selected_victims[]"][value="${victimId}"]`);
-    if (checkbox) {
-        checkbox.checked = !checkbox.checked;
-        const card = checkbox.closest('.victim-card');
-        if (card) {
-            card.classList.toggle('selected', checkbox.checked);
+    <script>
+        let currentStep = 1;
+        let selectedVictims = [];
+        let selectedFamiliesCount = 0;
+        
+        // PHP data passed to JavaScript
+        let allSpecialRequests = <?php echo json_encode($special_request_items); ?>;
+        let allVictimsData = <?php echo json_encode($approved_victims); ?>;
+        
+        function toggleVictim(victimId) {
+            const checkbox = document.querySelector(`input[name="selected_victims[]"][value="${victimId}"]`);
+            if (checkbox) {
+                checkbox.checked = !checkbox.checked;
+                const card = checkbox.closest('.victim-card');
+                if (card) {
+                    card.classList.toggle('selected', checkbox.checked);
+                }
+                updateVictimSummary();
+            }
         }
-        updateVictimSummary();
-    }
-}
-
-function updateVictimSummary() {
-    const checkboxes = document.querySelectorAll('input[name="selected_victims[]"]:checked');
-    selectedVictims = Array.from(checkboxes).map(cb => cb.value);
-    selectedFamiliesCount = selectedVictims.length;
-    
-    console.log('Selected victims:', selectedVictims);
-    console.log('Selected count:', selectedFamiliesCount);
-    
-    // Update all family count displays
-    const selectedCountEl = document.getElementById('selected-count');
-    const proceedBtn = document.getElementById('proceed-btn');
-    const familyCountElements = document.querySelectorAll('.family-count-display');
-    
-    if (selectedCountEl) {
-        selectedCountEl.textContent = selectedFamiliesCount;
-    }
-    
-    // Update all family count elements
-    familyCountElements.forEach(el => {
-        el.textContent = selectedFamiliesCount;
-    });
-    
-    // Update final family count in step 4
-    const finalFamilyCountEl = document.getElementById('final-family-count');
-    if (finalFamilyCountEl) {
-        finalFamilyCountEl.textContent = selectedFamiliesCount;
-    }
-    
-    // Calculate total family members
-    let totalMembers = 0;
-    checkboxes.forEach(checkbox => {
-        const card = checkbox.closest('.victim-card');
-        if (card) {
-            const victimDetails = card.querySelector('.victim-details');
-            if (victimDetails) {
-                const divs = victimDetails.querySelectorAll('div');
-                divs.forEach(div => {
-                    const text = div.textContent || '';
-                    if (text.includes('Family members:')) {
-                        const match = text.match(/Family members:\s*(\d+)/);
-                        if (match) {
-                            totalMembers += parseInt(match[1]);
+        
+        function updateVictimSummary() {
+            const checkboxes = document.querySelectorAll('input[name="selected_victims[]"]:checked');
+            selectedVictims = Array.from(checkboxes).map(cb => cb.value);
+            selectedFamiliesCount = selectedVictims.length;
+            
+            console.log('Selected victims:', selectedVictims);
+            console.log('Selected count:', selectedFamiliesCount);
+            
+            // Update all family count displays
+            const selectedCountEl = document.getElementById('selected-count');
+            const proceedBtn = document.getElementById('proceed-btn');
+            const familyCountElements = document.querySelectorAll('.family-count-display');
+            
+            if (selectedCountEl) {
+                selectedCountEl.textContent = selectedFamiliesCount;
+            }
+            
+            // Update all family count elements
+            familyCountElements.forEach(el => {
+                el.textContent = selectedFamiliesCount;
+            });
+            
+            // Update final family count in step 4
+            const finalFamilyCountEl = document.getElementById('final-family-count');
+            if (finalFamilyCountEl) {
+                finalFamilyCountEl.textContent = selectedFamiliesCount;
+            }
+            
+            // Calculate total family members
+            let totalMembers = 0;
+            checkboxes.forEach(checkbox => {
+                const card = checkbox.closest('.victim-card');
+                if (card) {
+                    const victimDetails = card.querySelector('.victim-details');
+                    if (victimDetails) {
+                        const divs = victimDetails.querySelectorAll('div');
+                        divs.forEach(div => {
+                            const text = div.textContent || '';
+                            if (text.includes('Family members:')) {
+                                const match = text.match(/Family members:\s*(\d+)/);
+                                if (match) {
+                                    totalMembers += parseInt(match[1]);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+            
+            const finalTotalMembersEl = document.getElementById('final-total-members');
+            if (finalTotalMembersEl) {
+                finalTotalMembersEl.textContent = totalMembers;
+            }
+            
+            // IMPORTANT: Update basic needs calculations immediately
+            updateBasicNeedsCalculation();
+            
+            // Filter special requests based on selected families
+            filterSpecialRequests();
+            
+            if (proceedBtn) {
+                proceedBtn.disabled = selectedFamiliesCount === 0;
+            }
+        }
+        
+        function updateBasicNeedsCalculation() {
+            console.log('Updating basic needs calculation for', selectedFamiliesCount, 'families');
+            
+            // Find all elements with IDs starting with 'calc-'
+            const calcElements = document.querySelectorAll('[id^="calc-"]');
+            
+            calcElements.forEach(calcEl => {
+                const elementId = calcEl.id;
+                
+                // Extract the hash from the ID (format: calc-HASH)
+                const hash = elementId.replace('calc-', '');
+                
+                // Find the corresponding per-family element
+                const perFamilyEl = document.getElementById('calc-per-family-' + hash);
+                
+                if (perFamilyEl) {
+                    // Get the quantity per family
+                    const perFamilyText = perFamilyEl.textContent.trim();
+                    const perFamily = parseInt(perFamilyText) || 0;
+                    
+                    // Calculate total
+                    const total = perFamily * selectedFamiliesCount;
+                    
+                    // Get the unit from the parent element's data or text
+                    const unitMatch = calcEl.textContent.match(/(\w+)$/);
+                    const unit = unitMatch ? unitMatch[1] : 'units';
+                    
+                    // Update the display
+                    calcEl.textContent = total + ' ' + unit;
+                    
+                    console.log('Updated', elementId, ':', perFamily, 'x', selectedFamiliesCount, '=', total, unit);
+                }
+            });
+        }
+        
+        // Function to filter special requests based on selected families
+        function filterSpecialRequests() {
+            console.log('Filtering special requests for selected families:', selectedVictims);
+            
+            const container = document.getElementById('filtered-special-requests-container');
+            if (!container) return;
+            
+            if (selectedVictims.length === 0) {
+                // No families selected
+                container.innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>No families selected</strong>
+                            <br>
+                            <small>Select families first to see their special requests.</small>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('special-request-count-badge').textContent = '0 items';
+                return;
+            }
+            
+            // Create a map of selected victim IDs for quick lookup
+            const selectedVictimIds = new Set(selectedVictims);
+            
+            // Filter special requests to only include those requested by selected families
+            const filteredRequests = [];
+            
+            allSpecialRequests.forEach(request => {
+                // Check if any of the requesting victims are in our selected list
+                const requestingVictims = request.requested_by || {};
+                const requestingVictimIds = Object.keys(requestingVictims);
+                
+                // Find which of these victims are selected
+                const selectedRequestingVictims = {};
+                requestingVictimIds.forEach(victimId => {
+                    if (selectedVictimIds.has(victimId.toString())) {
+                        selectedRequestingVictims[victimId] = requestingVictims[victimId];
+                    }
+                });
+                
+                // Only include this request if at least one selected family requested it
+                if (Object.keys(selectedRequestingVictims).length > 0) {
+                    // Clone the request and update requested_by to only include selected families
+                    const filteredRequest = {...request};
+                    filteredRequest.requested_by = selectedRequestingVictims;
+                    filteredRequest.requesting_count = Object.keys(selectedRequestingVictims).length;
+                    filteredRequests.push(filteredRequest);
+                }
+            });
+            
+            // Group filtered requests by type
+            const filteredRequestsByType = {};
+            filteredRequests.forEach(request => {
+                const type = request.type || 'Special Request';
+                if (!filteredRequestsByType[type]) {
+                    filteredRequestsByType[type] = [];
+                }
+                filteredRequestsByType[type].push(request);
+            });
+            
+            // Update the UI
+            updateSpecialRequestsUI(filteredRequestsByType);
+        }
+        
+        // Function to update the special requests UI
+        function updateSpecialRequestsUI(filteredRequestsByType) {
+            const container = document.getElementById('filtered-special-requests-container');
+            
+            if (Object.keys(filteredRequestsByType).length === 0) {
+                container.innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>No special requests from selected families</strong>
+                            <br>
+                            <small>The selected families have not made any special requests.</small>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('special-request-count-badge').textContent = '0 items';
+                return;
+            }
+            
+            let html = '';
+            let totalRequests = 0;
+            
+            // Sort types
+            const sortedTypes = Object.keys(filteredRequestsByType).sort();
+            
+            sortedTypes.forEach(type => {
+                const typeRequests = filteredRequestsByType[type];
+                totalRequests += typeRequests.length;
+                
+                html += `
+                    <div style="margin: 15px 0 10px 0; padding-left: 10px; border-left: 3px solid #ffc107;">
+                        <h4 style="margin: 0; color: #495057; font-size: 1rem;">
+                            <i class="fas fa-tag"></i> ${escapeHtml(type)}
+                            <small style="color: #6c757d; font-size: 0.85rem;">(${typeRequests.length} items)</small>
+                        </h4>
+                    </div>
+                    
+                    <div class="resources-columns">
+                `;
+                
+                typeRequests.forEach(request => {
+                    const resource_key = md5(request.name.toLowerCase() + request.type);
+                    const input_name = "special_" + resource_key;
+                    
+                    html += `
+                        <div class="resource-item special-request-item" data-resource-key="${resource_key}">
+                            <div class="resource-header">
+                                <div>
+                                    <div class="resource-name">${escapeHtml(request.name)}</div>
+                                    <span class="special-request-badge">
+                                        Requested by ${request.requesting_count} family${request.requesting_count > 1 ? 's' : ''}
+                                    </span>
+                                    <span class="resource-unit-badge">
+                                        ${escapeHtml(request.unit)}
+                                    </span>
+                                </div>
+                                <span class="available-badge">
+                                    ${request.quantity_available} available
+                                </span>
+                            </div>
+                            
+                            <div class="requested-by">
+                                <div class="requested-by-title">
+                                    <i class="fas fa-user-check"></i> Requested by selected families:
+                                </div>
+                                <div class="requested-by-list">
+                    `;
+                    
+                    // Show up to 5 requesting families
+                    const requestingFamilies = Object.values(request.requested_by || {});
+                    requestingFamilies.slice(0, 5).forEach(name => {
+                        html += `<span class="requested-by-item">${escapeHtml(name)}</span>`;
+                    });
+                    
+                    if (requestingFamilies.length > 5) {
+                        html += `<span class="requested-by-item">+${requestingFamilies.length - 5} more</span>`;
+                    }
+                    
+                    html += `
+                                </div>
+                            </div>
+                            
+                            <div class="resource-controls">
+                                <div>
+                                    <div class="form-label" style="font-size: 0.85rem; margin-bottom: 5px;">Allocate Quantity:</div>
+                                    <input type="number" 
+                                           name="${input_name}" 
+                                           class="quantity-input"
+                                           min="0" 
+                                           max="${request.quantity_available}"
+                                           value="0"
+                                           onchange="updateResourceTotal()"
+                                           data-available="${request.quantity_available}"
+                                           data-unit="${escapeHtml(request.unit)}"
+                                           data-name="${escapeHtml(request.name)}"
+                                           style="width: 120px;">
+                                </div>
+                                <div class="quantity-label">
+                                    Max: ${request.quantity_available} ${escapeHtml(request.unit)}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += `</div>`;
+            });
+            
+            container.innerHTML = html;
+            document.getElementById('special-request-count-badge').textContent = totalRequests + ' items';
+            
+            // Reattach event listeners to the new quantity inputs
+            attachQuantityInputListeners();
+        }
+        
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Helper function for MD5 (simplified version)
+        function md5(input) {
+            // This is a simplified version - in production, use a proper MD5 library
+            return btoa(input).replace(/[+/=]/g, '').substring(0, 32);
+        }
+        
+        // Function to attach event listeners to quantity inputs
+        function attachQuantityInputListeners() {
+            document.querySelectorAll('.quantity-input').forEach(input => {
+                input.addEventListener('change', updateResourceTotal);
+            });
+        }
+        
+        function updateResourceTotal() {
+            const resourceInputs = document.querySelectorAll('input.quantity-input');
+            let total = 0;
+            let resourceCount = 0;
+            
+            resourceInputs.forEach(input => {
+                const value = parseInt(input.value) || 0;
+                if (value > 0) {
+                    total += value;
+                    resourceCount++;
+                }
+            });
+            
+            const resourceTotalEl = document.getElementById('special-request-total');
+            if (resourceTotalEl) {
+                resourceTotalEl.textContent = total + ' units';
+            }
+            
+            const resourceCountEl = document.getElementById('special-request-count');
+            if (resourceCountEl) {
+                resourceCountEl.textContent = resourceCount;
+            }
+            
+            const finalSpecialRequestsEl = document.getElementById('final-special-requests');
+            if (finalSpecialRequestsEl) {
+                finalSpecialRequestsEl.textContent = resourceCount;
+            }
+        }
+        
+        function proceedToResources() {
+            console.log('Proceeding to resources with', selectedFamiliesCount, 'families...');
+            
+            const resourceSection = document.getElementById('resource-section');
+            const detailsSection = document.getElementById('details-section');
+            
+            if (resourceSection) {
+                resourceSection.style.display = 'block';
+                
+                // Filter the requests based on selected families (already done by updateVictimSummary)
+                // Auto-suggest quantities
+                setTimeout(() => {
+                    autoSuggestSpecialRequests();
+                }, 100);
+                
+                // Scroll to resource section
+                resourceSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            if (detailsSection) {
+                detailsSection.style.display = 'none';
+            }
+            
+            currentStep = 3;
+            updateStepIndicator();
+            
+            // Force update of basic needs calculation
+            setTimeout(() => {
+                updateBasicNeedsCalculation();
+            }, 100);
+        }
+        
+        function proceedToDetails() {
+            console.log('Proceeding to details...');
+            const detailsSection = document.getElementById('details-section');
+            if (detailsSection) {
+                detailsSection.style.display = 'block';
+                // Scroll to details section
+                detailsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            
+            currentStep = 4;
+            updateStepIndicator();
+            updateResourceTotal();
+        }
+        
+        function updateStepIndicator() {
+            const steps = document.querySelectorAll('.step');
+            steps.forEach((step, index) => {
+                step.classList.remove('active');
+                if (index + 1 < currentStep) {
+                    step.classList.add('completed');
+                } else if (index + 1 === currentStep) {
+                    step.classList.add('active');
+                }
+            });
+        }
+        
+        function updateCoordinatorInfo() {
+            const select = document.getElementById('coordinator_select');
+            const selectedOption = select.options[select.selectedIndex];
+            const nameField = document.getElementById('coordinator_name');
+            const contactField = document.getElementById('coordinator_contact');
+            
+            if (nameField && contactField && selectedOption) {
+                nameField.value = selectedOption.dataset.name || '';
+                contactField.value = selectedOption.dataset.phone || '';
+            }
+        }
+        
+        function resetForm() {
+            if (confirm('Are you sure you want to reset the entire form?')) {
+                location.reload();
+            }
+        }
+        
+        function autoSuggestSpecialRequests() {
+            const resourceInputs = document.querySelectorAll('input.quantity-input');
+            resourceInputs.forEach(input => {
+                const max = parseInt(input.dataset.available) || 0;
+                
+                // Find how many families requested this item
+                const resourceItem = input.closest('.resource-item');
+                if (resourceItem) {
+                    const badge = resourceItem.querySelector('.special-request-badge');
+                    if (badge) {
+                        const match = badge.textContent.match(/\d+/);
+                        const requestingFamilies = match ? parseInt(match[0]) : 0;
+                        
+                        // Suggest quantity based on number of families requesting this item
+                        // But not more than available
+                        const suggested = Math.min(requestingFamilies, max);
+                        input.value = suggested > 0 ? suggested : 0;
+                    }
+                }
+            });
+            
+            updateResourceTotal();
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, initializing...');
+            
+            // Initialize select all functionality
+            const selectAllCheckbox = document.getElementById('select-all-victims');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.addEventListener('change', function() {
+                    const checkboxes = document.querySelectorAll('input[name="selected_victims[]"]');
+                    checkboxes.forEach(checkbox => {
+                        checkbox.checked = this.checked;
+                        const card = checkbox.closest('.victim-card');
+                        if (card) {
+                            card.classList.toggle('selected', this.checked);
+                        }
+                    });
+                    updateVictimSummary();
+                });
+            }
+            
+            // Handle clicks on victim cards
+            document.querySelectorAll('.victim-card').forEach(card => {
+                card.addEventListener('click', function(e) {
+                    // Check if we clicked directly on the checkbox or its container
+                    const clickedCheckbox = e.target.type === 'checkbox';
+                    
+                    if (!clickedCheckbox) {
+                        // We clicked somewhere else on the card, so toggle the checkbox
+                        const checkbox = this.querySelector('input[name="selected_victims[]"]');
+                        if (checkbox) {
+                            checkbox.checked = !checkbox.checked;
+                            this.classList.toggle('selected', checkbox.checked);
+                            updateVictimSummary();
                         }
                     }
                 });
-            }
-        }
-    });
-    
-    const finalTotalMembersEl = document.getElementById('final-total-members');
-    if (finalTotalMembersEl) {
-        finalTotalMembersEl.textContent = totalMembers;
-    }
-    
-    // IMPORTANT: Update basic needs calculations immediately
-    updateBasicNeedsCalculation();
-    
-    if (proceedBtn) {
-        proceedBtn.disabled = selectedFamiliesCount === 0;
-    }
-}
-
-function updateBasicNeedsCalculation() {
-    console.log('Updating basic needs calculation for', selectedFamiliesCount, 'families');
-    
-    // Find all elements with IDs starting with 'calc-'
-    const calcElements = document.querySelectorAll('[id^="calc-"]');
-    
-    calcElements.forEach(calcEl => {
-        const elementId = calcEl.id;
-        
-        // Extract the hash from the ID (format: calc-HASH)
-        const hash = elementId.replace('calc-', '');
-        
-        // Find the corresponding per-family element
-        const perFamilyEl = document.getElementById('calc-per-family-' + hash);
-        
-        if (perFamilyEl) {
-            // Get the quantity per family
-            const perFamilyText = perFamilyEl.textContent.trim();
-            const perFamily = parseInt(perFamilyText) || 0;
-            
-            // Calculate total
-            const total = perFamily * selectedFamiliesCount;
-            
-            // Get the unit from the parent element's data or text
-            const unitMatch = calcEl.textContent.match(/(\w+)$/);
-            const unit = unitMatch ? unitMatch[1] : 'units';
-            
-            // Update the display
-            calcEl.textContent = total + ' ' + unit;
-            
-            console.log('Updated', elementId, ':', perFamily, 'x', selectedFamiliesCount, '=', total, unit);
-        }
-    });
-}
-
-function updateResourceTotal() {
-    const resourceInputs = document.querySelectorAll('input.quantity-input');
-    let total = 0;
-    let resourceCount = 0;
-    
-    resourceInputs.forEach(input => {
-        const value = parseInt(input.value) || 0;
-        if (value > 0) {
-            total += value;
-            resourceCount++;
-        }
-    });
-    
-    const resourceTotalEl = document.getElementById('special-request-total');
-    if (resourceTotalEl) {
-        resourceTotalEl.textContent = total + ' units';
-    }
-    
-    const resourceCountEl = document.getElementById('special-request-count');
-    if (resourceCountEl) {
-        resourceCountEl.textContent = resourceCount;
-    }
-    
-    const finalSpecialRequestsEl = document.getElementById('final-special-requests');
-    if (finalSpecialRequestsEl) {
-        finalSpecialRequestsEl.textContent = resourceCount;
-    }
-}
-
-function proceedToResources() {
-    console.log('Proceeding to resources with', selectedFamiliesCount, 'families...');
-    
-    const resourceSection = document.getElementById('resource-section');
-    const detailsSection = document.getElementById('details-section');
-    
-    if (resourceSection) {
-        resourceSection.style.display = 'block';
-        // Scroll to resource section
-        resourceSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    if (detailsSection) {
-        detailsSection.style.display = 'none';
-    }
-    
-    currentStep = 3;
-    updateStepIndicator();
-    
-    // Force update of basic needs calculation
-    setTimeout(() => {
-        updateBasicNeedsCalculation();
-        autoSuggestSpecialRequests();
-    }, 100);
-}
-
-function proceedToDetails() {
-    console.log('Proceeding to details...');
-    const detailsSection = document.getElementById('details-section');
-    if (detailsSection) {
-        detailsSection.style.display = 'block';
-        // Scroll to details section
-        detailsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    
-    currentStep = 4;
-    updateStepIndicator();
-    updateResourceTotal();
-}
-
-function updateStepIndicator() {
-    const steps = document.querySelectorAll('.step');
-    steps.forEach((step, index) => {
-        step.classList.remove('active');
-        if (index + 1 < currentStep) {
-            step.classList.add('completed');
-        } else if (index + 1 === currentStep) {
-            step.classList.add('active');
-        }
-    });
-}
-
-function updateCoordinatorInfo() {
-    const select = document.getElementById('coordinator_select');
-    const selectedOption = select.options[select.selectedIndex];
-    const nameField = document.getElementById('coordinator_name');
-    const contactField = document.getElementById('coordinator_contact');
-    
-    if (nameField && contactField && selectedOption) {
-        nameField.value = selectedOption.dataset.name || '';
-        contactField.value = selectedOption.dataset.phone || '';
-    }
-}
-
-function resetForm() {
-    if (confirm('Are you sure you want to reset the entire form?')) {
-        location.reload();
-    }
-}
-
-function autoSuggestSpecialRequests() {
-    const resourceInputs = document.querySelectorAll('input.quantity-input');
-    resourceInputs.forEach(input => {
-        const max = parseInt(input.dataset.available) || 0;
-        const suggested = Math.min(selectedFamiliesCount, max);
-        input.value = suggested > 0 ? suggested : 0;
-    });
-    
-    updateResourceTotal();
-}
-
-// Initialize when page loads
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing...');
-    
-    // Initialize select all functionality
-    const selectAllCheckbox = document.getElementById('select-all-victims');
-    if (selectAllCheckbox) {
-        selectAllCheckbox.addEventListener('change', function() {
-            const checkboxes = document.querySelectorAll('input[name="selected_victims[]"]');
-            checkboxes.forEach(checkbox => {
-                checkbox.checked = this.checked;
-                const card = checkbox.closest('.victim-card');
-                if (card) {
-                    card.classList.toggle('selected', this.checked);
-                }
             });
-            updateVictimSummary();
-        });
-    }
-    
-    // Remove onclick from all victim cards and handle clicks properly
-    document.querySelectorAll('.victim-card').forEach(card => {
-        // Remove the onclick attribute that was set in HTML
-        card.removeAttribute('onclick');
-        
-        // Add proper click event listener
-        card.addEventListener('click', function(e) {
-            // Check if we clicked directly on the checkbox or its container
-            const clickedCheckbox = e.target.type === 'checkbox';
             
-            if (!clickedCheckbox) {
-                // We clicked somewhere else on the card, so toggle the checkbox
-                const checkbox = this.querySelector('input[name="selected_victims[]"]');
-                if (checkbox) {
-                    checkbox.checked = !checkbox.checked;
-                    this.classList.toggle('selected', checkbox.checked);
+            // Add change listeners to all victim checkboxes
+            const victimCheckboxes = document.querySelectorAll('input[name="selected_victims[]"]');
+            victimCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    console.log('Checkbox changed:', this.value, this.checked);
+                    const card = this.closest('.victim-card');
+                    if (card) {
+                        card.classList.toggle('selected', this.checked);
+                    }
                     updateVictimSummary();
-                }
+                });
+            });
+            
+            // Initialize step indicator
+            if (document.querySelectorAll('input[name="selected_victims[]"]').length > 0) {
+                currentStep = 2;
+                updateStepIndicator();
             }
-        });
-    });
-    
-    // Add change listeners to all victim checkboxes
-    const victimCheckboxes = document.querySelectorAll('input[name="selected_victims[]"]');
-    victimCheckboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', function() {
-            console.log('Checkbox changed:', this.value, this.checked);
-            const card = this.closest('.victim-card');
-            if (card) {
-                card.classList.toggle('selected', this.checked);
-            }
+            
+            // Initialize summary values
             updateVictimSummary();
+            updateResourceTotal();
+            
+            // Force an initial update after a short delay
+            setTimeout(() => {
+                updateVictimSummary();
+                console.log('Initial update complete');
+            }, 200);
         });
-    });
-    
-    // Initialize step indicator
-    if (document.querySelectorAll('input[name="selected_victims[]"]').length > 0) {
-        currentStep = 2;
-        updateStepIndicator();
-    }
-    
-    // Initialize summary values
-    updateVictimSummary();
-    updateResourceTotal();
-    
-    // Force an initial update after a short delay
-    setTimeout(() => {
-        updateVictimSummary();
-        console.log('Initial update complete');
-    }, 200);
-});
-
-// Debug helper
-window.debugSelection = function() {
-    const checkboxes = document.querySelectorAll('input[name="selected_victims[]"]');
-    console.log('Total checkboxes:', checkboxes.length);
-    console.log('Checked checkboxes:', document.querySelectorAll('input[name="selected_victims[]"]:checked').length);
-    console.log('Selected families count:', selectedFamiliesCount);
-    
-    checkboxes.forEach((cb, index) => {
-        console.log(`Checkbox ${index}: value=${cb.value}, checked=${cb.checked}`);
-    });
-    
-    // Test basic needs calculation
-    console.log('Testing basic needs calculation...');
-    updateBasicNeedsCalculation();
-};
     </script>
 </body>
 </html>

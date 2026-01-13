@@ -202,677 +202,302 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Backup & Recovery</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Database Backup & Recovery System</title>
     <style>
-        :root {
-            --primary: #4361ee;
-            --primary-dark: #3a56d4;
-            --success: #2ecc71;
-            --warning: #f39c12;
-            --danger: #e74c3c;
-            --info: #3498db;
-            --dark: #2c3e50;
-            --light: #f8f9fa;
-            --gray: #6c757d;
-            --border-radius: 12px;
-            --box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-            --transition: all 0.3s ease;
-        }
-        
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
             padding: 20px;
+            min-height: 100vh;
         }
-        
         .container {
             max-width: 1200px;
             margin: 0 auto;
             background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--box-shadow);
-            overflow: hidden;
-        }
-        
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, var(--primary), #7209b7);
-            color: white;
             padding: 40px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }
-        
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none" opacity="0.1"><path d="M0,0 L100,0 L100,100 Z" fill="white"/></svg>');
-            background-size: cover;
-        }
-        
-        .header h1 {
-            font-size: 2.8rem;
+        h1 {
+            color: #333;
             margin-bottom: 10px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .header-icon {
-            font-size: 4rem;
-            margin-bottom: 20px;
-            position: relative;
-            z-index: 1;
-            display: inline-block;
-            background: rgba(255,255,255,0.1);
-            width: 100px;
-            height: 100px;
-            line-height: 100px;
-            border-radius: 50%;
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255,255,255,0.2);
-        }
-        
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            padding: 30px;
-            background: var(--light);
-        }
-        
-        .stat-card {
-            background: white;
-            border-radius: var(--border-radius);
-            padding: 25px;
+            font-size: 2.5em;
             text-align: center;
-            box-shadow: var(--box-shadow);
-            transition: var(--transition);
-            border-top: 4px solid var(--primary);
         }
-        
-        .stat-card:hover {
-            transform: translateY(-5px);
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 1.1em;
         }
-        
-        .stat-icon {
-            width: 60px;
-            height: 60px;
-            background: linear-gradient(135deg, var(--primary), #7209b7);
-            color: white;
-            border-radius: 50%;
+        .db-info {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
             display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            margin: 0 auto 15px;
+            justify-content: space-around;
+            text-align: center;
         }
-        
-        .stat-value {
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: var(--dark);
-            margin: 10px 0;
+        .db-info div {
+            flex: 1;
         }
-        
-        .stat-label {
-            color: var(--gray);
-            font-size: 0.9rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        .db-info .label {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 5px;
         }
-        
-        /* Content Sections */
-        .content {
-            padding: 40px;
+        .db-info .value {
+            color: #667eea;
+            font-size: 2em;
+            font-weight: bold;
         }
-        
+        .message {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid;
+        }
+        .message.success {
+            background: #d4edda;
+            border-color: #28a745;
+            color: #155724;
+        }
+        .message.error {
+            background: #f8d7da;
+            border-color: #dc3545;
+            color: #721c24;
+        }
         .section {
             margin-bottom: 40px;
             padding: 30px;
-            background: var(--light);
-            border-radius: var(--border-radius);
+            background: #f8f9fa;
+            border-radius: 10px;
         }
-        
-        .section-title {
-            font-size: 1.5rem;
-            color: var(--dark);
-            margin-bottom: 25px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid rgba(67, 97, 238, 0.1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
+        .section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
         }
-        
-        /* Messages */
-        .message {
-            padding: 20px;
-            border-radius: var(--border-radius);
-            margin-bottom: 25px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            font-weight: 600;
-            animation: slideIn 0.5s ease;
-        }
-        
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            border-left: 4px solid var(--success);
-        }
-        
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid var(--danger);
-        }
-        
-        /* Buttons */
         .btn {
-            padding: 15px 30px;
+            padding: 12px 30px;
             border: none;
-            border-radius: 50px;
+            border-radius: 8px;
+            font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            transition: var(--transition);
+            transition: all 0.3s;
+            display: inline-block;
             text-decoration: none;
-            font-size: 1rem;
         }
-        
         .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
-        
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(67, 97, 238, 0.3);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
-        
-        .btn-success {
-            background: linear-gradient(135deg, var(--success), #27ae60);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(46, 204, 113, 0.3);
-        }
-        
         .btn-danger {
-            background: linear-gradient(135deg, var(--danger), #c0392b);
+            background: #dc3545;
             color: white;
         }
-        
         .btn-danger:hover {
+            background: #c82333;
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(231, 76, 60, 0.3);
         }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--primary);
-            border: 2px solid var(--primary);
-        }
-        
-        .btn-outline:hover {
-            background: var(--primary);
+        .btn-success {
+            background: #28a745;
             color: white;
         }
-        
-        /* Backup List */
-        .backup-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
+        .btn-success:hover {
+            background: #218838;
+            transform: translateY(-2px);
         }
-        
+        .backup-list {
+            margin-top: 20px;
+        }
         .backup-item {
             background: white;
-            border-radius: var(--border-radius);
-            padding: 25px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: var(--box-shadow);
-            transition: var(--transition);
-            border: 2px solid transparent;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
-        
-        .backup-item:hover {
-            border-color: var(--primary);
-            transform: translateX(5px);
-        }
-        
         .backup-info {
             flex: 1;
         }
-        
         .backup-name {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--dark);
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 1.1em;
         }
-        
         .backup-meta {
-            font-size: 0.9rem;
-            color: var(--gray);
-            display: flex;
-            gap: 20px;
+            color: #666;
+            font-size: 0.9em;
         }
-        
-        .backup-meta span {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        
         .backup-actions {
             display: flex;
             gap: 10px;
         }
-        
-        .btn-sm {
-            padding: 10px 20px;
-            font-size: 0.9rem;
-        }
-        
-        /* Empty State */
         .empty-state {
             text-align: center;
-            padding: 60px 20px;
-            color: var(--gray);
+            padding: 40px;
+            color: #999;
         }
-        
         .empty-state i {
-            font-size: 4rem;
-            margin-bottom: 20px;
-            color: #ddd;
+            font-size: 3em;
+            margin-bottom: 15px;
         }
-        
-        /* Warning Box */
-        .warning-box {
-            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
-            border: 2px solid #f39c12;
-            border-radius: var(--border-radius);
-            padding: 20px;
+        form {
             margin: 20px 0;
+        }
+        .confirm-text {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            color: #856404;
+        }
+        .btn-group {
             display: flex;
-            align-items: center;
             gap: 15px;
+            margin-bottom: 20px;
         }
-        
-        .warning-icon {
-            color: #f39c12;
-            font-size: 2rem;
-        }
-        
-        .warning-content h4 {
-            color: #856404;
-            margin-bottom: 5px;
-        }
-        
-        .warning-content p {
-            color: #856404;
-            font-size: 0.95rem;
-            opacity: 0.9;
-        }
-        
-        /* Quick Actions */
-        .quick-actions {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
-        
-        .action-card {
-            background: white;
-            border-radius: var(--border-radius);
-            padding: 25px;
-            text-align: center;
-            box-shadow: var(--box-shadow);
-            transition: var(--transition);
-            border: 2px solid transparent;
-        }
-        
-        .action-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-5px);
-        }
-        
-        .action-icon {
-            width: 70px;
-            height: 70px;
-            background: linear-gradient(135deg, var(--primary), #7209b7);
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-            margin: 0 auto 20px;
-        }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .header h1 { font-size: 2rem; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .backup-item { flex-direction: column; gap: 20px; }
-            .backup-actions { width: 100%; }
-            .btn-sm { flex: 1; }
-            .header { padding: 30px 20px; }
-            .content { padding: 20px; }
-        }
-        
-        @media (max-width: 576px) {
-            .stats-grid { grid-template-columns: 1fr; }
-            .backup-meta { flex-direction: column; gap: 5px; }
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <div class="header-icon">
-                <i class="fas fa-database"></i>
-            </div>
-            <h1>Database Backup & Recovery</h1>
-            <p>Disaster Relief System - Workshop 2</p>
-        </div>
+        <h1>🗄️ Database Backup & Recovery</h1>
+        <p class="subtitle">Database Administration System - Workshop 2</p>
         
-        <!-- Database Stats -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-database"></i>
-                </div>
-                <div class="stat-value"><?php echo $db; ?></div>
-                <div class="stat-label">Database Name</div>
+        <!-- Database Info -->
+        <div class="db-info">
+            <div>
+                <div class="label">Database Name</div>
+                <div class="value" style="font-size: 1.5em;"><?php echo $db; ?></div>
             </div>
-            
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-table"></i>
-                </div>
-                <div class="stat-value"><?php echo isset($dbInfo['tables']) ? $dbInfo['tables'] : 'N/A'; ?></div>
-                <div class="stat-label">Total Tables</div>
+            <div>
+                <div class="label">Total Tables</div>
+                <div class="value"><?php echo isset($dbInfo['tables']) ? $dbInfo['tables'] : 'N/A'; ?></div>
             </div>
-            
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-weight-hanging"></i>
-                </div>
-                <div class="stat-value"><?php echo isset($dbInfo['size']) ? $dbInfo['size'] . ' MB' : 'N/A'; ?></div>
-                <div class="stat-label">Database Size</div>
+            <div>
+                <div class="label">Database Size</div>
+                <div class="value"><?php echo isset($dbInfo['size']) ? $dbInfo['size'] . ' MB' : 'N/A'; ?></div>
             </div>
-            
-            <div class="stat-card">
-                <div class="stat-icon">
-                    <i class="fas fa-copy"></i>
-                </div>
-                <div class="stat-value"><?php echo count($backupFiles); ?></div>
-                <div class="stat-label">Total Backups</div>
+            <div>
+                <div class="label">Total Backups</div>
+                <div class="value"><?php echo count($backupFiles); ?></div>
             </div>
         </div>
         
-        <!-- Main Content -->
-        <div class="content">
-            <!-- Messages -->
-            <?php if ($message): ?>
-                <div class="message <?php echo $messageType; ?>">
-                    <i class="fas <?php echo $messageType == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
-                    <div><?php echo $message; ?></div>
-                </div>
-            <?php endif; ?>
-            
-            <!-- Warning for Restore -->
-            <?php if (isset($_POST['restore_backup']) || isset($_POST['create_backup'])): ?>
-                <div class="warning-box">
-                    <div class="warning-icon">
-                        <i class="fas fa-exclamation-triangle"></i>
-                    </div>
-                    <div class="warning-content">
-                        <h4>Important Notice</h4>
-                        <p>For complete recovery marks, ensure you document the backup-restore process with screenshots showing data before, during, and after restoration.</p>
-                    </div>
-                </div>
-            <?php endif; ?>
-            
-            <!-- Quick Actions -->
-            <div class="section">
-                <h2 class="section-title">
-                    <i class="fas fa-bolt"></i>
-                    Quick Actions
-                </h2>
-                
-                <div class="quick-actions">
-                    <div class="action-card">
-                        <div class="action-icon">
-                            <i class="fas fa-plus"></i>
-                        </div>
-                        <h3 style="margin-bottom: 15px; color: var(--dark);">Create New Backup</h3>
-                        <p style="color: var(--gray); margin-bottom: 20px; font-size: 0.95rem;">
-                            Create a complete backup of all database tables and data
-                        </p>
-                        <form method="POST" style="margin: 0;">
-                            <button type="submit" name="create_backup" class="btn btn-primary">
-                                <i class="fas fa-download"></i>
-                                Create Backup
-                            </button>
-                        </form>
-                    </div>
-                    
-                    <div class="action-card">
-                        <div class="action-icon">
-                            <i class="fas fa-info-circle"></i>
-                        </div>
-                        <h3 style="margin-bottom: 15px; color: var(--dark);">Backup Location</h3>
-                        <p style="color: var(--gray); margin-bottom: 20px; font-size: 0.95rem;">
-                            All backups are stored in the following directory:
-                        </p>
-                        <div style="background: var(--light); padding: 12px; border-radius: 8px; font-family: monospace; font-size: 0.9rem; color: var(--dark);">
-                            <?php echo htmlspecialchars($backupDir); ?>
-                        </div>
-                    </div>
-                </div>
+        <?php if ($message): ?>
+            <div class="message <?php echo $messageType; ?>">
+                <?php echo $message; ?>
             </div>
+        <?php endif; ?>
+        
+        <!-- Create Backup Section -->
+        <div class="section">
+            <h2>📥 Create New Backup</h2>
+            <p style="margin-bottom: 20px; color: #666;">
+                Create a complete backup of your database including all tables and data.
+            </p>
+            <form method="POST" action="">
+                <button type="submit" name="create_backup" class="btn btn-primary" style="font-size: 18px; padding: 15px 40px;">
+                    ⬇️ Create Backup Now
+                </button>
+            </form>
+            <p style="margin-top: 15px; color: #666; font-size: 0.9em;">
+                ℹ️ Backup will be saved to: <code><?php echo $backupDir; ?></code>
+            </p>
+        </div>
+        
+        <!-- Backup History -->
+        <div class="section">
+            <h2>📜 Backup History</h2>
             
-            <!-- Backup History -->
-            <div class="section">
-                <h2 class="section-title">
-                    <i class="fas fa-history"></i>
-                    Backup History
-                </h2>
-                
-                <?php if (empty($backupFiles)): ?>
-                    <div class="empty-state">
-                        <i class="fas fa-folder-open"></i>
-                        <h3>No Backups Found</h3>
-                        <p>Create your first backup to get started with database protection</p>
-                    </div>
-                <?php else: ?>
-                    <div class="backup-list">
-                        <?php foreach ($backupFiles as $backup): ?>
-                            <div class="backup-item">
-                                <div class="backup-info">
-                                    <div class="backup-name">
-                                        <i class="fas fa-file-alt"></i>
-                                        <?php echo htmlspecialchars($backup['name']); ?>
-                                    </div>
-                                    <div class="backup-meta">
-                                        <span>
-                                            <i class="fas fa-calendar"></i>
-                                            <?php echo $backup['date']; ?>
-                                        </span>
-                                        <span>
-                                            <i class="fas fa-weight-hanging"></i>
-                                            <?php echo round($backup['size'] / 1024, 2); ?> KB
-                                        </span>
-                                    </div>
-                                </div>
-                                <div class="backup-actions">
-                                    <form method="POST" style="display: inline; margin: 0;">
-                                        <input type="hidden" name="backup_file" value="<?php echo htmlspecialchars($backup['name']); ?>">
-                                        <button type="submit" name="restore_backup" 
-                                                class="btn btn-success btn-sm"
-                                                onclick="return confirm('⚠️ WARNING: This will overwrite all current data!\n\nAre you sure you want to restore from this backup?');">
-                                            <i class="fas fa-upload"></i>
-                                            Restore
-                                        </button>
-                                    </form>
-                                    
-                                    <a href="backups/<?php echo htmlspecialchars($backup['name']); ?>" 
-                                       class="btn btn-primary btn-sm"
-                                       download>
-                                        <i class="fas fa-download"></i>
-                                        Download
-                                    </a>
-                                    
-                                    <a href="?delete=<?php echo urlencode($backup['name']); ?>" 
-                                       class="btn btn-danger btn-sm"
-                                       onclick="return confirm('Are you sure you want to permanently delete this backup?');">
-                                        <i class="fas fa-trash"></i>
-                                        Delete
-                                    </a>
+            <?php if (empty($backupFiles)): ?>
+                <div class="empty-state">
+                    <div style="font-size: 3em;">📁</div>
+                    <h3>No Backups Found</h3>
+                    <p>Create your first backup to get started</p>
+                </div>
+            <?php else: ?>
+                <div class="backup-list">
+                    <?php foreach ($backupFiles as $backup): ?>
+                        <div class="backup-item">
+                            <div class="backup-info">
+                                <div class="backup-name">📄 <?php echo htmlspecialchars($backup['name']); ?></div>
+                                <div class="backup-meta">
+                                    📅 Created: <?php echo $backup['date']; ?> | 
+                                    💾 Size: <?php echo round($backup['size'] / 1024, 2); ?> KB
                                 </div>
                             </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
-            </div>
-            
-            <!-- Recovery Process -->
-            <div class="section">
-                <h2 class="section-title">
-                    <i class="fas fa-shield-alt"></i>
-                    Recovery Process
-                </h2>
-                
-                <div style="background: white; border-radius: var(--border-radius); padding: 25px; margin-top: 20px; box-shadow: var(--box-shadow);">
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 30px; text-align: center;">
-                        <div>
-                            <div style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--primary), #7209b7); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 15px;">
-                                1
-                            </div>
-                            <h4 style="color: var(--dark); margin-bottom: 10px;">Create Backup</h4>
-                            <p style="color: var(--gray); font-size: 0.95rem;">Click "Create Backup" to save current database state</p>
-                        </div>
-                        
-                        <div>
-                            <div style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--warning), #e74c3c); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 15px;">
-                                2
-                            </div>
-                            <h4 style="color: var(--dark); margin-bottom: 10px;">Simulate Crash</h4>
-                            <p style="color: var(--gray); font-size: 0.95rem;">Test recovery by deleting tables in phpMyAdmin</p>
-                        </div>
-                        
-                        <div>
-                            <div style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--success), #27ae60); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 15px;">
-                                3
-                            </div>
-                            <h4 style="color: var(--dark); margin-bottom: 10px;">Restore Data</h4>
-                            <p style="color: var(--gray); font-size: 0.95rem;">Select backup and click "Restore" to recover data</p>
-                        </div>
-                        
-                        <div>
-                            <div style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--info), #2980b9); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 15px;">
-                                4
-                            </div>
-                            <h4 style="color: var(--dark); margin-bottom: 10px;">Verify Recovery</h4>
-                            <p style="color: var(--gray); font-size: 0.95rem;">Check phpMyAdmin to confirm data restoration</p>
-                        </div>
-                    </div>
-                    
-                    <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #e8f4fc, #d1ecf1); border-radius: var(--border-radius); border-left: 4px solid var(--info);">
-                        <div style="display: flex; align-items: center; gap: 15px;">
-                            <i class="fas fa-lightbulb" style="color: var(--info); font-size: 1.5rem;"></i>
-                            <div>
-                                <h4 style="color: var(--dark); margin-bottom: 5px;">Quick Recovery Tip</h4>
-                                <p style="color: var(--gray); font-size: 0.95rem;">For assessment purposes, take screenshots of the database before crash, after crash, and after restoration as evidence of successful recovery.</p>
+                            <div class="backup-actions">
+                                <form method="POST" style="display: inline; margin: 0;">
+                                    <input type="hidden" name="backup_file" value="<?php echo htmlspecialchars($backup['name']); ?>">
+                                    <button type="submit" name="restore_backup" class="btn btn-success" 
+                                            onclick="return confirm('⚠️ WARNING: This will overwrite all current data!\n\nAre you sure you want to restore from this backup?');">
+                                        ⬆️ Restore
+                                    </button>
+                                </form>
+                                <a href="backups/<?php echo htmlspecialchars($backup['name']); ?>" 
+                                   class="btn btn-primary" download>
+                                    💾 Download
+                                </a>
+                                <a href="?delete=<?php echo urlencode($backup['name']); ?>" 
+                                   class="btn btn-danger"
+                                   onclick="return confirm('Are you sure you want to delete this backup?');">
+                                    🗑️ Delete
+                                </a>
                             </div>
                         </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
-            </div>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Instructions -->
+        <div class="section">
+            <h2>📋 Instructions for Full Marks</h2>
+            <h3 style="margin-top: 20px; color: #667eea;">To Score Full Marks (15/15) for Recovery:</h3>
+            <ol style="line-height: 2; margin-left: 20px; color: #333;">
+                <li><strong>Create a backup</strong> - Click "Create Backup Now" button above</li>
+                <li><strong>Take screenshot</strong> - Show your database has data (phpMyAdmin)</li>
+                <li><strong>Crash the database</strong> - Go to phpMyAdmin and run: <code>DROP TABLE table_name;</code></li>
+                <li><strong>Take screenshot</strong> - Show the table is missing/crashed</li>
+                <li><strong>Restore backup</strong> - Click "Restore" button on any backup above</li>
+                <li><strong>Take screenshot</strong> - Show data is recovered successfully</li>
+                <li><strong>Verify data integrity</strong> - Check that all data matches the original</li>
+            </ol>
+            
+            <h3 style="margin-top: 30px; color: #667eea;">Evidence Required:</h3>
+            <ul style="line-height: 2; margin-left: 20px; color: #333;">
+                <li>✅ Screenshot: Before crash (tables with data)</li>
+                <li>✅ Screenshot: After crash (missing/broken tables)</li>
+                <li>✅ Screenshot: Restore process (this page)</li>
+                <li>✅ Screenshot: After restore (recovered data)</li>
+            </ul>
         </div>
     </div>
-
-    <script>
-        // Smooth scroll and animations
-        document.addEventListener('DOMContentLoaded', function() {
-            // Add animation to backup items
-            const backupItems = document.querySelectorAll('.backup-item');
-            backupItems.forEach((item, index) => {
-                item.style.animationDelay = `${index * 0.1}s`;
-                item.style.animation = 'slideIn 0.5s ease forwards';
-                item.style.opacity = '0';
-            });
-            
-            // Confirmation for restore
-            const restoreForms = document.querySelectorAll('form[action*="restore_backup"]');
-            restoreForms.forEach(form => {
-                form.addEventListener('submit', function(e) {
-                    if (!confirm('⚠️ WARNING: This will overwrite all current data!\n\nAre you absolutely sure you want to restore from this backup?')) {
-                        e.preventDefault();
-                    }
-                });
-            });
-            
-            // Add loading state to buttons
-            const buttons = document.querySelectorAll('.btn');
-            buttons.forEach(btn => {
-                btn.addEventListener('click', function() {
-                    if (this.type === 'submit') {
-                        const originalText = this.innerHTML;
-                        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-                        this.disabled = true;
-                        
-                        // Reset after 3 seconds if still on same page
-                        setTimeout(() => {
-                            this.innerHTML = originalText;
-                            this.disabled = false;
-                        }, 3000);
-                    }
-                });
-            });
-        });
-    </script>
 </body>
 </html>
