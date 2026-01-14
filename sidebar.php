@@ -47,7 +47,7 @@
         </a>
         
         <div class="sidebar-footer">
-            <a href="http://10.147.17.58:8000/admin_dashboard.php" class="nav-item" style="color: #94a3b8; text-decoration: none;">
+            <a href="http://10.147.17.30:8000/admin_dashboard.php" class="nav-item" style="color: #94a3b8; text-decoration: none;">
                 <i class="fas fa-arrow-left"></i> Back to Admin
             </a>
         </div>

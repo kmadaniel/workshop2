@@ -123,7 +123,7 @@
             
             <div class="insight-header">
                 <h1 style="font-size: 24px; margin-bottom: 8px;">Predictive Analytics Report</h1>
-                <p style="color: #bfdbfe; font-size: 14px;">AI-driven forecasts based on historical disaster patterns and current resource levels.</p>
+                <p style="color: #bfdbfe; font-size: 14px;">AI-driven forecasts based on historical disaster patterns, resource levels, and logistics.</p>
             </div>
 
             <div class="scroll-area">
@@ -162,7 +162,23 @@
                         </div>
                     </div>
 
-                    <!-- POST-DISASTER IMPACT (With Normal Person Logic) -->
+                    <!-- LOGISTICS / DISTRIBUTION (NEW) -->
+                    <div class="insight-card" style="border-top: 4px solid #3b82f6; cursor: pointer;" onclick="openFullDetail('distribution')">
+                        <div class="insight-title"><i class="fas fa-truck" style="color: #3b82f6;"></i> Logistics Efficiency</div>
+                        <div class="insight-metric" id="dist-metric">Loading...</div>
+                        <p style="color: #64748b; font-size: 0.9rem;">Analysis of supply chains and delivery bottlenecks.</p>
+                        <div class="chart-container">
+                            <canvas id="distChart"></canvas>
+                        </div>
+                        <div class="recommendation-box" style="border-color: #3b82f6; background: #eff6ff;">
+                            <strong>Action:</strong> <span id="dist-action">Calculating routes...</span>
+                        </div>
+                        <div style="text-align: center; margin-top: 15px; color: #3b82f6; font-size: 0.85rem; font-weight: 600;">
+                            Click to view logistics manifest &rarr;
+                        </div>
+                    </div>
+
+                    <!-- POST-DISASTER IMPACT -->
                     <div class="insight-card" style="border-top: 4px solid #8b5cf6; cursor: pointer;" onclick="openFullDetail('impact')">
                         <div class="insight-title" style="justify-content: space-between;">
                             <span style="display: flex; align-items: center; gap: 10px;">
@@ -175,7 +191,7 @@
                             <canvas id="impactChart"></canvas>
                         </div>
                         <div class="recommendation-box" style="border-color: #8b5cf6; background: #f5f3ff;">
-                            <strong>Action:</strong> Prepare specialized care packages and general aid based on demographic breakdown.
+                            <strong>Action:</strong> Prepare specialized care packages and general aid based on demographics.
                         </div>
                         <div style="text-align: center; margin-top: 15px; color: #8b5cf6; font-size: 0.85rem; font-weight: 600;">
                             Click to view full impact report &rarr;
@@ -225,10 +241,16 @@
         // API Configuration
         const API_DISASTERS = 'http://10.147.17.116:8000/disaster.php';
         const API_VICTIMS = 'http://10.147.17.116:8000/victim.php';
+        const API_DISTRIBUTIONS = 'http://10.147.17.154:8000/distribution_module/distribution.php';
         const API_REPORTS = 'api_reports.php'; 
+        
+        // Updated Resource APIs
         const API_RESOURCES = {
-            medical: 'http://10.147.17.224:8000/medical_resource_api.php',
-            food: 'http://10.147.17.224:8000/food_resource_api.php'
+            baby: 'http://10.147.17.224:8000/baby_api.php',
+            basic_needs: 'http://10.147.17.224:8000/basic_needs_api.php',
+            elderly: 'http://10.147.17.224:8000/elderly_api.php',
+            medical: 'http://10.147.17.224:8000/medical_api.php',
+            disabled: 'http://10.147.17.224:8000/disabled_api.php'
         };
 
         // Data Store
@@ -236,12 +258,13 @@
             disasters: [],
             victims: [],
             resources: [],
+            distributions: [],
             impactData: [] // Store for export
         };
 
         // Sorting State
         let currentSort = { key: null, direction: 'asc' };
-        let currentViewType = ''; // 'risk', 'stock', 'impact', 'vulnerability', 'victimlist'
+        let currentViewType = ''; // 'risk', 'stock', 'impact', 'vulnerability', 'victimlist', 'distribution'
         let currentViewData = []; // Holds the data currently displayed in the detail view
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -258,13 +281,17 @@
                 const vicRes = await fetch(API_VICTIMS);
                 if(vicRes.ok) dataStore.victims = await vicRes.json();
 
-                // Fetch Resources (Subset)
-                const medRes = await fetch(API_RESOURCES.medical);
-                const foodRes = await fetch(API_RESOURCES.food);
-                let meds = [], foods = [];
-                if(medRes.ok) meds = await medRes.json();
-                if(foodRes.ok) foods = await foodRes.json();
-                dataStore.resources = [...meds, ...foods];
+                // Fetch Distributions
+                const distRes = await fetch(API_DISTRIBUTIONS);
+                if(distRes.ok) dataStore.distributions = await distRes.json();
+
+                // Fetch Resources (All Categories Dynamically)
+                const resourcePromises = Object.values(API_RESOURCES).map(url => 
+                    fetch(url).then(res => res.ok ? res.json() : [])
+                );
+                
+                const resourceResults = await Promise.all(resourcePromises);
+                dataStore.resources = resourceResults.flat();
 
                 // If fetch fails (Offline Mode), load mock data for demo
                 if(dataStore.disasters.length === 0) throw new Error("Offline");
@@ -289,8 +316,14 @@
                 }));
                 dataStore.resources = [
                     {name: 'Rice 10kg', quantity: '50', location: 'Central'}, 
-                    {name: 'Antibiotics', quantity: '20', location: 'North'}, 
-                    {name: 'Canned Food', quantity: '100', location: 'Central'}
+                    {name: 'Diapers S', quantity: '20', location: 'North'}, 
+                    {name: 'First Aid Kit', quantity: '100', location: 'Central'}
+                ];
+                // UPDATED MOCK DATA TO USE "Address: ..." FORMAT
+                dataStore.distributions = [
+                    {distribution_id: '101', status: 'Pending', location: 'Jasin', date: '2023-11-01', comments: 'Plan Details. Address: Jasin Hall'},
+                    {distribution_id: '102', status: 'Delivered', location: 'Alor Gajah', date: '2023-10-28', comments: 'Delivered. Address: Alor Gajah Center'},
+                    {distribution_id: '103', status: 'Pending', location: 'Masjid Tanah', date: '2023-11-05', comments: 'Pending. Address: Masjid Tanah Depot'}
                 ];
                 
                 renderInsights();
@@ -301,6 +334,20 @@
         function standardizeLocation(loc) {
             if (!loc) return 'Unknown';
             return loc.toLowerCase().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+        }
+        
+        // --- Helper Function: Extract Location from Plan Text ---
+        function extractLocationFromPlan(text) {
+            if (!text) return 'Unknown';
+            // UPDATED REGEX: Look for "Address" followed by optional colon and text
+            // Allows alphanumeric, spaces, and commas/periods/dashes in the address string
+            const regex = /Address\s*:?\s*([a-zA-Z0-9\s,.-]+?)(?:$|[.\n])/i;
+            const match = text.match(regex);
+            if (match && match[1]) {
+                // Capitalize and return
+                return match[1].trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            }
+            return 'Unknown';
         }
 
         function renderInsights() {
@@ -349,7 +396,48 @@
                 options: { cutout: '70%', responsive: true, maintainAspectRatio: false }
             });
 
-            // --- 3. POST-DISASTER IMPACT TREND ---
+            // 3. LOGISTICS / DISTRIBUTIONS (New - Using Extraction)
+            const distStatuses = {};
+            let pendingCount = 0;
+            const distByLoc = {};
+
+            dataStore.distributions.forEach(d => {
+                let status = d.status || d.Status || 'Unknown';
+                distStatuses[status] = (distStatuses[status] || 0) + 1;
+                
+                if (status.toLowerCase().includes('pending') || status.toLowerCase().includes('progress')) {
+                    pendingCount++;
+                    // Extract location from plan/comments first
+                    let plan = d.comments || d.Plan || '';
+                    let extracted = extractLocationFromPlan(plan);
+                    let loc = extracted !== 'Unknown' ? extracted : standardizeLocation(d.location || d.Location);
+                    
+                    distByLoc[loc] = (distByLoc[loc] || 0) + 1;
+                }
+            });
+
+            // Determine busiest location
+            let busiestLoc = "None";
+            if (Object.keys(distByLoc).length > 0) {
+                busiestLoc = Object.keys(distByLoc).reduce((a, b) => distByLoc[a] > distByLoc[b] ? a : b);
+            }
+
+            document.getElementById('dist-metric').innerText = `${pendingCount} Pending`;
+            document.getElementById('dist-action').innerText = `Prioritize transport to ${busiestLoc} due to high backlog.`;
+
+            new Chart(document.getElementById('distChart'), {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(distStatuses),
+                    datasets: [{
+                        data: Object.values(distStatuses),
+                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#cbd5e1']
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+
+            // 4. POST-DISASTER IMPACT TREND
             const endedDisasters = dataStore.disasters.filter(d => {
                 const status = d.status || d.Status || '';
                 return (status.toLowerCase() === 'ended' || status.toLowerCase() === 'closed' || status.toLowerCase() === 'completed');
@@ -414,7 +502,7 @@
                 }
             });
 
-            // 4. Vulnerability Chart (Pie) - GLOBAL
+            // 5. Vulnerability Chart (Pie) - GLOBAL
             let elderly = 0, baby = 0, disabled = 0;
             dataStore.victims.forEach(v => {
                 if(v.has_elderly === 't' || v.has_elderly === true) elderly++;
@@ -463,6 +551,7 @@
             // Re-render based on currentViewType
             if (currentViewType === 'risk') renderRiskTable();
             else if (currentViewType === 'stock') renderStockTable();
+            else if (currentViewType === 'distribution') renderDistributionTable();
             else if (currentViewType === 'impact') renderImpactTable();
             else if (currentViewType === 'vulnerability') renderVulnerabilityTable();
             else if (currentViewType === 'victimlist') renderVictimListTable();
@@ -484,13 +573,40 @@
             const tbody = document.querySelector('#detail-table-body');
             if(!tbody) return;
             tbody.innerHTML = currentViewData.map(r => {
-                // Use correct property names based on dataStore structure
+                // Use correct property names based on new API structure
                 let name = r.name || r.Item || 'Unknown Item';
                 let q = parseInt(r.quantity || r.Qty || 0);
                 let loc = r.location || r.Warehouse || 'Unknown Location';
+                let unit = r.unit || '';
                 
                 let status = q < 20 ? '<span class="badge badge-critical">Low</span>' : '<span class="badge badge-active">Healthy</span>';
-                return `<tr><td>${name}</td><td>${q} units</td><td>${loc}</td><td>${status}</td></tr>`;
+                return `<tr><td>${name}</td><td>${q} ${unit}</td><td>${loc}</td><td>${status}</td></tr>`;
+            }).join('');
+        }
+        
+        function renderDistributionTable() {
+            const tbody = document.querySelector('#detail-table-body');
+            if(!tbody) return;
+            tbody.innerHTML = currentViewData.map(d => {
+                let id = d.distribution_id || d.ID || '-';
+                let status = d.status || d.Status || 'Unknown';
+                
+                // Extract Location from Plan (comments)
+                let plan = d.comments || d.Plan || '';
+                let extractedLoc = extractLocationFromPlan(plan);
+                if (extractedLoc === 'Unknown') {
+                    // Fallback to explicit location if extraction fails
+                    extractedLoc = d.location || d.Location || 'Unknown';
+                }
+
+                let date = d.date || d.Date || 'N/A';
+                
+                let badgeClass = '';
+                if(status.toLowerCase() === 'pending') badgeClass = 'badge badge-critical';
+                else if(status.toLowerCase() === 'delivered' || status.toLowerCase() === 'completed') badgeClass = 'badge badge-active';
+                else badgeClass = 'badge badge-pending';
+
+                return `<tr><td>#${id}</td><td>${extractedLoc}</td><td>${date}</td><td><span class="${badgeClass}">${status}</span></td></tr>`;
             }).join('');
         }
 
@@ -628,6 +744,32 @@
                 `;
                 bodyEl.innerHTML = content;
                 renderStockTable();
+            }
+            else if (type === 'distribution') {
+                titleEl.innerHTML = '<i class="fas fa-truck" style="color: #3b82f6;"></i> Logistics Manifest';
+                
+                currentViewData = [...dataStore.distributions]; 
+
+                content = `
+                    <div class="detail-section">
+                        <h3><i class="fas fa-route"></i> Supply Chain Status</h3>
+                        <table class="detail-table">
+                            <thead>
+                                <tr>
+                                    <th onclick="sortData('distribution_id')" style="cursor:pointer;">ID <i class="fas fa-sort"></i></th>
+                                    <th onclick="sortData('comments')" style="cursor:pointer;">Destination <i class="fas fa-sort"></i></th>
+                                    <th onclick="sortData('date')" style="cursor:pointer;">Date Created <i class="fas fa-sort"></i></th>
+                                    <th onclick="sortData('status')" style="cursor:pointer;">Status <i class="fas fa-sort"></i></th>
+                                </tr>
+                            </thead>
+                            <tbody id="detail-table-body">
+                                <!-- Rendered via helper -->
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                bodyEl.innerHTML = content;
+                renderDistributionTable();
             }
             else if (type === 'impact') {
                 titleEl.innerHTML = '<i class="fas fa-history" style="color: #8b5cf6;"></i> Post-Disaster Impact Report';
