@@ -10,63 +10,58 @@ ini_set('display_errors', 1);
 
 // 2. START SESSION
 if (session_status() === PHP_SESSION_NONE) {
-    // Keep session alive for 24 hours to prevent timeouts during shifts
     ini_set('session.gc_maxlifetime', 86400);
     session_set_cookie_params(86400);
     session_start();
 }
 
 // ========================================
-// AUTHENTICATION LOGIC
+// AUTHENTICATION LOGIC (Token Handover)
 // ========================================
 
-$user_type = 'guest';
-$current_user = null;
+// A. Check for Auth Token from Bridge (report.php on 17.30)
+if (isset($_GET['auth_token']) && !empty($_GET['auth_token'])) {
+    // Decode the token
+    $json_data = base64_decode(urldecode($_GET['auth_token']));
+    $data = json_decode($json_data, true);
 
-// 1. CHECK FOR INCOMING REDIRECT (URL PARAMETERS)
-// Handling: http://10.147.17.30:8000/admin_dashboard.php?from_distribution=1&admin_id=4
-if (isset($_GET['from_distribution']) && $_GET['from_distribution'] == '1' && isset($_GET['admin_id'])) {
-    
-    $incoming_id = intval($_GET['admin_id']);
-    
-    // Simulate fetching user details (In a real app, query DB here)
-    // For now, we trust the incoming ID from the internal admin dashboard
-    $_SESSION['user_id'] = $incoming_id;
-    $_SESSION['user_name'] = 'Admin #' . $incoming_id; 
-    $_SESSION['user_role'] = 'Administrator';
-    $_SESSION['user_email'] = 'admin' . $incoming_id . '@disasterrelief.org';
-    $_SESSION['admin_api_verified'] = true; // Mark as verified since it came from dashboard
+    if ($data && isset($data['user_id'])) {
+        // VALID TOKEN: Create local session on this server (17.58)
+        $_SESSION['user_id'] = $data['user_id'];
+        $_SESSION['name']    = $data['name'];
+        $_SESSION['role']    = $data['role'];
+        $_SESSION['email']   = $data['email'];
+        
+        // Remove token from URL to keep it clean (Redirect to self)
+        header("Location: reports.php");
+        exit();
+    }
 }
 
-// 2. CHECK SESSION STATE
-if (isset($_SESSION['user_id']) || isset($_SESSION['AdminID'])) {
-    $user_type = 'admin';
-    
-    $uid = $_SESSION['user_id'] ?? $_SESSION['AdminID'] ?? 0;
-    $uname = $_SESSION['user_name'] ?? $_SESSION['FullName'] ?? 'System Admin';
-    $urole = $_SESSION['user_role'] ?? $_SESSION['Role'] ?? 'Administrator';
-    $uemail = $_SESSION['user_email'] ?? $_SESSION['Email'] ?? 'admin@disasterrelief.org';
-
-    $current_user = [
-        'id' => $uid,
-        'name' => $uname,
-        'role' => $urole,
-        'avatar' => substr($uname, 0, 2),
-        'email' => $uemail
-    ];
-} 
-// 3. FALLBACK (If no session and no URL params)
-else {
-    // Use a placeholder only if strictly necessary to avoid breaking UI, 
-    // but ideally redirect to login.
-    $current_user = [
-        'id' => 0,
-        'name' => 'Guest',
-        'role' => 'Guest',
-        'avatar' => 'GU',
-        'email' => 'guest@disasterrelief.org'
-    ];
+// B. Standard Session Check (Local Session)
+if (!isset($_SESSION['user_id'])) {
+    // Not logged in locally, and no token provided.
+    // Redirect BACK to the main login server (17.30)
+    header("Location: http://10.147.17.30:8000/login.php?return_to=reports");
+    exit();
 }
+
+// 3. PREPARE USER DATA FOR UI
+$uid = $_SESSION['user_id'];
+$uname = $_SESSION['name'] ?? 'User';
+$urole = $_SESSION['role'] ?? 'User';
+$uemail = $_SESSION['email'] ?? '';
+
+// Determine Avatar Initials
+$avatar_initials = strtoupper(substr($uname, 0, 2));
+
+$current_user = [
+    'id' => $uid,
+    'name' => $uname,
+    'role' => ucfirst($urole), 
+    'avatar' => $avatar_initials,
+    'email' => $uemail
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -700,6 +695,18 @@ else {
         let currentSort = { key: null, direction: 'asc' };
         let charts = { status: null, resource: null, trend: null };
 
+        // --- UPDATE HEADER WITH USER INFO (Matches login.php session data) ---
+        // Run immediately to update static header elements
+        (function updateHeaderProfile() {
+            const userNameEl = document.getElementById('user-name');
+            const userRoleEl = document.getElementById('user-role');
+            const userAvatarEl = document.getElementById('user-avatar');
+
+            if (userNameEl) userNameEl.innerText = "<?php echo htmlspecialchars($current_user['name']); ?>";
+            if (userRoleEl) userRoleEl.innerText = "<?php echo htmlspecialchars($current_user['role']); ?>";
+            if (userAvatarEl) userAvatarEl.innerText = "<?php echo htmlspecialchars($current_user['avatar']); ?>";
+        })();
+
         // --- Custom Confirmation Logic ---
         let confirmCallback = null;
 
@@ -1291,35 +1298,170 @@ else {
                 </div>`;
         }
         
-        // --- CHARTS (Condensed for brevity, assumed previously functional) ---
+        // --- CHARTS (Enhanced Power BI-like Style) ---
+        
+        // Global Chart Defaults
+        Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+        Chart.defaults.color = '#64748b';
+
         function renderStatusChart() {
             if(charts.status) charts.status.destroy();
             const ctx = document.getElementById('statusChart').getContext('2d');
             const counts = data.distributions.reduce((acc, d) => { acc[d.Status] = (acc[d.Status]||0)+1; return acc; }, {});
+            
             charts.status = new Chart(ctx, {
                 type: 'doughnut',
-                data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: ['#3b82f6','#10b981','#f59e0b','#ef4444'] }] },
-                options: { maintainAspectRatio: false }
+                data: { 
+                    labels: Object.keys(counts), 
+                    datasets: [{ 
+                        data: Object.values(counts), 
+                        backgroundColor: ['#3b82f6','#10b981','#f59e0b','#ef4444'],
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
+                    }] 
+                },
+                options: { 
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 10,
+                            cornerRadius: 6,
+                            displayColors: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return context.label + ': ' + context.raw;
+                                }
+                            }
+                        }
+                    }
+                }
             });
         }
+
         function renderResourceChart() {
              if(charts.resource) charts.resource.destroy();
              const ctx = document.getElementById('resourceChart').getContext('2d');
              const top = data.resources.sort((a,b)=>b.Qty - a.Qty).slice(0,5);
+             
              charts.resource = new Chart(ctx, {
                 type: 'bar',
-                data: { labels: top.map(i=>i.Item), datasets: [{ label:'Qty', data: top.map(i=>i.Qty), backgroundColor: '#3b82f6' }] },
-                options: { maintainAspectRatio: false }
+                data: { 
+                    labels: top.map(i=>i.Item), 
+                    datasets: [{ 
+                        label:'Quantity', 
+                        data: top.map(i=>i.Qty), 
+                        backgroundColor: '#3b82f6',
+                        borderRadius: 4,
+                        barThickness: 25
+                    }] 
+                },
+                options: { 
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            grid: { color: '#f1f5f9', borderDash: [5, 5] },
+                            ticks: { font: { size: 11 } }
+                        },
+                        x: { 
+                            grid: { display: false },
+                            ticks: { font: { size: 11 } }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 10,
+                            displayColors: false
+                        }
+                    }
+                }
             });
         }
+
         function renderTrendChart() {
             if(charts.trend) charts.trend.destroy();
             const ctx = document.getElementById('trendChart').getContext('2d');
-            // Simplified trend logic
+            
+            // --- AGGREGATE REAL DATA ---
+            const monthlyCounts = {};
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            
+            // Process real distributions from API
+            data.distributions.forEach(d => {
+                if (!d.Date) return;
+                // Assuming date format is YYYY-MM-DD
+                const dateObj = new Date(d.Date);
+                // Check valid date
+                if (!isNaN(dateObj)) {
+                    const monthIndex = dateObj.getMonth();
+                    const monthName = months[monthIndex];
+                    monthlyCounts[monthName] = (monthlyCounts[monthName] || 0) + 1;
+                }
+            });
+
+            // Ensure we have labels for months that have data, or default if empty
+            let labels = Object.keys(monthlyCounts);
+            let datasetData = Object.values(monthlyCounts);
+
+            // Sort Chronologically if data exists
+            if (labels.length > 0) {
+                // Combine into objects to sort
+                const combined = labels.map((lbl, i) => ({ label: lbl, val: datasetData[i] }));
+                combined.sort((a, b) => months.indexOf(a.label) - months.indexOf(b.label));
+                
+                labels = combined.map(i => i.label);
+                datasetData = combined.map(i => i.val);
+            } else {
+                // Fallback for empty state
+                labels = ['No Data'];
+                datasetData = [0];
+            }
+            
             charts.trend = new Chart(ctx, {
                 type: 'line',
-                data: { labels: ['Jan','Feb','Mar'], datasets: [{ label:'Activity', data: [10, 25, 40], borderColor: '#10b981', tension: 0.4 }] },
-                options: { maintainAspectRatio: false }
+                data: { 
+                    labels: labels, 
+                    datasets: [{ 
+                        label:'Distributions', 
+                        data: datasetData, 
+                        borderColor: '#10b981', 
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 4,
+                        pointBackgroundColor: '#ffffff',
+                        pointBorderColor: '#10b981',
+                        pointBorderWidth: 2
+                    }] 
+                },
+                options: { 
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            grid: { color: '#f1f5f9' },
+                            ticks: { precision: 0 } // Integers only
+                        },
+                        x: { 
+                            grid: { display: false }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 10,
+                            displayColors: false,
+                            intersect: false,
+                            mode: 'index'
+                        }
+                    }
+                }
             });
         }
     </script>

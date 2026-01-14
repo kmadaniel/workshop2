@@ -1,3 +1,69 @@
+<?php
+// ========================================
+// Predictive Insights - Session & Auth
+// Integrated Session Token Logic
+// ========================================
+
+// 1. ENABLE ERROR REPORTING
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// 2. START SESSION
+if (session_status() === PHP_SESSION_NONE) {
+    ini_set('session.gc_maxlifetime', 86400);
+    session_set_cookie_params(86400);
+    session_start();
+}
+
+// ========================================
+// AUTHENTICATION LOGIC (Token Handover)
+// ========================================
+
+// A. Check for Auth Token from Bridge (report.php on 17.30) or internal link
+if (isset($_GET['auth_token']) && !empty($_GET['auth_token'])) {
+    // Decode the token
+    $json_data = base64_decode(urldecode($_GET['auth_token']));
+    $data = json_decode($json_data, true);
+
+    if ($data && isset($data['user_id'])) {
+        // VALID TOKEN: Create/Refresh local session on this server
+        $_SESSION['user_id'] = $data['user_id'];
+        $_SESSION['name']    = $data['name'];
+        $_SESSION['role']    = $data['role'];
+        $_SESSION['email']   = $data['email'];
+        
+        // Remove token from URL to keep it clean (Redirect to self)
+        header("Location: predictive_insights.php");
+        exit();
+    }
+}
+
+// B. Standard Session Check (Local Session)
+if (!isset($_SESSION['user_id'])) {
+    // Not logged in locally, and no token provided.
+    // Redirect BACK to the main login server (17.30)
+    // Note: We use 'return_to=reports' as a generic fallback since this is part of the reports module
+    header("Location: http://10.147.17.30:8000/login.php?return_to=reports");
+    exit();
+}
+
+// 3. PREPARE USER DATA FOR UI
+$uid = $_SESSION['user_id'];
+$uname = $_SESSION['name'] ?? 'User';
+$urole = $_SESSION['role'] ?? 'User';
+$uemail = $_SESSION['email'] ?? '';
+
+// Determine Avatar Initials
+$avatar_initials = strtoupper(substr($uname, 0, 2));
+
+$current_user = [
+    'id' => $uid,
+    'name' => $uname,
+    'role' => ucfirst($urole), 
+    'avatar' => $avatar_initials,
+    'email' => $uemail
+];
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -121,10 +187,7 @@
         <!-- MAIN CONTENT -->
         <main class="main-content">
             
-            <div class="insight-header">
-                <h1 style="font-size: 24px; margin-bottom: 8px;">Predictive Analytics Report</h1>
-                <p style="color: #bfdbfe; font-size: 14px;">AI-driven forecasts based on historical disaster patterns, resource levels, and logistics.</p>
-            </div>
+            <!-- Insight Header Removed to maximize space -->
 
             <div class="scroll-area">
                 
@@ -162,7 +225,7 @@
                         </div>
                     </div>
 
-                    <!-- LOGISTICS / DISTRIBUTION (NEW) -->
+                    <!-- LOGISTICS / DISTRIBUTION -->
                     <div class="insight-card" style="border-top: 4px solid #3b82f6; cursor: pointer;" onclick="openFullDetail('distribution')">
                         <div class="insight-title"><i class="fas fa-truck" style="color: #3b82f6;"></i> Logistics Efficiency</div>
                         <div class="insight-metric" id="dist-metric">Loading...</div>
@@ -267,6 +330,17 @@
         let currentViewType = ''; // 'risk', 'stock', 'impact', 'vulnerability', 'victimlist', 'distribution'
         let currentViewData = []; // Holds the data currently displayed in the detail view
 
+        // --- UPDATE HEADER WITH USER INFO (Matches PHP session data) ---
+        (function updateHeaderProfile() {
+            const userNameEl = document.getElementById('user-name');
+            const userRoleEl = document.getElementById('user-role');
+            const userAvatarEl = document.getElementById('user-avatar');
+
+            if (userNameEl) userNameEl.innerText = "<?php echo htmlspecialchars($current_user['name']); ?>";
+            if (userRoleEl) userRoleEl.innerText = "<?php echo htmlspecialchars($current_user['role']); ?>";
+            if (userAvatarEl) userAvatarEl.innerText = "<?php echo htmlspecialchars($current_user['avatar']); ?>";
+        })();
+
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
         });
@@ -340,7 +414,6 @@
         function extractLocationFromPlan(text) {
             if (!text) return 'Unknown';
             // UPDATED REGEX: Look for "Address" followed by optional colon and text
-            // Allows alphanumeric, spaces, and commas/periods/dashes in the address string
             const regex = /Address\s*:?\s*([a-zA-Z0-9\s,.-]+?)(?:$|[.\n])/i;
             const match = text.match(regex);
             if (match && match[1]) {
@@ -351,6 +424,10 @@
         }
 
         function renderInsights() {
+            // Chart Defaults for a Cleaner Look
+            Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+            Chart.defaults.color = '#64748b';
+            
             // 1. Risk Chart (Location Frequency)
             const locCounts = {};
             dataStore.disasters.forEach(d => {
@@ -374,10 +451,35 @@
                     datasets: [{
                         label: 'Incident Count',
                         data: Object.values(locCounts),
-                        backgroundColor: '#ef4444'
+                        backgroundColor: '#ef4444',
+                        borderRadius: 4,
+                        barThickness: 20
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 12,
+                            cornerRadius: 8,
+                            displayColors: false
+                        }
+                    },
+                    scales: {
+                        y: { 
+                            beginAtZero: true,
+                            grid: { color: '#f1f5f9', borderDash: [5, 5] },
+                            ticks: { font: { size: 11 } }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { font: { size: 11 } }
+                        }
+                    }
+                }
             });
 
             // 2. Stock Chart
@@ -390,10 +492,28 @@
                     labels: ['Remaining', 'Depleted'],
                     datasets: [{
                         data: [30, 70],
-                        backgroundColor: ['#f59e0b', '#e2e8f0']
+                        backgroundColor: ['#f59e0b', '#f1f5f9'],
+                        borderWidth: 0,
+                        hoverOffset: 4
                     }]
                 },
-                options: { cutout: '70%', responsive: true, maintainAspectRatio: false }
+                options: { 
+                    cutout: '75%', 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.label + ': ' + context.raw + '%';
+                                }
+                            },
+                            backgroundColor: '#1e293b',
+                            padding: 10
+                        }
+                    }
+                }
             });
 
             // 3. LOGISTICS / DISTRIBUTIONS (New - Using Extraction)
@@ -426,15 +546,25 @@
             document.getElementById('dist-action').innerText = `Prioritize transport to ${busiestLoc} due to high backlog.`;
 
             new Chart(document.getElementById('distChart'), {
-                type: 'pie',
+                type: 'doughnut', // Changed to Doughnut for consistency
                 data: {
                     labels: Object.keys(distStatuses),
                     datasets: [{
                         data: Object.values(distStatuses),
-                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#cbd5e1']
+                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#cbd5e1'],
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: { 
+                    cutout: '60%',
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: { 
+                        legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 10 } } },
+                        tooltip: { backgroundColor: '#1e293b', padding: 10 }
+                    } 
+                }
             });
 
             // 4. POST-DISASTER IMPACT TREND
@@ -464,7 +594,6 @@
                 });
 
                 let rawLoc = disaster.location || disaster.Location || disaster.district || disaster.District || 'Unknown';
-                // Handle various name properties from potential API differences
                 let rawName = disaster.name || disaster.Name || disaster.disaster_name || disaster.DisasterName || 'Unknown Disaster';
 
                 dataStore.impactData.push({
@@ -487,18 +616,25 @@
                 data: {
                     labels: ['Elderly', 'Infants', 'Disabled', 'Normal'],
                     datasets: [{
-                        label: 'Total Affected Count',
+                        label: 'Total Affected',
                         data: [impElderly, impBaby, impDisabled, impNormal],
                         backgroundColor: ['#a78bfa', '#c4b5fd', '#ddd6fe', '#60a5fa'], // Violet shades + Blue for Normal
-                        borderColor: ['#8b5cf6', '#8b5cf6', '#8b5cf6', '#2563eb'],
-                        borderWidth: 1
+                        borderWidth: 0,
+                        borderRadius: 4,
+                        barThickness: 25
                     }]
                 },
                 options: { 
                     responsive: true, 
                     maintainAspectRatio: false, 
-                    scales: { y: { beginAtZero: true } },
-                    plugins: { legend: { display: false } } 
+                    scales: { 
+                        y: { beginAtZero: true, grid: { display: false } },
+                        x: { grid: { display: false } }
+                    },
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: { backgroundColor: '#1e293b', padding: 10 }
+                    } 
                 }
             });
 
@@ -512,15 +648,24 @@
             document.getElementById('vuln-metric').innerText = (elderly + baby + disabled);
 
             new Chart(document.getElementById('vulnChart'), {
-                type: 'pie',
+                type: 'pie', // Pie chart usually looks better for 3 categories
                 data: {
                     labels: ['Elderly', 'Infants', 'Disabled'],
                     datasets: [{
                         data: [elderly, baby, disabled],
-                        backgroundColor: ['#ec4899', '#f472b6', '#fbcfe8']
+                        backgroundColor: ['#ec4899', '#f472b6', '#fbcfe8'],
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: { 
+                        legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+                        tooltip: { backgroundColor: '#1e293b', padding: 10 }
+                    } 
+                }
             });
         }
 
@@ -573,7 +718,6 @@
             const tbody = document.querySelector('#detail-table-body');
             if(!tbody) return;
             tbody.innerHTML = currentViewData.map(r => {
-                // Use correct property names based on new API structure
                 let name = r.name || r.Item || 'Unknown Item';
                 let q = parseInt(r.quantity || r.Qty || 0);
                 let loc = r.location || r.Warehouse || 'Unknown Location';
@@ -590,17 +734,11 @@
             tbody.innerHTML = currentViewData.map(d => {
                 let id = d.distribution_id || d.ID || '-';
                 let status = d.status || d.Status || 'Unknown';
-                
-                // Extract Location from Plan (comments)
                 let plan = d.comments || d.Plan || '';
                 let extractedLoc = extractLocationFromPlan(plan);
-                if (extractedLoc === 'Unknown') {
-                    // Fallback to explicit location if extraction fails
-                    extractedLoc = d.location || d.Location || 'Unknown';
-                }
+                if (extractedLoc === 'Unknown') extractedLoc = d.location || d.Location || 'Unknown';
 
                 let date = d.date || d.Date || 'N/A';
-                
                 let badgeClass = '';
                 if(status.toLowerCase() === 'pending') badgeClass = 'badge badge-critical';
                 else if(status.toLowerCase() === 'delivered' || status.toLowerCase() === 'completed') badgeClass = 'badge badge-active';
@@ -661,8 +799,6 @@
             }).join('');
         }
 
-
-        // --- INLINE DETAIL LOGIC (Replaces Modal) ---
         function openFullDetail(type) {
             currentViewType = type; 
             const container = document.getElementById('inline-detail-container');
