@@ -10,6 +10,11 @@ require_once "connection.php";
 $user_id = $_SESSION['user_id'];
 
 // ============================
+// DISTRIBUTION SYSTEM URL - CORRECTED
+// ============================
+$distribution_url = "http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $user_id;
+
+// ============================
 // FETCH VOLUNTEER & ASSIGNED NGO INFO
 // ============================
 $sql = "SELECT 
@@ -39,90 +44,6 @@ if (!$volunteer) {
         'NGOName' => 'No NGO Assigned',
         'AssignedNGO' => null
     ];
-}
-
-// ============================
-// FETCH OPPORTUNITIES FROM ASSIGNED NGO - DARI TABLE opportunity YANG BETUL
-// ============================
-$opportunities = [];
-if ($volunteer && isset($volunteer['AssignedNGO']) && !empty($volunteer['AssignedNGO'])) {
-    // GANTI DENGAN TABLE YANG BETUL: [UserManagement].[dbo].[opportunity]
-    $oppSql = "SELECT 
-                    opportunity_id as OpportunityID,
-                    title as Title,
-                    description as Description,
-                    location as Location,
-                    event_date as EventDate,
-                    slots as RequiredVolunteers,
-                    status as Status,
-                    created_at as CreatedAt
-                FROM [UserManagement].[dbo].[opportunity] 
-                WHERE ngo_id = ? AND status = 'Open'
-                ORDER BY event_date ASC";
-    
-    $oppParams = array($volunteer['AssignedNGO']);
-    $oppStmt = sqlsrv_query($conn, $oppSql, $oppParams);
-    
-    if ($oppStmt === false) {
-        error_log("Opportunities query error: " . print_r(sqlsrv_errors(), true));
-        // Debug: Show SQL error details
-        echo "<!-- SQL Error: " . print_r(sqlsrv_errors(), true) . " -->";
-    } else {
-        while ($opp = sqlsrv_fetch_array($oppStmt, SQLSRV_FETCH_ASSOC)) {
-            $opportunities[] = $opp;
-        }
-    }
-    
-    // Debug log
-    error_log("Found " . count($opportunities) . " opportunities for NGO ID: " . $volunteer['AssignedNGO']);
-}
-
-// ============================
-// FETCH VOLUNTEER'S ASSIGNMENTS
-// ============================
-$assignments = [];
-// PERHATIAN: Anda perlu adjust table assignments mengikut structure sebenar
-$assignSql = "SELECT 
-                a.AssignmentID,
-                a.Status as AssignmentStatus,
-                a.AssignedDate,
-                o.opportunity_id as OpportunityID,
-                o.title as Title,
-                o.location as Location,
-                o.event_date as EventDate
-            FROM Assignments a
-            JOIN [UserManagement].[dbo].[opportunity] o ON a.OpportunityID = o.opportunity_id
-            WHERE a.VolunteerID = ?
-            ORDER BY a.AssignedDate DESC";
-            
-$assignParams = array($user_id);
-$assignStmt = sqlsrv_query($conn, $assignSql, $assignParams);
-
-if ($assignStmt === false) {
-    error_log("Assignments query error: " . print_r(sqlsrv_errors(), true));
-    // Kalau table Assignments tak wujud, guna data sample
-    $assignments = [
-        [
-            'AssignmentID' => 201,
-            'AssignmentStatus' => 'Confirmed',
-            'AssignedDate' => date('Y-m-d', strtotime('-5 days')),
-            'Title' => 'Food Helper',
-            'Location' => 'Melaka Central',
-            'EventDate' => date('Y-m-d', strtotime('+2 days'))
-        ],
-        [
-            'AssignmentID' => 202,
-            'AssignmentStatus' => 'Pending',
-            'AssignedDate' => date('Y-m-d', strtotime('-2 days')),
-            'Title' => 'Beach Cleanup',
-            'Location' => 'Klebang Beach',
-            'EventDate' => date('Y-m-d', strtotime('+1 week'))
-        ]
-    ];
-} else {
-    while ($assign = sqlsrv_fetch_array($assignStmt, SQLSRV_FETCH_ASSOC)) {
-        $assignments[] = $assign;
-    }
 }
 
 // ============================
@@ -188,33 +109,6 @@ if (empty($news) && !empty($ngoName) && $ngoName != 'No NGO Assigned') {
         ]
     ];
 }
-
-// Jika masih no opportunities dari database, guna data dari gambar
-if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
-    // Check NGO ID dari volunteer dan match dengan data dalam gambar
-    $ngoId = $volunteer['AssignedNGO'];
-    
-    // Data dari gambar SQL (contoh)
-    $sampleData = [
-        ['ngo_id' => 20, 'title' => 'Food Helper'],
-        ['ngo_id' => 22, 'title' => 'Beach Cleanup'],
-        ['ngo_id' => 22, 'title' => 'Community Outreach']
-    ];
-    
-    foreach ($sampleData as $data) {
-        if ($data['ngo_id'] == $ngoId) {
-            $opportunities[] = [
-                'OpportunityID' => rand(100, 999),
-                'Title' => $data['title'],
-                'Description' => 'Join us for this community service activity. All volunteers are welcome!',
-                'Location' => 'Melaka',
-                'EventDate' => date('Y-m-d', strtotime('+7 days')),
-                'RequiredVolunteers' => 10,
-                'Status' => 'Open'
-            ];
-        }
-    }
-}
 ?>
 
 <!DOCTYPE html>
@@ -275,6 +169,16 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             font-weight: 500;
         }
         
+        /* Distribution Link Styling */
+        .distribution-link {
+            background: rgba(255, 126, 95, 0.2);
+            border-left: 3px solid #ff7e5f;
+        }
+        
+        .distribution-link:hover {
+            background: rgba(255, 126, 95, 0.3);
+        }
+        
         /* ========== MAIN CONTENT ========== */
         .content {
             flex: 1;
@@ -331,21 +235,6 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             opacity: 0.9;
         }
         
-        .opportunity-card {
-            border-left: 4px solid #27ae60;
-            padding: 20px;
-            margin-bottom: 15px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            transition: all 0.3s;
-            border: 1px solid #e9ecef;
-        }
-        
-        .opportunity-card:hover {
-            background: #e8f5e9;
-            transform: translateX(5px);
-        }
-        
         /* News Card Styling */
         .news-card {
             border: 1px solid #e9ecef;
@@ -399,7 +288,6 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             display: -webkit-box;
             -webkit-box-orient: vertical;
             overflow: hidden;
-            
         }
         
         .news-meta {
@@ -434,21 +322,8 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             opacity: 0.8;
         }
         
-        .assignment-badge {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .badge-pending { background: #ffd700; color: #333; }
-        .badge-confirmed { background: #27ae60; color: white; }
-        .badge-completed { background: #3498db; color: white; }
-        .badge-cancelled { background: #e74c3c; color: white; }
-        
         .welcome-section {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
             color: white;
             border-radius: 15px;
             padding: 30px;
@@ -479,24 +354,6 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             opacity: 0.5;
         }
         
-        .btn-view {
-            background: #27ae60;
-            color: white;
-            border: none;
-            padding: 8px 20px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .btn-view:hover {
-            background: #219653;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 10px rgba(39, 174, 96, 0.3);
-        }
-        
         .btn-news {
             background: #3498db;
             color: white;
@@ -524,14 +381,20 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             margin-left: 10px;
         }
         
-        .debug-info {
-            background: #f8f9fa;
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin: 10px 0;
-            font-size: 12px;
-            color: #666;
-            border-radius: 5px;
+        /* Distribution Notification */
+        .distribution-notice {
+            background: linear-gradient(135deg, #ff7e5f 0%, #feb47b 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .distribution-notice i {
+            font-size: 1.2rem;
         }
         
         @media (max-width: 768px) {
@@ -563,20 +426,27 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
         <h4>Volunteer Panel</h4>
         <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
         <a href="volunteer_profile.php">👤 Profile</a>
-        <a href="volunteer_opportunities.php">🔍 View Opportunities</a>
-        <a href="my_tasks.php">📋 My Tasks</a>
-        <a href="volunteer_reports.php">📊 My Reports</a>
-        <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
+        
+        <!-- UPDATED: Points to login_callback.php (same as main login) -->
+        <a href="<?php echo $distribution_url; ?>" 
+           target="_blank"
+           class="distribution-link">
+           🚚 My Tasks (Distribution System)
+        </a>
+        
+        
+        <a href="main_page.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
 
     <div class="content">
-        <!-- DEBUG INFO (boleh remove lepas test) -->
-        <div class="debug-info">
-            <strong>Debug Info:</strong> 
-            Volunteer ID: <?= $user_id ?> | 
-            NGO ID: <?= $volunteer['AssignedNGO'] ?? 'None' ?> | 
-            NGO Name: <?= $volunteer['NGOName'] ?? 'None' ?> | 
-            Opportunities Found: <?= count($opportunities) ?>
+        <!-- Distribution System Notice -->
+        <div class="distribution-notice">
+            <i class="fas fa-external-link-alt"></i>
+            <div>
+                <strong>Distribution System Access:</strong> 
+                Click on <strong>🚚 My Tasks (Distribution System)</strong> in the sidebar to access 
+                distribution management tasks at the external distribution system.
+            </div>
         </div>
 
         <!-- Welcome Section -->
@@ -590,22 +460,11 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
             </div>
         </div>
 
-        <!-- Statistics Cards -->
+        <!-- Statistics Cards (DIPENDEK: Hanya 2 cards) -->
         <div class="dashboard-card">
             <div class="row">
-                <div class="col-md-3">
-                    <div class="stat-card">
-                        <div class="stat-number"><?= count($opportunities) ?></div>
-                        <div class="stat-label">Available Opportunities</div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="stat-card">
-                        <div class="stat-number"><?= count($assignments) ?></div>
-                        <div class="stat-label">My Assignments</div>
-                    </div>
-                </div>
-                <div class="col-md-3">
+                <!-- Card 1: Primary Skill -->
+                <div class="col-md-6">
                     <div class="stat-card">
                         <div class="stat-number">
                             <?= htmlspecialchars($volunteer['SkillCategory']) ?>
@@ -613,7 +472,9 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
                         <div class="stat-label">Primary Skill</div>
                     </div>
                 </div>
-                <div class="col-md-3">
+                
+                <!-- Card 2: News Stories -->
+                <div class="col-md-6">
                     <div class="stat-card">
                         <div class="stat-number"><?= count($news) ?></div>
                         <div class="stat-label">News Stories</div>
@@ -673,103 +534,9 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
                 </div>
             <?php endif; ?>
         </div>
-
-        <!-- Available Opportunities (DARI DATABASE BETUL) -->
-        <div class="dashboard-card">
-            <h5 class="card-title"><i class="fas fa-tasks"></i> Available Opportunities from <?= htmlspecialchars($volunteer['NGOName']) ?></h5>
-            
-            <?php if (empty($opportunities)): ?>
-                <div class="empty-state">
-                    <div class="empty-state-icon">📭</div>
-                    <h5>No Opportunities Available</h5>
-                    <p class="text-muted">
-                        There are currently no opportunities posted by <?= htmlspecialchars($volunteer['NGOName']) ?>.
-                        <br>
-                        <small>Your NGO ID: <?= $volunteer['AssignedNGO'] ?? 'Not assigned' ?></small>
-                    </p>
-                    <p><small>Check back later or contact your NGO coordinator.</small></p>
-                </div>
-            <?php else: ?>
-                <?php foreach ($opportunities as $opp): 
-                    $eventDate = $opp['EventDate'] instanceof DateTime 
-                        ? $opp['EventDate']->format('M d, Y') 
-                        : date('M d, Y', strtotime($opp['EventDate']));
-                ?>
-                    <div class="opportunity-card">
-                        <h6><?= htmlspecialchars($opp['Title']) ?></h6>
-                        <p class="text-muted"><?= htmlspecialchars(substr($opp['Description'] ?? 'No description available', 0, 150)) ?>...</p>
-                        <div class="mt-3">
-                            <small class="text-muted d-block mb-2">
-                                📍 <strong>Location:</strong> <?= htmlspecialchars($opp['Location'] ?? 'Not specified') ?>
-                            </small>
-                            <small class="text-muted d-block mb-2">
-                                📅 <strong>Event Date:</strong> <?= $eventDate ?>
-                            </small>
-                            <small class="text-muted d-block mb-2">
-                                👥 <strong>Volunteers Needed:</strong> <?= htmlspecialchars($opp['RequiredVolunteers'] ?? 'Not specified') ?>
-                            </small>
-                            <small class="text-muted d-block">
-                                🔵 <strong>Status:</strong> <?= htmlspecialchars($opp['Status'] ?? 'Open') ?>
-                            </small>
-                        </div>
-                        <div class="mt-3">
-                            <button class="btn-view" onclick="viewOpportunity(<?= $opp['OpportunityID'] ?>)">
-                                <i class="fas fa-external-link-alt"></i> View Details & Apply
-                            </button>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            <?php endif; ?>
-        </div>
-
-        <!-- My Assignments -->
-        <div class="dashboard-card">
-            <h5 class="card-title"><i class="fas fa-clipboard-list"></i> My Current Assignments</h5>
-            <?php if (empty($assignments)): ?>
-                <div class="empty-state">
-                    <div class="empty-state-icon">📋</div>
-                    <h5>No Assignments Yet</h5>
-                    <p class="text-muted">You haven't been assigned to any opportunities yet.</p>
-                    <p><small>Browse available opportunities and apply to get started!</small></p>
-                </div>
-            <?php else: ?>
-                <?php foreach ($assignments as $assign): 
-                    $eventDate = $assign['EventDate'] instanceof DateTime 
-                        ? $assign['EventDate']->format('M d, Y') 
-                        : date('M d, Y', strtotime($assign['EventDate']));
-                    $assignedDate = $assign['AssignedDate'] instanceof DateTime 
-                        ? $assign['AssignedDate']->format('M d, Y') 
-                        : date('M d, Y', strtotime($assign['AssignedDate']));
-                ?>
-                    <div class="opportunity-card">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <h6 class="mb-2"><?= htmlspecialchars($assign['Title']) ?></h6>
-                            <span class="assignment-badge badge-<?= strtolower($assign['AssignmentStatus']) ?>">
-                                <?= htmlspecialchars($assign['AssignmentStatus']) ?>
-                            </span>
-                        </div>
-                        <div class="mt-2">
-                            <small class="text-muted d-block mb-1">
-                                📍 <strong>Location:</strong> <?= htmlspecialchars($assign['Location']) ?>
-                            </small>
-                            <small class="text-muted d-block mb-1">
-                                📅 <strong>Event Date:</strong> <?= $eventDate ?>
-                            </small>
-                            <small class="text-muted d-block">
-                                ✅ <strong>Assigned On:</strong> <?= $assignedDate ?>
-                            </small>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            <?php endif; ?>
-        </div>
     </div>
 
     <script>
-        function viewOpportunity(opportunityId) {
-            window.location.href = `opportunity_details.php?id=${opportunityId}`;
-        }
-        
         function viewNews(newsId) {
             window.location.href = `news_details.php?id=${newsId}`;
         }
@@ -778,6 +545,24 @@ if (empty($opportunities) && isset($volunteer['AssignedNGO'])) {
         setTimeout(function() {
             location.reload();
         }, 60000);
+        
+        // Show confirmation when clicking distribution link
+        document.addEventListener('DOMContentLoaded', function() {
+            const distributionLink = document.querySelector('.distribution-link');
+            if (distributionLink) {
+                distributionLink.addEventListener('click', function(e) {
+                    const confirmMsg = "You are being redirected to the Distribution System.\n\n" +
+                                     "After verification, you will be redirected to:\n" +
+                                     "http://10.147.17.154:8000/distribution_module/volunteer_distribution.php\n\n" +
+                                     "Continue?";
+                    
+                    if (!confirm(confirmMsg)) {
+                        e.preventDefault();
+                        return false;
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>

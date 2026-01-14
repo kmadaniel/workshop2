@@ -1,3 +1,222 @@
+<?php
+session_start();
+
+// Aktifkan error reporting untuk debug
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Debug: Check session values
+$debug_info = "";
+$debug_info .= "SESSION STATUS:\n";
+$debug_info .= "name: " . ($_SESSION['name'] ?? 'NOT SET') . "\n";
+$debug_info .= "role: " . ($_SESSION['role'] ?? 'NOT SET') . "\n";
+$debug_info .= "ngo_id: " . ($_SESSION['ngo_id'] ?? 'NOT SET') . "\n";
+$debug_info .= "NGOName: " . ($_SESSION['NGOName'] ?? 'NOT SET') . "\n";
+
+// PERBAIKI: Check untuk session yang betul
+if(!isset($_SESSION['name']) || $_SESSION['role'] != "ngo"){
+    header("Location: login.php");
+    exit();
+}
+
+// Database connection
+$serverName = "localhost";
+$connectionOptions = array(
+    "Database" => "UserManagement",
+    "Uid" => "yanadb",
+    "PWD" => "yana123"
+);
+
+$conn = sqlsrv_connect($serverName, $connectionOptions);
+
+if($conn === false) {
+    die(print_r(sqlsrv_errors(), true));
+}
+
+// PERBAIKI: Dapatkan NGO info dari database berdasarkan session
+$session_name = $_SESSION['name'];
+$session_role = $_SESSION['role'];
+
+// PERBAIKI: Cari NGO berdasarkan email atau name
+$sqlNGO = "SELECT * FROM dbo.NGO WHERE Email = ? OR NGOName = ?";
+$paramsNGO = array($session_name, $session_name);
+$stmtNGO = sqlsrv_query($conn, $sqlNGO, $paramsNGO);
+
+if($stmtNGO === false) {
+    die("SQL Error: " . print_r(sqlsrv_errors(), true));
+}
+
+// PERBAIKI: Verify NGO exists in database
+if($stmtNGO && sqlsrv_has_rows($stmtNGO)) {
+    $ngoData = sqlsrv_fetch_array($stmtNGO, SQLSRV_FETCH_ASSOC);
+    
+    // PERBAIKI: Set session variables yang betul
+    $_SESSION['ngo_id'] = $ngoData['NGOID'];
+    $_SESSION['NGOName'] = $ngoData['NGOName'];
+    
+    // Simpan data untuk dashboard
+    $ngo_id = $ngoData['NGOID'];
+    $ngo_name = $ngoData['NGOName'];
+    $ngo_email = $ngoData['Email'];
+    $ngo_phone = $ngoData['Phone'];
+    $ngo_status = $ngoData['Status'];
+    
+    $debug_info .= "\nDATABASE MATCH FOUND:\n";
+    $debug_info .= "NGOID: $ngo_id\n";
+    $debug_info .= "NGOName: $ngo_name\n";
+    $debug_info .= "Email: $ngo_email\n";
+    
+    sqlsrv_free_stmt($stmtNGO);
+} else {
+    // NGO tidak ditemui - show debug info
+    echo "<!DOCTYPE html>
+    <html>
+    <head>
+        <title>NGO Not Found</title>
+        <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            .error { background: #ffcccc; padding: 20px; border-radius: 5px; margin: 20px 0; }
+            .info { background: #e6f7ff; padding: 15px; border-radius: 5px; margin: 15px 0; }
+            table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+            th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+            th { background: #f0f0f0; }
+        </style>
+    </head>
+    <body>
+        <h2>⚠️ NGO Not Found in Database</h2>
+        
+        <div class='error'>
+            <h3>Error Details:</h3>
+            <p><strong>Session Name:</strong> " . htmlspecialchars($session_name) . "</p>
+            <p><strong>Session Role:</strong> " . htmlspecialchars($session_role) . "</p>
+            <p><strong>Query:</strong> SELECT * FROM NGO WHERE Email = '$session_name' OR NGOName = '$session_name'</p>
+            <p>No matching NGO found in database.</p>
+        </div>
+        
+        <div class='info'>
+            <h3>Debug Information:</h3>
+            <pre>" . htmlspecialchars($debug_info) . "</pre>
+        </div>
+        
+        <div class='info'>
+            <h3>Available NGOs in Database:</h3>";
+    
+    // Show all NGOs for debugging
+    $sql_all = "SELECT NGOID, NGOName, Email, Status FROM dbo.NGO";
+    $stmt_all = sqlsrv_query($conn, $sql_all);
+    
+    if($stmt_all) {
+        echo "<table>
+            <tr>
+                <th>NGOID</th>
+                <th>NGOName</th>
+                <th>Email</th>
+                <th>Status</th>
+            </tr>";
+        while($row = sqlsrv_fetch_array($stmt_all, SQLSRV_FETCH_ASSOC)) {
+            echo "<tr>
+                <td>{$row['NGOID']}</td>
+                <td>{$row['NGOName']}</td>
+                <td>{$row['Email']}</td>
+                <td>{$row['Status']}</td>
+            </tr>";
+        }
+        echo "</table>";
+    }
+    
+    echo "<p><a href='login.php' style='background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;'>↩️ Back to Login</a></p>
+        </div>
+    </body>
+    </html>";
+    exit();
+}
+
+// ============================================
+// QUERIES UNTUK DASHBOARD DATA
+// ============================================
+
+// 1. COUNT VOLUNTEERS ASSIGNED TO THIS NGO
+$sqlVolunteers = "SELECT COUNT(*) as total FROM dbo.Volunteer WHERE AssignedNGO = ?";
+$paramsVolunteers = array($ngo_id);
+$stmtVolunteers = sqlsrv_query($conn, $sqlVolunteers, $paramsVolunteers);
+
+if($stmtVolunteers === false) {
+    $totalVolunteers = 0;
+} else {
+    $rowVolunteers = sqlsrv_fetch_array($stmtVolunteers, SQLSRV_FETCH_ASSOC);
+    $totalVolunteers = $rowVolunteers['total'] ?? 0;
+    sqlsrv_free_stmt($stmtVolunteers);
+}
+
+// 2. COUNT STORY ACTIVITIES
+$sqlStories = "
+    SELECT COUNT(*) AS total
+    FROM dbo.News
+    WHERE CreatedBy = ?
+";
+$paramsStories = array($ngo_name);
+$stmtStories = sqlsrv_query($conn, $sqlStories, $paramsStories);
+
+if ($stmtStories === false) {
+    $totalStories = 0;
+} else {
+    $rowStories = sqlsrv_fetch_array($stmtStories, SQLSRV_FETCH_ASSOC);
+    $totalStories = $rowStories['total'] ?? 0;
+    sqlsrv_free_stmt($stmtStories);
+}
+
+// 3. GET PENDING APPROVALS
+$sqlPending = "SELECT COUNT(*) as total FROM dbo.News 
+               WHERE (ngo_id = ? OR ngo_name = ?) 
+               AND status = 'pending' 
+               AND type = 'story'";
+$paramsPending = array($ngo_id, $ngo_id);
+$stmtPending = sqlsrv_query($conn, $sqlPending, $paramsPending);
+
+if($stmtPending === false) {
+    $pendingApprovals = 0;
+} else {
+    $rowPending = sqlsrv_fetch_array($stmtPending, SQLSRV_FETCH_ASSOC);
+    $pendingApprovals = $rowPending['total'] ?? 0;
+    sqlsrv_free_stmt($stmtPending);
+}
+
+// 4. GET RECENT ACTIVITIES
+$sqlRecent = "SELECT TOP 4 * FROM dbo.News 
+              WHERE (ngo_id = ? OR ngo_name = ?)
+              ORDER BY created_at DESC";
+$paramsRecent = array($ngo_id, $ngo_id);
+$stmtRecent = sqlsrv_query($conn, $sqlRecent, $paramsRecent);
+
+$recentActivities = array();
+if($stmtRecent !== false) {
+    while($row = sqlsrv_fetch_array($stmtRecent, SQLSRV_FETCH_ASSOC)) {
+        // Format date
+        $created_at = $row['created_at'] ?? date('Y-m-d H:i:s');
+        if($created_at instanceof DateTime) {
+            $time_str = $created_at->format('Y-m-d H:i');
+        } else {
+            $time_str = date('Y-m-d H:i', strtotime($created_at));
+        }
+        
+        $row['time'] = $time_str;
+        $recentActivities[] = $row;
+    }
+    sqlsrv_free_stmt($stmtRecent);
+}
+
+sqlsrv_close($conn);
+
+// Jika tiada activity dari database, guna default
+if(empty($recentActivities)) {
+    $recentActivities = array(
+        array('title' => 'Profile Updated', 'description' => 'You updated your organization profile', 'time' => '2 hours ago'),
+        array('title' => 'New Volunteer', 'description' => 'A volunteer joined your team', 'time' => '1 day ago'),
+        array('title' => 'Story Activity Submitted', 'description' => 'New relief story submitted for approval', 'time' => '2 days ago'),
+        array('title' => 'Welcome to System', 'description' => 'Your NGO account was activated', 'time' => '3 days ago')
+    );
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,11 +227,11 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
-            --primary-color: #2e7d32; /* Green color scheme */
+            --primary-color: #2e7d32;
             --primary-dark: #1b5e20;
             --primary-light: #4caf50;
-            --secondary-color: #ff9800; /* Orange accent */
-            --accent-color: #2196f3; /* Blue accent */
+            --secondary-color: #ff9800;
+            --accent-color: #2196f3;
             --bg-light: #f5f7fa;
             --card-bg: #ffffff;
             --text-dark: #2c3e50;
@@ -205,7 +424,7 @@
         /* QUICK STATS */
         .quick-stats {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
             margin-bottom: 40px;
         }
@@ -232,12 +451,8 @@
             border-left-color: var(--secondary-color);
         }
 
-        .stat-card.opportunities {
+        .stat-card.distribution {
             border-left-color: var(--success-color);
-        }
-
-        .stat-card.resources {
-            border-left-color: var(--info-color);
         }
 
         .stat-icon {
@@ -261,14 +476,9 @@
             color: var(--secondary-color);
         }
 
-        .stat-card.opportunities .stat-icon {
+        .stat-card.distribution .stat-icon {
             background: rgba(76, 175, 80, 0.1);
             color: var(--success-color);
-        }
-
-        .stat-card.resources .stat-icon {
-            background: rgba(33, 150, 243, 0.1);
-            color: var(--info-color);
         }
 
         .stat-card h3 {
@@ -282,6 +492,17 @@
             color: var(--text-light);
             font-size: 0.95rem;
             margin: 0;
+        }
+
+        .stat-info {
+            font-size: 0.8rem;
+            color: var(--text-light);
+            margin-top: 8px;
+            font-style: italic;
+            background: rgba(0, 0, 0, 0.03);
+            padding: 3px 8px;
+            border-radius: 4px;
+            display: inline-block;
         }
 
         /* RECENT ACTIVITIES */
@@ -369,7 +590,7 @@
             background: linear-gradient(45deg, var(--secondary-color), #e65100);
         }
 
-        .activity-icon.opportunity {
+        .activity-icon.distribution {
             background: linear-gradient(45deg, var(--success-color), #1b5e20);
         }
 
@@ -495,14 +716,34 @@
                 grid-template-columns: 1fr;
             }
         }
+        
+        /* Debug info */
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 5px 10px;
+            font-size: 12px;
+            border-radius: 5px;
+            z-index: 9999;
+            display: none;
+        }
     </style>
 </head>
 <body>
+    <!-- Debug info -->
+    <div class="debug-info" id="debugInfo" onclick="this.style.display='none'">
+        <?php echo "NGO: " . htmlspecialchars($ngo_name); ?>
+    </div>
+    
     <!-- SIDEBAR -->
     <div class="sidebar">
         <div class="sidebar-header">
             <h2>NGO Panel</h2>
             <p>Disaster Relief Management</p>
+            <small style="opacity: 0.7; font-size: 0.8rem;">ID: <?php echo $ngo_id; ?></small>
         </div>
         
         <ul class="nav-menu">
@@ -527,21 +768,6 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a href="ngo_post_opportunity.php" class="nav-link">
-                    <i class="fas fa-bullhorn"></i>Post Opportunity
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="ngo_view_opportunities.php" class="nav-link">
-                    <i class="fas fa-eye"></i>View Opportunities
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="#" class="nav-link">
-                    <i class="fas fa-box-open"></i>Distribution
-                </a>
-            </li>
-            <li class="nav-item">
                 <a href="resource.php" class="nav-link">
                     <i class="fas fa-boxes"></i>Resource
                 </a>
@@ -559,18 +785,19 @@
         <!-- HEADER -->
         <div class="dashboard-header">
             <div class="welcome-section">
-                <h1>Welcome, <span class="ngo-name">kk</span></h1>
+                <h1>Welcome, <span class="ngo-name"><?php echo htmlspecialchars($ngo_name); ?></span></h1>
                 <p>This is your NGO dashboard overview</p>
+                <small class="stat-info">Status: <?php echo $ngo_status; ?> | Email: <?php echo $ngo_email; ?></small>
             </div>
             
             <div class="header-actions">
                 <a href="#" class="notification-btn">
                     <i class="fas fa-bell"></i>
-                    <span class="notification-badge">3</span>
+                    <span class="notification-badge"><?php echo $pendingApprovals; ?></span>
                 </a>
                 <div class="user-avatar">
                     <div style="width: 45px; height: 45px; background: linear-gradient(45deg, var(--primary-color), var(--primary-dark)); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-                        KK
+                        <?php echo strtoupper(substr($ngo_name, 0, 2)); ?>
                     </div>
                 </div>
             </div>
@@ -582,32 +809,27 @@
                 <div class="stat-icon">
                     <i class="fas fa-users"></i>
                 </div>
-                <h3>24</h3>
+                <h3><?php echo $totalVolunteers; ?></h3>
                 <p>Active Volunteers</p>
+                <small class="stat-info">Assigned to: <?php echo htmlspecialchars($ngo_name); ?></small>
             </div>
             
             <div class="stat-card activities">
                 <div class="stat-icon">
                     <i class="fas fa-tasks"></i>
                 </div>
-                <h3>8</h3>
+                <h3><?php echo $totalStories; ?></h3>
                 <p>Story Activities</p>
+                <small class="stat-info">News & updates posted</small>
             </div>
             
-            <div class="stat-card opportunities">
+            <div class="stat-card distribution">
                 <div class="stat-icon">
-                    <i class="fas fa-bullhorn"></i>
+                    <i class="fas fa-box-open"></i>
                 </div>
-                <h3>12</h3>
-                <p>Opportunities Posted</p>
-            </div>
-            
-            <div class="stat-card resources">
-                <div class="stat-icon">
-                    <i class="fas fa-boxes"></i>
-                </div>
-                <h3>156</h3>
-                <p>Resources Managed</p>
+                <h3>0</h3>
+                <p>Distribution Items</p>
+                <small class="stat-info">Resource management</small>
             </div>
         </div>
 
@@ -615,73 +837,54 @@
         <div class="dashboard-section">
             <div class="section-header">
                 <h2>Recent Activities</h2>
-                <a href="#">View All <i class="fas fa-arrow-right"></i></a>
+                <a href="ngo_create_news.php">View All <i class="fas fa-arrow-right"></i></a>
             </div>
             
             <ul class="activity-list">
+                <?php foreach($recentActivities as $index => $activity): ?>
                 <li class="activity-item">
-                    <div class="activity-icon profile">
-                        <i class="fas fa-user-edit"></i>
+                    <div class="activity-icon <?php 
+                        if(isset($activity['type']) && $activity['type'] == 'profile') echo 'profile';
+                        elseif(isset($activity['type']) && $activity['type'] == 'volunteer') echo 'volunteer';
+                        elseif(isset($activity['type']) && $activity['type'] == 'story') echo 'story';
+                        else echo 'distribution';
+                    ?>">
+                        <i class="fas fa-<?php 
+                            if(isset($activity['type']) && $activity['type'] == 'profile') echo 'user-edit';
+                            elseif(isset($activity['type']) && $activity['type'] == 'volunteer') echo 'user-plus';
+                            elseif(isset($activity['type']) && $activity['type'] == 'story') echo 'newspaper';
+                            else echo 'box-open';
+                        ?>"></i>
                     </div>
                     <div class="activity-content">
-                        <h4>Profile Updated</h4>
-                        <p>You updated your organization profile</p>
+                        <h4><?php echo htmlspecialchars($activity['title'] ?? 'Activity'); ?></h4>
+                        <p><?php echo htmlspecialchars($activity['description'] ?? 'No description'); ?></p>
                     </div>
-                    <div class="activity-time">2 hours ago</div>
+                    <div class="activity-time"><?php echo htmlspecialchars($activity['time'] ?? 'Recently'); ?></div>
                 </li>
-                
-                <li class="activity-item">
-                    <div class="activity-icon volunteer">
-                        <i class="fas fa-user-plus"></i>
-                    </div>
-                    <div class="activity-content">
-                        <h4>New Volunteer</h4>
-                        <p>Ahmad joined your volunteer team</p>
-                    </div>
-                    <div class="activity-time">1 day ago</div>
-                </li>
-                
-                <li class="activity-item">
-                    <div class="activity-icon story">
-                        <i class="fas fa-newspaper"></i>
-                    </div>
-                    <div class="activity-content">
-                        <h4>Story Activity Submitted</h4>
-                        <p>"Flood Relief in Alor Gajah" submitted for approval</p>
-                    </div>
-                    <div class="activity-time">2 days ago</div>
-                </li>
-                
-                <li class="activity-item">
-                    <div class="activity-icon opportunity">
-                        <i class="fas fa-bullhorn"></i>
-                    </div>
-                    <div class="activity-content">
-                        <h4>Opportunity Posted</h4>
-                        <p>"Medical Volunteers Needed" opportunity published</p>
-                    </div>
-                    <div class="activity-time">3 days ago</div>
-                </li>
+                <?php endforeach; ?>
             </ul>
         </div>
 
         <!-- PENDING APPROVALS -->
+        <?php if($pendingApprovals > 0): ?>
         <div class="dashboard-section">
             <div class="section-header">
                 <h2>Pending Approvals</h2>
-                <a href="#">View All <i class="fas fa-arrow-right"></i></a>
+                <a href="ngo_create_news.php">View All <i class="fas fa-arrow-right"></i></a>
             </div>
             
             <div class="alert alert-warning" style="background: rgba(255, 152, 0, 0.1); border-color: rgba(255, 152, 0, 0.3); color: #e65100; border-radius: 10px; padding: 15px;">
                 <div style="display: flex; align-items: center;">
                     <i class="fas fa-clock me-3" style="font-size: 1.2rem;"></i>
                     <div>
-                        <h5 style="margin: 0 0 5px 0; font-weight: 600;">3 Items Awaiting Approval</h5>
-                        <p style="margin: 0; font-size: 0.95rem;">You have 2 story activities and 1 resource request pending approval from the admin.</p>
+                        <h5 style="margin: 0 0 5px 0; font-weight: 600;"><?php echo $pendingApprovals; ?> Items Awaiting Approval</h5>
+                        <p style="margin: 0; font-size: 0.95rem;">You have <?php echo $pendingApprovals; ?> story activities pending approval from the admin.</p>
                     </div>
                 </div>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- QUICK ACTIONS -->
         <div class="dashboard-section">
@@ -690,28 +893,28 @@
             </div>
             
             <div class="quick-actions">
-                <a href="#" class="action-btn">
+                <a href="ngo_view_volunteer.php" class="action-btn">
                     <i class="fas fa-user-plus"></i>
-                    <h4>Add Volunteer</h4>
-                    <p>Register new volunteers to your team</p>
+                    <h4>View Volunteers</h4>
+                    <p>View all volunteers assigned to your NGO</p>
                 </a>
                 
-                <a href="#" class="action-btn">
+                <a href="ngo_create_news.php" class="action-btn">
                     <i class="fas fa-newspaper"></i>
                     <h4>Post Story</h4>
                     <p>Share your latest relief activities</p>
                 </a>
                 
-                <a href="#" class="action-btn">
-                    <i class="fas fa-bullhorn"></i>
-                    <h4>Create Opportunity</h4>
-                    <p>Post volunteer opportunities</p>
-                </a>
-                
-                <a href="#" class="action-btn">
+                <a href="resource.php" class="action-btn">
                     <i class="fas fa-box-open"></i>
                     <h4>Manage Resources</h4>
                     <p>Update inventory and distributions</p>
+                </a>
+                
+                <a href="ngo_profile.php" class="action-btn">
+                    <i class="fas fa-user-circle"></i>
+                    <h4>Update Profile</h4>
+                    <p>Edit organization information</p>
                 </a>
             </div>
         </div>
@@ -721,6 +924,11 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
+        // Show debug info on double-click
+        document.addEventListener('dblclick', function() {
+            document.getElementById('debugInfo').style.display = 'block';
+        });
+
         // Active menu item highlighting
         document.addEventListener('DOMContentLoaded', function() {
             const navLinks = document.querySelectorAll('.nav-link');

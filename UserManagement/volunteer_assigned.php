@@ -187,12 +187,12 @@ if($stmt === false){
         }
         
         .welcome-section {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 15px;
-            padding: 30px;
-            margin-bottom: 30px;
-        }
+               background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%); /* Sudah hijau */
+        color: white;
+        border-radius: 15px;
+        padding: 30px;
+        margin-bottom: 30px;
+    }
         
         .dashboard-card {
             background: white;
@@ -344,7 +344,7 @@ if($stmt === false){
         <a href="volunteer_assigned.php" class="active">🔍 View Opportunities</a>
         <a href="my_tasks.php">📋 My Tasks</a>
         <a href="volunteer_reports.php">📊 My Reports</a>
-        <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
+        <a href="main_page.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
 
     <div class="content">

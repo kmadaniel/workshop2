@@ -917,23 +917,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 </li>
                 
                 <li class="nav-item">
-                    <a href="ngo_post_opportunity.php" class="nav-link">
-                        <i class="fas fa-bullhorn"></i>
-                        <span>Post Opportunity</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
-                    <a href="ngo_view_opportunities.php" class="nav-link">
-                        <i class="fas fa-eye"></i>
-                        <span>View Opportunities</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
                     <a href="distribution.php" class="nav-link">
                         <i class="fas fa-box-open"></i>
-                        <span>Distribution</span>
+                        <span>Resoure</span>
                     </a>
                 </li>
                 

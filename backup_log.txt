@@ -1,0 +1,24 @@
+2026-01-12 17:53:32 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_17-53-32.bak
+
+2026-01-12 17:56:08 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_17-56-08.bak
+
+2026-01-12 18:07:28 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-07-28.bak
+
+2026-01-12 18:08:03 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-08-03.bak
+
+2026-01-12 18:08:26 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-08-26.bak
+
+2026-01-12 18:10:20 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-10-20.bak
+
+2026-01-12 18:11:12 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-11-12.bak
+
+2026-01-12 18:12:04 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_18-12-04.bak
+
+2026-01-12 18:13:30 - FAILED: C:\Program Files\Microsoft SQL Server\MSSQL15.SQLEXPRESS\MSSQL\Backup\UserManagement_2026-01-12_18-13-30.bak
+
+2026-01-12 18:14:18 - FAILED: C:\Program Files\Microsoft SQL Server\MSSQL15.SQLEXPRESS\MSSQL\Backup\UserManagement_2026-01-12_18-14-18.bak
+
+2026-01-12 20:00:49 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_20-00-49.bak
+
+2026-01-12 20:02:25 - SUCCESS: C:\Users\User\Desktop\workshop2\backup\UserManagement_2026-01-12_20-02-25.bak
+

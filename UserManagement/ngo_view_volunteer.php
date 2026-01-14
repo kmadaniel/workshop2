@@ -693,26 +693,10 @@ $ngo_name = $ngo_row['NGOName'] ?? 'NGO User';
                     </a>
                 </li>
                 
-                <li class="nav-item">
-                    <a href="ngo_post_opportunity.php" class="nav-link">
-                        <i class="fas fa-bullhorn"></i>
-                        <span>Post Opportunity</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
-                    <a href="ngo_view_opportunities.php" class="nav-link">
-                        <i class="fas fa-eye"></i>
-                        <span>View Opportunities</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
-                    <a href="distribution.php" class="nav-link">
-                        <i class="fas fa-box-open"></i>
-                        <span>Distribution</span>
-                    </a>
-                </li>
+                <!-- TANPA MENU-MENU OPPORTUNITIES -->
+                <!-- ❌ DIBUANG: Post Opportunity -->
+                <!-- ❌ DIBUANG: View Opportunities -->
+                <!-- ❌ DIBUANG: Distribution -->
                 
                 <li class="nav-item logout-link">
                     <a href="main_page.php" class="nav-link">
@@ -886,8 +870,8 @@ $ngo_name = $ngo_row['NGOName'] ?? 'NGO User';
                         <i class="fas fa-users-slash"></i>
                         <h4>No Volunteers Assigned Yet</h4>
                         <p class="mb-4">Your NGO doesn't have any volunteers assigned at the moment.</p>
-                        <a href="post_opportunity.php" class="btn btn-primary">
-                            <i class="fas fa-bullhorn me-2"></i>Post an Opportunity
+                        <a href="ngo_dashboard.php" class="btn btn-primary">
+                            <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
                         </a>
                     </div>
                 <?php endif; ?>

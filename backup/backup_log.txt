@@ -1,0 +1,100 @@
+2026-01-12 17:33:23 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:33:34 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:33:37 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:33:44 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:33:47 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:35:04 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:35:49 - FAILED: Array
+(
+    [0] => Array
+        (
+            [0] => 01000
+            [SQLSTATE] => 01000
+            [1] => 4035
+            [code] => 4035
+            [2] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+            [message] => [Microsoft][ODBC Driver 17 for SQL Server][SQL Server]Processed 1168 pages for database 'UserManagement', file 'UserManagement' on file 1.
+        )
+
+)
+
+2026-01-12 17:38:32 - FAILED: Backup file not created
+2026-01-12 17:43:43 - SUCCESS (with info messages)

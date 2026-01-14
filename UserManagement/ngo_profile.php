@@ -727,26 +727,7 @@ if (isset($_POST['update'])) {
                     </a>
                 </li>
                 
-                <li class="nav-item">
-                    <a href="ngo_post_opportunity.php" class="nav-link">
-                        <i class="fas fa-bullhorn"></i>
-                        <span>Post Opportunity</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
-                    <a href="ngo_view_opportunities.php" class="nav-link">
-                        <i class="fas fa-eye"></i>
-                        <span>View Opportunities</span>
-                    </a>
-                </li>
-                
-                <li class="nav-item">
-                    <a href="distribution.php" class="nav-link">
-                        <i class="fas fa-box-open"></i>
-                        <span>Distribution</span>
-                    </a>
-                </li>
+                <!-- TANPA MENU-MENU OPPORTUNITIES -->
                 
                 <li class="nav-item logout-link">
                     <a href="main_page.php" class="nav-link">
@@ -868,7 +849,7 @@ if (isset($_POST['update'])) {
                                         </div>
                                     </div>
                                     <small class="text-muted d-block mt-2">
-                                        Green = Active (able to post opportunities), Red = Inactive
+                                        Green = Active, Red = Inactive
                                     </small>
                                 </div>
 
@@ -1035,7 +1016,7 @@ if (isset($_POST['update'])) {
             const newStatus = statusToggle.checked ? 'active' : 'inactive';
             
             if (currentStatus !== newStatus) {
-                const confirmMessage = `Are you sure you want to change your account status to "${newStatus}"?\n\nActive: Can post opportunities\nInactive: Cannot post opportunities`;
+                const confirmMessage = `Are you sure you want to change your account status to "${newStatus}"?`;
                 if (!confirm(confirmMessage)) {
                     e.preventDefault();
                     return false;

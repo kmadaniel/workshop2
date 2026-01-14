@@ -192,32 +192,7 @@ if (isset($_POST['update'])) {
             color: #bbdefb;
         }
 
-        .notifications {
-            position: relative;
-            cursor: pointer;
-            padding: 10px;
-            border-radius: 50%;
-            transition: background 0.3s ease;
-        }
-
-        .notifications:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
-
-        .notification-badge {
-            position: absolute;
-            top: 5px;
-            right: 5px;
-            background: #f44336;
-            color: white;
-            font-size: 10px;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+        
 
         /* Collapsible Navigation Bar */
         .nav-toggle-container {
@@ -785,10 +760,7 @@ if (isset($_POST['update'])) {
                     <input type="text" placeholder="Search...">
                 </div>
                 
-                <div class="notifications" id="notificationsBtn">
-                    <i class="fas fa-bell"></i>
-                    <span class="notification-badge">3</span>
-                </div>
+                
                 
                 <div class="user-profile" id="userProfileBtn">
                     <div class="user-avatar">
@@ -830,23 +802,17 @@ if (isset($_POST['update'])) {
                 <i class="fas fa-building"></i>
                 <span>View NGO</span>
             </a>
-            <a href="create_news.php" class="nav-btn">
-                <i class="fas fa-newspaper"></i>
-                <span>Create News</span>
-            </a>
+           
             <a href="view_news.php" class="nav-btn">
                 <i class="fas fa-list"></i>
                 <span>View News</span>
             </a>
-            <a href="admin_opportunity.php" class="nav-btn">
-                <i class="fas fa-briefcase"></i>
-                <span>Opportunity</span>
-            </a>
+            
             <a href="distribution.php" class="nav-btn">
                 <i class="fas fa-truck"></i>
                 <span>Distribution</span>
             </a>
-            <a href="victim.php" class="nav-btn">
+            <a href="admin_victim.php" class="nav-btn">
                 <i class="fas fa-hands-helping"></i>
                 <span>Victim</span>
             </a>
@@ -899,12 +865,7 @@ if (isset($_POST['update'])) {
                 
                 <li class="nav-label">CONTENT MANAGEMENT</li>
                 
-                <li class="nav-item">
-                    <a href="create_news.php" class="nav-link">
-                        <i class="fas fa-newspaper"></i>
-                        <span class="nav-text">Create News</span>
-                    </a>
-                </li>
+            
                 
                 <li class="nav-item">
                     <a href="view_news.php" class="nav-link">
@@ -917,12 +878,6 @@ if (isset($_POST['update'])) {
                 
                 <li class="nav-label">OPERATIONS</li>
                 
-                <li class="nav-item">
-                    <a href="admin_opportunity.php" class="nav-link">
-                        <i class="fas fa-briefcase"></i>
-                        <span class="nav-text">Opportunity</span>
-                    </a>
-                </li>
                 
                 <li class="nav-item">
                     <a href="distribution.php" class="nav-link">
@@ -932,7 +887,7 @@ if (isset($_POST['update'])) {
                 </li>
                 
                 <li class="nav-item">
-                    <a href="victim.php" class="nav-link">
+                    <a href="admin_victim.php" class="nav-link">
                         <i class="fas fa-hands-helping"></i>
                         <span class="nav-text">Victim</span>
                     </a>
@@ -953,7 +908,7 @@ if (isset($_POST['update'])) {
         
         <!-- Sidebar Footer -->
         <div class="sidebar-footer">
-            <a href="logout.php">
+            <a href="main.php">
                 <i class="fas fa-sign-out-alt"></i>
                 <span>Logout</span>
             </a>

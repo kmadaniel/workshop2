@@ -11,6 +11,12 @@ $user_id = $_SESSION['user_id'];
 $msg = "";
 $msg_type = "";
 
+
+// DISTRIBUTION SYSTEM URL - CORRECTED
+// ============================
+$distribution_url = "http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $user_id;
+
+
 // ============================
 // FETCH VOLUNTEER DATA WITH NGO INFO
 // ============================
@@ -39,6 +45,13 @@ if ($stmt === false) {
 
 $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
 
+// Convert skill string to array for checkbox display
+$currentSkills = [];
+if (!empty($row['SkillCategory'])) {
+    // Split by comma and trim
+    $currentSkills = array_map('trim', explode(',', $row['SkillCategory']));
+}
+
 // ============================
 // FETCH AVAILABLE NGOS FOR DROPDOWN
 // ============================
@@ -60,76 +73,90 @@ if (isset($_POST['update'])) {
     $email = trim($_POST['email']);
     $phone = trim($_POST['phone']);
     $address = $_POST['address'] ?? null;
-    $skill = $_POST['skill'];
     $status = $_POST['status'];
     
-    // Check if volunteer can change NGO
-    $assignedNGO = $row['AssignedNGO'];
-    if (isset($_POST['assignedNGO']) && !empty($_POST['assignedNGO'])) {
-        $assignedNGO = $_POST['assignedNGO'];
-    }
+    // Get selected skills as array
+    $skillsArray = $_POST['skills'] ?? [];
     
-    // Password update is optional
-    if (!empty($_POST['password'])) {
-        $password = $_POST['password'];
-        if (strlen($password) < 6) {
-            $msg = "Password must be at least 6 characters long!";
-            $msg_type = "error";
+    // Validate at least one skill selected
+    if (empty($skillsArray)) {
+        $msg = "Please select at least one skill!";
+        $msg_type = "error";
+    } else {
+        // Convert array to comma-separated string
+        $skills = implode(", ", $skillsArray);
+        
+        // Check if volunteer can change NGO
+        $assignedNGO = $row['AssignedNGO'];
+        if (isset($_POST['assignedNGO']) && !empty($_POST['assignedNGO'])) {
+            $assignedNGO = $_POST['assignedNGO'];
+        }
+        
+        // Password update is optional
+        if (!empty($_POST['password'])) {
+            $password = $_POST['password'];
+            if (strlen($password) < 6) {
+                $msg = "Password must be at least 6 characters long!";
+                $msg_type = "error";
+            } else {
+                $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+                $update_sql = "UPDATE Volunteer SET 
+                                FullName = ?, 
+                                Email = ?, 
+                                Phone = ?, 
+                                Address = ?, 
+                                PasswordHash = ?, 
+                                SkillCategory = ?,
+                                AssignedNGO = ?,
+                                Status = ?
+                              WHERE VolunteerID = ?";
+                $update_params = array($name, $email, $phone, $address, $passwordHash, $skills, $assignedNGO, $status, $user_id);
+            }
         } else {
-            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
             $update_sql = "UPDATE Volunteer SET 
                             FullName = ?, 
                             Email = ?, 
                             Phone = ?, 
                             Address = ?, 
-                            PasswordHash = ?, 
                             SkillCategory = ?,
                             AssignedNGO = ?,
                             Status = ?
                           WHERE VolunteerID = ?";
-            $update_params = array($name, $email, $phone, $address, $passwordHash, $skill, $assignedNGO, $status, $user_id);
+            $update_params = array($name, $email, $phone, $address, $skills, $assignedNGO, $status, $user_id);
         }
-    } else {
-        $update_sql = "UPDATE Volunteer SET 
-                        FullName = ?, 
-                        Email = ?, 
-                        Phone = ?, 
-                        Address = ?, 
-                        SkillCategory = ?,
-                        AssignedNGO = ?,
-                        Status = ?
-                      WHERE VolunteerID = ?";
-        $update_params = array($name, $email, $phone, $address, $skill, $assignedNGO, $status, $user_id);
-    }
-    
-    // Execute update if no password validation error
-    if (empty($msg) || $msg_type != "error") {
-        $update_stmt = sqlsrv_query($conn, $update_sql, $update_params);
         
-        if ($update_stmt === false) {
-            $msg = "Failed to update profile: " . print_r(sqlsrv_errors(), true);
-            $msg_type = "error";
-        } else {
-            $_SESSION['name'] = $name;
-            $msg = "Profile updated successfully!";
-            $msg_type = "success";
+        // Execute update if no password validation error
+        if (empty($msg) || $msg_type != "error") {
+            $update_stmt = sqlsrv_query($conn, $update_sql, $update_params);
             
-            // Refresh the data
-            $row['FullName'] = $name;
-            $row['Email'] = $email;
-            $row['Phone'] = $phone;
-            $row['Address'] = $address;
-            $row['SkillCategory'] = $skill;
-            $row['AssignedNGO'] = $assignedNGO;
-            $row['Status'] = $status;
-            
-            // Refresh NGO name if changed
-            if ($assignedNGO != $row['AssignedNGO']) {
-                $ngoQuery = "SELECT NGOName FROM NGO WHERE NGOID = ?";
-                $ngoParams = array($assignedNGO);
-                $ngoStmt = sqlsrv_query($conn, $ngoQuery, $ngoParams);
-                if ($ngoStmt && $ngoRow = sqlsrv_fetch_array($ngoStmt, SQLSRV_FETCH_ASSOC)) {
-                    $row['NGOName'] = $ngoRow['NGOName'];
+            if ($update_stmt === false) {
+                $msg = "Failed to update profile: " . print_r(sqlsrv_errors(), true);
+                $msg_type = "error";
+            } else {
+                $_SESSION['name'] = $name;
+                $msg = "Profile updated successfully! Skills: " . htmlspecialchars($skills);
+                $msg_type = "success";
+                
+                // Refresh the data
+                $row['FullName'] = $name;
+                $row['Email'] = $email;
+                $row['Phone'] = $phone;
+                $row['Address'] = $address;
+                $row['SkillCategory'] = $skills;
+                $row['AssignedNGO'] = $assignedNGO;
+                $row['Status'] = $status;
+                
+                // Update current skills array
+                $currentSkills = $skillsArray;
+                
+                // Refresh NGO name if changed
+                if ($assignedNGO != $row['AssignedNGO']) {
+                    $ngoQuery = "SELECT NGOName FROM NGO WHERE NGOID = ?";
+                    $ngoParams = array($assignedNGO);
+                    $ngoStmt = sqlsrv_query($conn, $ngoQuery, $ngoParams);
+                    if ($ngoStmt && $ngoRow = sqlsrv_fetch_array($ngoStmt, SQLSRV_FETCH_ASSOC)) {
+                        $row['NGOName'] = $ngoRow['NGOName'];
+                    }
                 }
             }
         }
@@ -145,6 +172,7 @@ if (isset($_POST['update'])) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        /* [Keep all existing CSS styles from previous code] */
         * {
             margin: 0;
             padding: 0;
@@ -419,6 +447,14 @@ if (isset($_POST['update'])) {
             border-radius: 20px;
             font-size: 14px;
             font-weight: 500;
+            margin: 2px;
+        }
+
+        .skill-badge-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 5px;
         }
 
         .badge {
@@ -492,6 +528,111 @@ if (isset($_POST['update'])) {
             margin-bottom: 10px;
         }
 
+        /* Checkbox Styles for Skills */
+        .checkbox-group {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #e1e5e9;
+            margin-top: 10px;
+        }
+
+        .checkbox-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .checkbox-label {
+            flex: 1;
+            min-width: 200px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: all 0.2s;
+            position: relative;
+            background: white;
+            border: 1px solid #e0e0e0;
+        }
+
+        .checkbox-label:hover {
+            background: rgba(39, 174, 96, 0.05);
+            border-color: #27ae60;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            cursor: pointer;
+            width: 0;
+            height: 0;
+        }
+
+        .checkbox-custom {
+            position: relative;
+            height: 18px;
+            width: 18px;
+            background-color: white;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            margin-right: 10px;
+            flex-shrink: 0;
+            transition: all 0.2s;
+        }
+
+        .checkbox-label input[type="checkbox"]:checked ~ .checkbox-custom {
+            background-color: #27ae60;
+            border-color: #27ae60;
+        }
+
+        .checkbox-custom:after {
+            content: "";
+            position: absolute;
+            display: none;
+            left: 5px;
+            top: 2px;
+            width: 4px;
+            height: 8px;
+            border: solid white;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
+        .checkbox-label input[type="checkbox"]:checked ~ .checkbox-custom:after {
+            display: block;
+        }
+
+        .skill-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .skill-item strong {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 2px;
+        }
+
+        .skill-item small {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.3;
+        }
+
+        .skills-display {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
         @keyframes slideInRight {
             from {
                 transform: translateX(100%);
@@ -519,6 +660,14 @@ if (isset($_POST['update'])) {
             .ngo-info-grid {
                 grid-template-columns: 1fr;
             }
+            
+            .checkbox-label {
+                min-width: 100%;
+            }
+            
+            .checkbox-row {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
@@ -526,12 +675,17 @@ if (isset($_POST['update'])) {
 
     <div class="sidebar">
         <h4>Volunteer Panel</h4>
-        <a href="volunteer_dashboard.php" class="active">🏠 Dashboard</a>
-        <a href="volunteer_profile.php">👤 Profile</a>
-        <a href="volunteer_assigned.php">🔍 View Opportunities</a>
-        <a href="my_tasks.php">📋 My Tasks</a>
+        <a href="volunteer_dashboard.php">🏠 Dashboard</a>
+        <a href="volunteer_profile.php" class="active">👤 Profile</a>
+        
+        <a href="<?php echo $distribution_url; ?>" 
+           target="_blank"
+           class="distribution-link">
+           🚚 My Tasks (Distribution System)
+        </a>
+
         <a href="volunteer_reports.php">📊 My Reports</a>
-        <a href="logout.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
+        <a href="main_page.php" style="background: rgba(231, 76, 60, 0.2);">🚪 Logout</a>
     </div>
 
     <div class="content">
@@ -559,17 +713,25 @@ if (isset($_POST['update'])) {
             </div>
             <p class="text-muted mb-0">Manage your volunteer information and settings</p>
             <div class="mt-3">
-                <span class="skill-badge">
-                    <i class="fas fa-star me-1"></i>
-                    Skill: <?= htmlspecialchars($row['SkillCategory'] ?? 'Not specified') ?>
-                </span>
+                <div class="skill-badge-container">
+                    <?php if (!empty($currentSkills)): ?>
+                        <?php foreach ($currentSkills as $skill): ?>
+                            <span class="skill-badge">
+                                <i class="fas fa-star me-1"></i>
+                                <?= htmlspecialchars(trim($skill)) ?>
+                            </span>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <span class="skill-badge">No skills specified</span>
+                    <?php endif; ?>
+                </div>
                 <?php 
                 $status = $row['Status'] ?? 'active';
                 $badgeClass = ($status == 'active') ? 'badge-success' : 
                              (($status == 'busy') ? 'badge-warning' : 
                              (($status == 'on leave') ? 'badge-info' : 'badge-secondary'));
                 ?>
-                <span class="badge <?= $badgeClass ?> ms-2">
+                <span class="badge <?= $badgeClass ?> ms-2 mt-2">
                     <i class="fas fa-user-clock me-1"></i>
                     Status: <?= ucwords(htmlspecialchars($status)) ?>
                 </span>
@@ -651,27 +813,133 @@ if (isset($_POST['update'])) {
                             </div>
                         </div>
                         
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label class="form-label">Skill Category <span class="text-danger">*</span></label>
-                                <div class="input-group">
-                                    <span class="input-group-text">
-                                        <i class="fas fa-star"></i>
-                                    </span>
-                                    <select name="skill" class="form-control" required>
-                                        <option value="">-- Select Your Skill --</option>
-                                        <option value="Medical" <?= ($row['SkillCategory'] == 'Medical') ? 'selected' : '' ?>>Medical</option>
-                                        <option value="Helper" <?= ($row['SkillCategory'] == 'Helper') ? 'selected' : '' ?>>Helper</option>
-                                        <option value="Rescue" <?= ($row['SkillCategory'] == 'Rescue') ? 'selected' : '' ?>>Rescue</option>
-                                        <option value="Logistics" <?= ($row['SkillCategory'] == 'Logistics') ? 'selected' : '' ?>>Logistics</option>
-                                        <option value="Technical" <?= ($row['SkillCategory'] == 'Technical') ? 'selected' : '' ?>>Technical</option>
-                                        <option value="Driver" <?= ($row['SkillCategory'] == 'Driver') ? 'selected' : '' ?>>Driver</option>
-                                        <option value="Food Supply" <?= ($row['SkillCategory'] == 'Food Supply') ? 'selected' : '' ?>>Food Supply</option>
-                                        <option value="Counseling" <?= ($row['SkillCategory'] == 'Counseling') ? 'selected' : '' ?>>Counseling</option>
-                                    </select>
+                        <!-- Skills Checkbox Section -->
+                        <div class="mb-3">
+                            <label class="form-label">What can you help with? <span class="text-danger">*</span></label>
+                            <div class="checkbox-group">
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Medical / First Aid" 
+                                            <?= in_array('Medical / First Aid', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Medical / First Aid</strong>
+                                            <small>Doctor, nurse, paramedic, first aider</small>
+                                        </div>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Search & Rescue" 
+                                            <?= in_array('Search & Rescue', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Search & Rescue</strong>
+                                            <small>Find and save people in emergencies</small>
+                                        </div>
+                                    </label>
+                                </div>
+                                
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Technical Support" 
+                                            <?= in_array('Technical Support', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Technical Support</strong>
+                                            <small>IT, electrician, technician, repair</small>
+                                        </div>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Logistics / Supplies" 
+                                            <?= in_array('Logistics / Supplies', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Logistics / Supplies</strong>
+                                            <small>Manage, pack, and deliver supplies</small>
+                                        </div>
+                                    </label>
+                                </div>
+                                
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Driving" 
+                                            <?= in_array('Driving', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Driving</strong>
+                                            <small>Car, van, lorry, or ambulance driver</small>
+                                        </div>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Food Services" 
+                                            <?= in_array('Food Services', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Food Services</strong>
+                                            <small>Cooking, packing, or distributing food</small>
+                                        </div>
+                                    </label>
+                                </div>
+                                
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Communication" 
+                                            <?= in_array('Communication', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Communication</strong>
+                                            <small>Radio, phone, social media, translator</small>
+                                        </div>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Counseling / Support" 
+                                            <?= in_array('Counseling / Support', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Counseling / Support</strong>
+                                            <small>Emotional support, counseling, listening</small>
+                                        </div>
+                                    </label>
+                                </div>
+                                
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Admin / Office Work" 
+                                            <?= in_array('Admin / Office Work', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Admin / Office Work</strong>
+                                            <small>Paperwork, data entry, coordination</small>
+                                        </div>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="Physical Labour" 
+                                            <?= in_array('Physical Labour', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>Physical Labour</strong>
+                                            <small>Heavy lifting, setup, cleaning</small>
+                                        </div>
+                                    </label>
+                                </div>
+                                
+                                <div class="checkbox-row">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" name="skills[]" value="General Volunteer" 
+                                            <?= in_array('General Volunteer', $currentSkills) ? 'checked' : '' ?>>
+                                        <span class="checkbox-custom"></span>
+                                        <div class="skill-item">
+                                            <strong>General Volunteer</strong>
+                                            <small>Ready to help with any task needed</small>
+                                        </div>
+                                    </label>
                                 </div>
                             </div>
-                            
+                            <small class="text-muted mt-2 d-block">
+                                <i class="fas fa-info-circle"></i> Select all that apply to you. Your skills will be visible to NGOs.
+                            </small>
+                        </div>
+                        
+                        <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Availability Status <span class="text-danger">*</span></label>
                                 <div class="input-group">
@@ -689,9 +957,7 @@ if (isset($_POST['update'])) {
                                     This status will be visible to NGOs when assigning tasks
                                 </small>
                             </div>
-                        </div>
-                        
-                        <div class="row">
+                            
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Change Assigned NGO (Optional)</label>
                                 <div class="input-group">
@@ -756,7 +1022,15 @@ if (isset($_POST['update'])) {
                         </div>
                         <h5 class="mb-1"><?= htmlspecialchars($row['FullName']); ?></h5>
                         <p class="text-muted"><?= htmlspecialchars($row['Email']); ?></p>
-                        <span class="skill-badge"><?= htmlspecialchars($row['SkillCategory'] ?? 'Not set') ?></span>
+                        <div class="skills-display">
+                            <?php if (!empty($currentSkills)): ?>
+                                <?php foreach ($currentSkills as $skill): ?>
+                                    <span class="skill-badge"><?= htmlspecialchars(trim($skill)) ?></span>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <span class="skill-badge">No skills set</span>
+                            <?php endif; ?>
+                        </div>
                     </div>
                     
                     <ul class="info-list">
@@ -850,13 +1124,21 @@ if (isset($_POST['update'])) {
             const name = document.querySelector('input[name="name"]').value.trim();
             const email = document.querySelector('input[name="email"]').value.trim();
             const phone = document.querySelector('input[name="phone"]').value.trim();
-            const skill = document.querySelector('select[name="skill"]').value;
             const status = document.querySelector('select[name="status"]').value;
             const password = document.getElementById('password').value.trim();
             
-            if (!name || !email || !phone || !skill || !status) {
+            // Check skills selection
+            const skillCheckboxes = document.querySelectorAll('input[name="skills[]"]:checked');
+            
+            if (!name || !email || !phone || !status) {
                 e.preventDefault();
                 alert('Please fill in all required fields');
+                return false;
+            }
+            
+            if (skillCheckboxes.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one skill');
                 return false;
             }
             
@@ -902,7 +1184,31 @@ if (isset($_POST['update'])) {
                 }
             }
             
+            // Show selected skills count
+            const selectedSkillsCount = skillCheckboxes.length;
+            if (!confirm(`You have selected ${selectedSkillsCount} skill(s). Continue updating profile?`)) {
+                e.preventDefault();
+                return false;
+            }
+            
             return true;
+        });
+
+        // Add hover effect for skill checkboxes
+        document.querySelectorAll('.checkbox-label').forEach(label => {
+            label.addEventListener('mouseenter', function() {
+                if (!this.querySelector('input').checked) {
+                    this.style.backgroundColor = 'rgba(39, 174, 96, 0.08)';
+                    this.style.borderColor = '#27ae60';
+                }
+            });
+            
+            label.addEventListener('mouseleave', function() {
+                if (!this.querySelector('input').checked) {
+                    this.style.backgroundColor = '';
+                    this.style.borderColor = '#e0e0e0';
+                }
+            });
         });
     </script>
 

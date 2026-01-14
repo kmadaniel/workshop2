@@ -9,304 +9,297 @@ session_start();
 require_once "connection.php";
 
 // ============================
+// SIMPLE SECURITY CONFIG
+// ============================
+define('MAX_FAILED_ATTEMPTS', 3);
+define('LOCKOUT_TIME', 15); // 15 minutes
+
+// ============================
+// CREATE LOCK TABLE IF NOT EXISTS
+// ============================
+$createTable = "
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='LoginLocks' AND xtype='U')
+BEGIN
+    CREATE TABLE LoginLocks (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        email NVARCHAR(255),
+        failed_attempts INT DEFAULT 0,
+        lock_until DATETIME NULL,
+        last_attempt DATETIME DEFAULT GETDATE()
+    )
+    CREATE INDEX idx_login_locks_email ON LoginLocks(email);
+END
+";
+sqlsrv_query($conn, $createTable);
+
+// ============================
+// CHECK IF ACCOUNT IS LOCKED
+// ============================
+function isAccountLocked($email, $conn) {
+    $sql = "SELECT failed_attempts, lock_until 
+            FROM LoginLocks 
+            WHERE email = ?";
+    $stmt = sqlsrv_query($conn, $sql, array($email));
+    
+    if ($stmt && sqlsrv_has_rows($stmt)) {
+        $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+        
+        // Check if account is locked
+        if ($row['lock_until'] !== null) {
+            $lockUntil = strtotime($row['lock_until']->format('Y-m-d H:i:s'));
+            $currentTime = time();
+            
+            if ($currentTime < $lockUntil) {
+                // Still locked
+                $remainingMinutes = ceil(($lockUntil - $currentTime) / 60);
+                return [
+                    'locked' => true,
+                    'minutes' => $remainingMinutes,
+                    'until' => date('H:i:s', $lockUntil)
+                ];
+            } else {
+                // Lock expired, reset
+                $resetSql = "UPDATE LoginLocks 
+                            SET failed_attempts = 0, lock_until = NULL 
+                            WHERE email = ?";
+                sqlsrv_query($conn, $resetSql, array($email));
+            }
+        }
+        
+        // Check if reached max attempts
+        if ($row['failed_attempts'] >= MAX_FAILED_ATTEMPTS) {
+            // Lock account for 15 minutes
+            $lockSql = "UPDATE LoginLocks 
+                       SET lock_until = DATEADD(minute, " . LOCKOUT_TIME . ", GETDATE())
+                       WHERE email = ?";
+            sqlsrv_query($conn, $lockSql, array($email));
+            
+            return [
+                'locked' => true,
+                'minutes' => LOCKOUT_TIME,
+                'until' => date('H:i:s', time() + (LOCKOUT_TIME * 60))
+            ];
+        }
+    }
+    
+    return ['locked' => false];
+}
+
+// ============================
+// RECORD FAILED ATTEMPT
+// ============================
+function recordFailedAttempt($email, $conn) {
+    $sql = "IF EXISTS (SELECT 1 FROM LoginLocks WHERE email = ?)
+            BEGIN
+                UPDATE LoginLocks 
+                SET failed_attempts = failed_attempts + 1, 
+                    last_attempt = GETDATE()
+                WHERE email = ?
+            END
+            ELSE
+            BEGIN
+                INSERT INTO LoginLocks (email, failed_attempts, last_attempt) 
+                VALUES (?, 1, GETDATE())
+            END";
+    
+    sqlsrv_query($conn, $sql, array($email, $email, $email));
+}
+
+// ============================
+// RESET FAILED ATTEMPTS (on successful login)
+// ============================
+function resetFailedAttempts($email, $conn) {
+    $sql = "UPDATE LoginLocks 
+            SET failed_attempts = 0, lock_until = NULL 
+            WHERE email = ?";
+    sqlsrv_query($conn, $sql, array($email));
+}
+
+// ============================
 // LOGIN PROCESS
 // ============================
 $message = "";
-$debug_info = "";
-
-// Check if we're coming from a system choice
-$system_choice = $_GET['system'] ?? $_POST['system'] ?? '';
-$return_to = $_GET['return_to'] ?? '';
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $email = trim($_POST['email']);
     $password = $_POST['password'];
-    $system_choice = $_POST['system'] ?? $system_choice;
 
     if (empty($email) || empty($password)) {
         $message = "Please enter both email and password.";
     } else {
+        // Check if account is locked
+        $lockCheck = isAccountLocked($email, $conn);
         
-        // --- DEBUG INFO ---
-        $debug_info .= "=== LOGIN ATTEMPT ===\n";
-        $debug_info .= "Email: " . $email . "\n";
-        $debug_info .= "Password length: " . strlen($password) . "\n";
-        $debug_info .= "System choice: " . $system_choice . "\n";
-        
-        // --- CHECK ADMIN TABLE ---
-        $sql = "SELECT AdminID AS ID, FullName, Email, PasswordHash, 'admin' AS Role
-                FROM Admin WHERE Email = ?";
-        $stmt = sqlsrv_query($conn, $sql, array($email));
+        if ($lockCheck['locked']) {
+            $message = "⚠️ Account locked. Try again in " . $lockCheck['minutes'] . " minutes (until " . $lockCheck['until'] . ")";
+        } else {
+            // --- CHECK ADMIN TABLE ---
+            $sql = "SELECT AdminID AS ID, FullName, Email, PasswordHash, 'admin' AS Role
+                    FROM Admin WHERE Email = ?";
+            $stmt = sqlsrv_query($conn, $sql, array($email));
 
-        if ($stmt && sqlsrv_has_rows($stmt)) {
-            $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
-            $debug_info .= "Found in Admin table: " . $row["FullName"] . "\n";
-            
-            $storedHash = $row["PasswordHash"];
-            $debug_info .= "Stored hash type: " . (substr($storedHash, 0, 4) === '$2y$' ? 'BCRYPT' : 'PLAIN') . "\n";
-            
-            if (substr($storedHash, 0, 4) === '$2y$') {
-                if (password_verify($password, $storedHash)) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "admin";
-                    $debug_info .= "Admin login SUCCESS\n";
-                    header("Location: admin_dashboard.php");
-                    exit;
+            if ($stmt && sqlsrv_has_rows($stmt)) {
+                $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+                $storedHash = $row["PasswordHash"];
+                
+                if (substr($storedHash, 0, 4) === '$2y$') {
+                    if (password_verify($password, $storedHash)) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "admin";
+                        
+                        // Reset failed attempts
+                        resetFailedAttempts($email, $conn);
+                        
+                        header("Location: admin_dashboard.php");
+                        exit;
+                    } else {
+                        recordFailedAttempt($email, $conn);
+                    }
                 } else {
-                    $debug_info .= "Admin password verification FAILED\n";
-                }
-            } else {
-                if ($password === $storedHash) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "admin";
-                    
-                    // Auto-upgrade to bcrypt
-                    $newHash = password_hash($password, PASSWORD_BCRYPT);
-                    $update_sql = "UPDATE Admin SET PasswordHash = ? WHERE AdminID = ?";
-                    sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                    
-                    $debug_info .= "Admin login SUCCESS (plain text, upgraded to bcrypt)\n";
-                    header("Location: admin_dashboard.php");
-                    exit;
-                } else {
-                    $debug_info .= "Admin plain text password FAILED\n";
+                    if ($password === $storedHash) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "admin";
+                        
+                        // Auto-upgrade to bcrypt
+                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $update_sql = "UPDATE Admin SET PasswordHash = ? WHERE AdminID = ?";
+                        sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                        
+                        resetFailedAttempts($email, $conn);
+                        
+                        header("Location: admin_dashboard.php");
+                        exit;
+                    } else {
+                        recordFailedAttempt($email, $conn);
+                    }
                 }
             }
-        } else {
-            $debug_info .= "Not found in Admin table\n";
-        }
 
-        // --- CHECK NGO TABLE ---
-        $sql = "SELECT NGOID AS ID, NGOName AS FullName, Email, PasswordHash, status, 'ngo' AS Role
-                FROM NGO WHERE Email = ?";
-        $stmt = sqlsrv_query($conn, $sql, array($email));
+            // --- CHECK NGO TABLE ---
+            $sql = "SELECT NGOID AS ID, NGOName AS FullName, Email, PasswordHash, status, 'ngo' AS Role
+                    FROM NGO WHERE Email = ?";
+            $stmt = sqlsrv_query($conn, $sql, array($email));
 
-        if ($stmt) {
-            if (sqlsrv_has_rows($stmt)) {
+            if ($stmt && sqlsrv_has_rows($stmt)) {
                 $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
-                $debug_info .= "\n=== NGO LOGIN ATTEMPT ===\n";
-                $debug_info .= "NGO Name: " . $row["FullName"] . "\n";
-                $debug_info .= "NGO Status: " . $row["status"] . "\n";
-                $debug_info .= "Stored Hash: " . $row["PasswordHash"] . "\n";
-                $debug_info .= "Hash Length: " . strlen($row["PasswordHash"]) . "\n";
-                
                 $storedHash = $row["PasswordHash"];
                 $ngoStatus = $row["status"] ?? 'Approved';
                 
-                // CHECK IF PASSWORD IS NULL OR EMPTY
-                if (empty($storedHash)) {
-                    $debug_info .= "ERROR: PasswordHash is NULL or EMPTY in database!\n";
-                    $message = "Account error: Password not set. Please contact administrator.";
+                // CHECK NGO STATUS
+                if (strtolower($ngoStatus) == 'pending') {
+                    $message = "⚠️ Your NGO account is pending admin approval. Please wait for approval.";
+                } elseif (strtolower($ngoStatus) == 'rejected') {
+                    $message = "❌ Your NGO registration has been rejected. Please contact administrator.";
                 } else {
-                    // CHECK NGO STATUS
-                    if ($ngoStatus == 'Pending') {
-                        $message = "⚠️ Your NGO account is pending admin approval. Please wait for approval.";
-                        $debug_info .= "Login blocked: Account PENDING\n";
-                    } elseif ($ngoStatus == 'Rejected') {
-                        $message = "❌ Your NGO registration has been rejected. Please contact administrator.";
-                        $debug_info .= "Login blocked: Account REJECTED\n";
-                    } elseif ($ngoStatus == 'Approved' || $ngoStatus == '' || $ngoStatus == 'active') {
-                        
-                        $loginSuccess = false;
-                        $hashType = "UNKNOWN";
-                        
-                        // CHECK HASH TYPE - FIXED FOR CORRUPTED HASHES
-                        if (substr($storedHash, 0, 4) === '$2y$') {
-                            $hashType = "BCRYPT";
-                            $debug_info .= "Hash type: BCRYPT\n";
-                            
-                            // VERIFY BCRYPT PASSWORD
-                            if (password_verify($password, $storedHash)) {
-                                $loginSuccess = true;
-                                $debug_info .= "✓ BCRYPT password verification SUCCESS\n";
-                            } else {
-                                $debug_info .= "✗ BCRYPT password verification FAILED\n";
-                            }
-                        } 
-                        // CHECK IF HASH IS CORRUPTED (contains comma or wrong format)
-                        elseif (strpos($storedHash, ',') !== false || substr($storedHash, 0, 4) === '$2x3') {
-                            $hashType = "CORRUPTED";
-                            $debug_info .= "Hash type: CORRUPTED/DAMAGED\n";
-                            $debug_info .= "WARNING: Hash appears to be corrupted!\n";
-                            
-                            // Try plain text comparison as fallback
-                            if ($password === $storedHash) {
-                                $loginSuccess = true;
-                                $debug_info .= "✓ Corrupted hash - plain text comparison SUCCESS\n";
-                            } else {
-                                // Try extracting actual password if hash is concatenated
-                                $parts = explode(',', $storedHash);
-                                if (count($parts) > 1) {
-                                    foreach ($parts as $part) {
-                                        if (trim($part) === $password) {
-                                            $loginSuccess = true;
-                                            $debug_info .= "✓ Found password in corrupted hash parts\n";
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            // Always fix corrupted hash if login succeeds
-                            if ($loginSuccess) {
-                                $newHash = password_hash($password, PASSWORD_BCRYPT);
-                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                                $update_stmt = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                                $debug_info .= "Fixed corrupted hash: " . ($update_stmt ? "SUCCESS" : "FAILED") . "\n";
-                            }
-                        }
-                        // CHECK IF IT'S MD5 HASH
-                        elseif (strlen($storedHash) == 32 && ctype_xdigit($storedHash)) {
-                            $hashType = "MD5";
-                            $debug_info .= "Hash type: MD5 (32 chars hex)\n";
-                            
-                            if (md5($password) === $storedHash) {
-                                $loginSuccess = true;
-                                $debug_info .= "✓ MD5 password verification SUCCESS\n";
-                                
-                                // Upgrade to bcrypt
-                                $newHash = password_hash($password, PASSWORD_BCRYPT);
-                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                                $update_result = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                                $debug_info .= "Upgraded MD5 to BCRYPT: " . ($update_result ? "SUCCESS" : "FAILED") . "\n";
-                            }
-                        }
-                        // CHECK IF IT'S SHA1 HASH
-                        elseif (strlen($storedHash) == 40 && ctype_xdigit($storedHash)) {
-                            $hashType = "SHA1";
-                            $debug_info .= "Hash type: SHA1 (40 chars hex)\n";
-                            
-                            if (sha1($password) === $storedHash) {
-                                $loginSuccess = true;
-                                $debug_info .= "✓ SHA1 password verification SUCCESS\n";
-                                
-                                // Upgrade to bcrypt
-                                $newHash = password_hash($password, PASSWORD_BCRYPT);
-                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                                sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                            }
-                        }
-                        // ASSUME PLAIN TEXT
-                        else {
-                            $hashType = "PLAIN_TEXT";
-                            $debug_info .= "Hash type: PLAIN TEXT (assuming)\n";
-                            
-                            // DIRECT COMPARISON
-                            if ($password === $storedHash) {
-                                $loginSuccess = true;
-                                $debug_info .= "✓ Plain text password match SUCCESS\n";
-                                
-                                // UPGRADE TO BCRYPT
-                                $newHash = password_hash($password, PASSWORD_BCRYPT);
-                                $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
-                                $update_stmt = sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                                
-                                if ($update_stmt) {
-                                    $debug_info .= "✓ Password upgraded to BCRYPT in database\n";
-                                } else {
-                                    $debug_info .= "✗ FAILED to upgrade password. Error: " . print_r(sqlsrv_errors(), true) . "\n";
-                                }
-                            } else {
-                                $debug_info .= "✗ Plain text password match FAILED\n";
-                            }
-                        }
-                        
-                        if ($loginSuccess) {
+                    // CHECK PASSWORD
+                    if (substr($storedHash, 0, 4) === '$2y$') {
+                        if (password_verify($password, $storedHash)) {
                             $_SESSION["user_id"] = $row["ID"];
                             $_SESSION["name"] = $row["FullName"];
                             $_SESSION["email"] = $row["Email"];
                             $_SESSION["role"] = "ngo";
                             
-                            $debug_info .= "✓ NGO LOGIN SUCCESSFUL - Redirecting to dashboard\n";
-                            error_log("NGO LOGIN SUCCESS: " . $email . " | Hash type: " . $hashType);
+                            resetFailedAttempts($email, $conn);
                             
                             header("Location: ngo_dashboard.php");
                             exit;
                         } else {
-                            $debug_info .= "✗ All password verification methods FAILED\n";
+                            recordFailedAttempt($email, $conn);
+                        }
+                    } else {
+                        if ($password === $storedHash) {
+                            $_SESSION["user_id"] = $row["ID"];
+                            $_SESSION["name"] = $row["FullName"];
+                            $_SESSION["email"] = $row["Email"];
+                            $_SESSION["role"] = "ngo";
+                            
+                            // Auto-upgrade to bcrypt
+                            $newHash = password_hash($password, PASSWORD_BCRYPT);
+                            $update_sql = "UPDATE NGO SET PasswordHash = ? WHERE NGOID = ?";
+                            sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                            
+                            resetFailedAttempts($email, $conn);
+                            
+                            header("Location: ngo_dashboard.php");
+                            exit;
+                        } else {
+                            recordFailedAttempt($email, $conn);
                         }
                     }
                 }
-            } else {
-                $debug_info .= "Not found in NGO table\n";
             }
-        } else {
-            $debug_info .= "NGO query failed: " . print_r(sqlsrv_errors(), true) . "\n";
-        }
 
-        // --- CHECK VOLUNTEER TABLE ---
-        $sql = "SELECT VolunteerID AS ID, FullName, Email, PasswordHash, 'volunteer' AS Role
-                FROM Volunteer WHERE Email = ?";
-        $stmt = sqlsrv_query($conn, $sql, array($email));
+            // --- CHECK VOLUNTEER TABLE ---
+            $sql = "SELECT VolunteerID AS ID, FullName, Email, PasswordHash, 'volunteer' AS Role
+                    FROM Volunteer WHERE Email = ?";
+            $stmt = sqlsrv_query($conn, $sql, array($email));
 
-        if ($stmt && sqlsrv_has_rows($stmt)) {
-            $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
-            $debug_info .= "Found in Volunteer table: " . $row["FullName"] . "\n";
-            
-            $storedHash = $row["PasswordHash"];
-            
-            if (substr($storedHash, 0, 4) === '$2y$') {
-                if (password_verify($password, $storedHash)) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "volunteer";
-                    $debug_info .= "Volunteer login SUCCESS\n";
-                    
-                    // ============================================================
-                    // MODIFIED: Check which system to redirect to
-                    // ============================================================
-                    if ($system_choice === 'distribution') {
-                        // Redirect to YOUR distribution system
-                        header("Location: http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $row["ID"]);
-                    } else {
-                        // Default: Redirect to original volunteer dashboard
+            if ($stmt && sqlsrv_has_rows($stmt)) {
+                $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+                $storedHash = $row["PasswordHash"];
+                
+                if (substr($storedHash, 0, 4) === '$2y$') {
+                    if (password_verify($password, $storedHash)) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "volunteer";
+                        
+                        resetFailedAttempts($email, $conn);
+                        
                         header("Location: volunteer_dashboard.php");
-                    }
-                    exit;
-                }
-            } else {
-                if ($password === $storedHash) {
-                    $_SESSION["user_id"] = $row["ID"];
-                    $_SESSION["name"] = $row["FullName"];
-                    $_SESSION["email"] = $row["Email"];
-                    $_SESSION["role"] = "volunteer";
-                    
-                    // Auto-upgrade to bcrypt
-                    $newHash = password_hash($password, PASSWORD_BCRYPT);
-                    $update_sql = "UPDATE Volunteer SET PasswordHash = ? WHERE VolunteerID = ?";
-                    sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
-                    
-                    $debug_info .= "Volunteer login SUCCESS (plain text, upgraded to bcrypt)\n";
-                    
-                    // ============================================================
-                    // MODIFIED: Check which system to redirect to
-                    // ============================================================
-                    if ($system_choice === 'distribution') {
-                        // Redirect to YOUR distribution system
-                        header("Location: http://10.147.17.154:8000/distribution_module/login_callback.php?volunteer_id=" . $row["ID"]);
+                        exit;
                     } else {
-                        // Default: Redirect to original volunteer dashboard
-                        header("Location: volunteer_dashboard.php");
+                        recordFailedAttempt($email, $conn);
                     }
-                    exit;
+                } else {
+                    if ($password === $storedHash) {
+                        $_SESSION["user_id"] = $row["ID"];
+                        $_SESSION["name"] = $row["FullName"];
+                        $_SESSION["email"] = $row["Email"];
+                        $_SESSION["role"] = "volunteer";
+                        
+                        // Auto-upgrade to bcrypt
+                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $update_sql = "UPDATE Volunteer SET PasswordHash = ? WHERE VolunteerID = ?";
+                        sqlsrv_query($conn, $update_sql, array($newHash, $row["ID"]));
+                        
+                        resetFailedAttempts($email, $conn);
+                        
+                        header("Location: volunteer_dashboard.php");
+                        exit;
+                    } else {
+                        recordFailedAttempt($email, $conn);
+                    }
                 }
             }
-        } else {
-            $debug_info .= "Not found in Volunteer table\n";
-        }
 
-        // Jika semua gagal
-        if (empty($message)) {
-            $message = "Invalid email or password.";
+            // Check if account is locked after failed attempt
+            $lockCheck = isAccountLocked($email, $conn);
+            if ($lockCheck['locked']) {
+                $message = "⚠️ Account locked. Try again in " . $lockCheck['minutes'] . " minutes (until " . $lockCheck['until'] . ")";
+            } else {
+                // Get current failed attempts count
+                $countSql = "SELECT failed_attempts FROM LoginLocks WHERE email = ?";
+                $countStmt = sqlsrv_query($conn, $countSql, array($email));
+                
+                $attemptsLeft = MAX_FAILED_ATTEMPTS;
+                if ($countStmt && sqlsrv_has_rows($countStmt)) {
+                    $countRow = sqlsrv_fetch_array($countStmt, SQLSRV_FETCH_ASSOC);
+                    $attemptsLeft = MAX_FAILED_ATTEMPTS - $countRow['failed_attempts'];
+                }
+                
+                if ($attemptsLeft > 0) {
+                    $message = "Invalid email or password. " . $attemptsLeft . " attempts left.";
+                } else {
+                    $message = "Invalid email or password. Account will be locked after next failed attempt.";
+                }
+            }
         }
-        
-        // Log debug info
-        error_log("LOGIN FAILED - " . $email . "\n" . $debug_info);
     }
 }
 ?>
@@ -335,7 +328,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         
         .container {
             width: 100%;
-            max-width: 450px;
+            max-width: 400px;
             background: rgba(255, 255, 255, 0.95);
             padding: 40px 30px;
             border-radius: 20px;
@@ -347,69 +340,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         h2 {
             text-align: center;
             color: #333;
-            margin-bottom: 25px;
+            margin-bottom: 30px;
             font-size: 28px;
             font-weight: 600;
-        }
-        
-        .system-choice {
-            background: #f0f7ff;
-            border: 1px solid #c2e0ff;
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .system-choice h3 {
-            color: #0366d6;
-            font-size: 16px;
-            margin-bottom: 10px;
-            text-align: center;
-        }
-        
-        .system-options {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        
-        .system-option {
-            flex: 1;
-            text-align: center;
-        }
-        
-        .system-option input[type="radio"] {
-            display: none;
-        }
-        
-        .system-option label {
-            display: block;
-            padding: 12px 10px;
-            background: white;
-            border: 2px solid #e1e5e9;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 500;
-            color: #555;
-            transition: all 0.3s;
-        }
-        
-        .system-option input[type="radio"]:checked + label {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-        
-        .system-option label:hover {
-            border-color: #667eea;
-            transform: translateY(-2px);
-        }
-        
-        .system-note {
-            font-size: 12px;
-            color: #666;
-            text-align: center;
-            margin-top: 5px;
         }
         
         .error {
@@ -559,33 +492,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             border-left: 4px solid #667eea;
         }
         
-        .debug-toggle {
-            margin-top: 15px;
-            text-align: center;
-        }
-        
-        .debug-toggle button {
-            background: #6c757d;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-        
-        .debug-info {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
+        .security-info {
+            background-color: #f8f9fa;
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
             padding: 10px;
-            margin-top: 10px;
-            font-family: monospace;
-            font-size: 11px;
-            white-space: pre-wrap;
-            max-height: 300px;
-            overflow-y: auto;
-            display: none;
+            margin-top: 15px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
         }
         
         @media (max-width: 480px) {
@@ -596,12 +511,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             h2 {
                 font-size: 24px;
             }
-            
-            .system-options {
-                flex-direction: column;
-            }
         }
     </style>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
 
@@ -629,45 +542,38 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <?php endif; ?>
     <?php } ?>
 
-    <form action="" method="POST" id="loginForm">
-        <!-- System Choice Section -->
-        <div class="system-choice">
-            <h3>Choose System to Access:</h3>
-            <div class="system-options">
-                <div class="system-option">
-                    <input type="radio" id="system_main" name="system" value="main" 
-                           <?= ($system_choice === 'main' || empty($system_choice)) ? 'checked' : '' ?>>
-                    <label for="system_main">Main System</label>
-                </div>
-                <div class="system-option">
-                    <input type="radio" id="system_distribution" name="system" value="distribution"
-                           <?= $system_choice === 'distribution' ? 'checked' : '' ?>>
-                    <label for="system_distribution">Distribution System</label>
-                </div>
-            </div>
-            <div class="system-note">
-                Volunteers: Select "Distribution System" to access distribution management
-            </div>
-        </div>
+    <!-- Security Info -->
+    <div class="security-info">
+        <i class="fas fa-shield-alt"></i> Security: 3 failed attempts = 15 minute lockout
+    </div>
 
+    <form action="" method="POST" id="loginForm">
         <div class="form-group">
-            <label for="email">Email Address</label>
+            <label for="email"><i class="fas fa-envelope"></i> Email Address</label>
             <input type="email" id="email" name="email" 
                    placeholder="Enter your email" 
                    value="<?= isset($_POST['email']) ? htmlspecialchars($_POST['email']) : '' ?>" 
-                   required>
+                   required
+                   autocomplete="email">
         </div>
         
         <div class="form-group">
-            <label for="password">Password</label>
+            <label for="password"><i class="fas fa-lock"></i> Password</label>
             <div class="password-container">
                 <input type="password" id="password" name="password" 
-                       placeholder="Enter your password" required>
-                <button type="button" class="toggle-password" onclick="togglePassword()">👁️</button>
+                       placeholder="Enter your password" 
+                       required
+                       autocomplete="current-password"
+                       minlength="6">
+                <button type="button" class="toggle-password" onclick="togglePassword()">
+                    <i class="fas fa-eye"></i>
+                </button>
             </div>
         </div>
         
-        <button type="submit">Login</button>
+        <button type="submit" id="submitBtn">
+            <i class="fas fa-sign-in-alt"></i> Login
+        </button>
         
         <div class="forgot-link" style="text-align: center; margin-top: 15px;">
             <a href="forgot_password.php" style="color: #667eea; text-decoration: none; font-size: 14px;">
@@ -680,40 +586,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <a href="register.php">Register here</a>
         </div>
     </form>
-    
-    <!-- Debug Section -->
-    <div class="debug-toggle">
-        <button type="button" onclick="toggleDebug()">Show Debug Info</button>
-    </div>
-    <div class="debug-info" id="debugInfo">
-        <?php echo htmlspecialchars($debug_info ?? 'No debug information available.'); ?>
-    </div>
 </div>
 
 <script>
     function togglePassword() {
         const passwordField = document.getElementById('password');
-        const toggleButton = document.querySelector('.toggle-password');
+        const toggleButton = document.querySelector('.toggle-password i');
         
         if (passwordField.type === 'password') {
             passwordField.type = 'text';
-            toggleButton.textContent = '🙈';
+            toggleButton.className = 'fas fa-eye-slash';
         } else {
             passwordField.type = 'password';
-            toggleButton.textContent = '👁️';
-        }
-    }
-    
-    function toggleDebug() {
-        const debugInfo = document.getElementById('debugInfo');
-        const debugBtn = document.querySelector('.debug-toggle button');
-        
-        if (debugInfo.style.display === 'none' || debugInfo.style.display === '') {
-            debugInfo.style.display = 'block';
-            debugBtn.textContent = 'Hide Debug Info';
-        } else {
-            debugInfo.style.display = 'none';
-            debugBtn.textContent = 'Show Debug Info';
+            toggleButton.className = 'fas fa-eye';
         }
     }
     
@@ -721,18 +606,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     document.getElementById('loginForm').addEventListener('submit', function(e) {
         const email = document.getElementById('email').value.trim();
         const password = document.getElementById('password').value.trim();
-        const systemChoice = document.querySelector('input[name="system"]:checked').value;
-        const submitBtn = document.querySelector('button[type="submit"]');
+        const submitBtn = document.getElementById('submitBtn');
         
-        // Disable button untuk prevent double click
+        // Disable button to prevent double click
         submitBtn.disabled = true;
-        submitBtn.innerHTML = 'Logging in...';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Logging in...';
         
         if (!email || !password) {
             e.preventDefault();
             alert('Please fill in all fields');
             submitBtn.disabled = false;
-            submitBtn.innerHTML = 'Login';
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
             return false;
         }
         
@@ -742,86 +626,35 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             e.preventDefault();
             alert('Please enter a valid email address');
             submitBtn.disabled = false;
-            submitBtn.innerHTML = 'Login';
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
             return false;
         }
         
-        // Show system confirmation for distribution system
-        if (systemChoice === 'distribution') {
-            const confirmMsg = "You are logging into the Distribution System.\n\n" +
-                             "After successful login, you will be redirected to:\n" +
-                             "http://10.147.17.154:8000/distribution_module/\n\n" +
-                             "Continue?";
-            
-            if (!confirm(confirmMsg)) {
-                e.preventDefault();
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = 'Login';
-                return false;
-            }
+        // Password minimum length
+        if (password.length < 6) {
+            e.preventDefault();
+            alert('Password must be at least 6 characters');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
+            return false;
         }
         
         return true;
     });
     
-    // Reset button text jika user tekan back
+    // Reset button if user goes back
     window.addEventListener('pageshow', function(event) {
         if (event.persisted) {
-            const submitBtn = document.querySelector('button[type="submit"]');
+            const submitBtn = document.getElementById('submitBtn');
             submitBtn.disabled = false;
-            submitBtn.innerHTML = 'Login';
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
         }
     });
     
-    // Auto-show debug jika ada error message
-    <?php if ($message && strpos($message, 'Invalid') !== false): ?>
+    // Auto-focus on email field
     document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(() => {
-            toggleDebug();
-        }, 500);
+        document.getElementById('email').focus();
     });
-    <?php endif; ?>
-    
-    // Auto-detect volunteer emails and suggest distribution system
-    document.getElementById('email').addEventListener('blur', function() {
-        const email = this.value.trim().toLowerCase();
-        
-        // Common volunteer email patterns
-        const volunteerPatterns = [
-            '@volunteer.',
-            '@ngo.',
-            '.vol@',
-            'volunteer@',
-            'vol@',
-            'v@'
-        ];
-        
-        let isLikelyVolunteer = false;
-        for (const pattern of volunteerPatterns) {
-            if (email.includes(pattern)) {
-                isLikelyVolunteer = true;
-                break;
-            }
-        }
-        
-        if (isLikelyVolunteer) {
-            // Check if distribution system is not already selected
-            const distributionRadio = document.getElementById('system_distribution');
-            if (!distributionRadio.checked) {
-                // Ask if they want to use distribution system
-                if (confirm("This looks like a volunteer email. Would you like to login to the Distribution System?")) {
-                    distributionRadio.checked = true;
-                }
-            }
-        }
-    });
-    
-    // Auto-select system based on return_to parameter
-    <?php if ($return_to === 'distribution'): ?>
-    document.addEventListener('DOMContentLoaded', function() {
-        document.getElementById('system_distribution').checked = true;
-    });
-    <?php endif; ?>
 </script>
 
 </body>

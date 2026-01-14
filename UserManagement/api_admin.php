@@ -18,8 +18,8 @@ if (!$conn) {
     exit;
 }
 
-// Query guna schema dbo
-$sql = "SELECT * FROM dbo.Volunteer";
+// 🔹 Query guna schema dbo (Admin)
+$sql = "SELECT * FROM dbo.Admin";
 $stmt = sqlsrv_query($conn, $sql);
 
 if ($stmt === false) {
@@ -28,13 +28,14 @@ if ($stmt === false) {
     exit;
 }
 
-$ngo = [];
+$admin = [];
 while ($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
-    $ngo[] = $row;
+    $admin[] = $row;
 }
 
-// BETULKAN SINI
-echo json_encode($ngo);
+// 🔹 Return data admin dalam JSON
+echo json_encode($admin);
 
 sqlsrv_close($conn);
 ?>
+ 
