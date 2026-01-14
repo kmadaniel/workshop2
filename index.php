@@ -16,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['feedback_submit'])) {
 }
 
 /* =======================
-   FETCH DISASTERS
+   FETCH DISASTERS - ONLY ACTIVE AND UNDER CONTROL
 ======================= */
 $disasters = $conn->query("
     SELECT d.disaster_id, d.disaster_name, d.district, d.severity,
@@ -24,6 +24,7 @@ $disasters = $conn->query("
            COUNT(v.victim_id) AS total_victims
     FROM disaster d
     LEFT JOIN victim v ON d.disaster_id = v.disaster_id
+    WHERE d.status IN ('Active', 'Under Control')
     GROUP BY d.disaster_id, d.disaster_name, d.district, d.severity, d.alert_message, d.status
     ORDER BY d.created_at DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
@@ -146,29 +147,29 @@ $shelters_by_district = [
    FETCH RESOURCES FROM APIs - IMPROVED VERSION
 ======================= */
 $resources = [
-    'medical' => [
-        'title' => 'Medical Assistance',
-        'api_url' => 'http://10.147.17.224:8000/medical_resource_api.php',
+    'baby' => [
+        'title' => 'Baby & Infant Care',
+        'api_url' => 'http://10.147.17.224:8000/baby_api.php',
         'items' => []
     ],
-    'clothing' => [
-        'title' => 'Clothing & Essentials',
-        'api_url' => 'http://10.147.17.224:8000/clothing_resource_api.php',
-        'items' => []
-    ],
-    'food' => [
-        'title' => 'Food & Water Supplies',
-        'api_url' => 'http://10.147.17.224:8000/food_resource_api.php',
-        'items' => []
-    ],
-    'shelter' => [
-        'title' => 'Shelter & Accommodation',
-        'api_url' => 'http://10.147.17.224:8000/shelter_resource_api.php',
+    'basic_needs' => [
+        'title' => 'Basic Needs & Essentials',
+        'api_url' => 'http://10.147.17.224:8000/basic_needs_api.php',
         'items' => []
     ],
     'elderly' => [
-        'title' => 'Elderly & Special Needs',
-        'api_url' => 'http://10.147.17.224:8000/elderly_resource_api.php',
+        'title' => 'Elderly Assistance',
+        'api_url' => 'http://10.147.17.224:8000/elderly_api.php',
+        'items' => []
+    ],
+    'disabled' => [
+        'title' => 'Disabled Support',
+        'api_url' => 'http://10.147.17.224:8000/disabled_api.php',
+        'items' => []
+    ],
+    'medical' => [
+        'title' => 'Medical Assistance',
+        'api_url' => 'http://10.147.17.224:8000/medical_api.php',
         'items' => []
     ]
 ];
@@ -287,30 +288,30 @@ foreach ($resources as $category => &$resource) {
 // Function to get default items if API fails
 function getDefaultItems($category) {
     $defaults = [
-        'medical' => [
-            'First Aid Kits', 'Bandages & Gauze', 'Antiseptic Solution', 'Pain Relievers', 
-            'Prescription Medications', 'Thermometers', 'Blood Pressure Monitors', 
-            'Medical Gloves', 'Face Masks', 'Emergency Blankets'
+        'baby' => [
+            'Baby Formula', 'Diapers', 'Baby Wipes', 'Infant Clothing',
+            'Baby Bottles', 'Baby Food', 'Pacifiers', 'Baby Blankets',
+            'Infant Carriers', 'Baby Care Kits'
         ],
-        'clothing' => [
-            'Blankets', 'Winter Coats', 'Raincoats', 'Shoes & Boots', 
-            'Underwear & Socks', 'Protective Masks', 'T-shirts', 'Pants', 
-            'Towels', 'Hats & Caps'
-        ],
-        'food' => [
-            'Canned Food', 'Bottled Water', 'Ready-to-Eat Meals', 'Baby Formula', 
-            'Rice & Noodles', 'Bread', 'Milk & Dairy', 'Snacks & Energy Bars', 
-            'Coffee & Tea', 'Cooking Oil'
-        ],
-        'shelter' => [
-            'Temporary Tents', 'Sleeping Bags', 'Mattresses', 'Emergency Shelters', 
-            'Blankets', 'Pillows', 'Mosquito Nets', 'Flashlights', 
-            'Batteries', 'Portable Toilets'
+        'basic_needs' => [
+            'Canned Food', 'Bottled Water', 'Blankets', 'Clothing', 
+            'Hygiene Kits', 'Sleeping Mats', 'Flashlights', 'Batteries',
+            'Cooking Equipment', 'Utensils'
         ],
         'elderly' => [
             'Wheelchairs', 'Walking Aids', 'Adult Diapers', 'Special Medications', 
             'Mobility Assistance', 'Hearing Aids', 'Reading Glasses', 
             'Oxygen Tanks', 'Walkers', 'Bed Pans'
+        ],
+        'disabled' => [
+            'Wheelchair Ramps', 'Accessible Toilets', 'Braille Materials', 
+            'Sign Language Interpreters', 'Special Transport', 'Adaptive Equipment',
+            'Therapy Services', 'Support Animals Care'
+        ],
+        'medical' => [
+            'First Aid Kits', 'Bandages & Gauze', 'Antiseptic Solution', 'Pain Relievers', 
+            'Prescription Medications', 'Thermometers', 'Blood Pressure Monitors', 
+            'Medical Gloves', 'Face Masks', 'Emergency Blankets'
         ]
     ];
     
@@ -320,11 +321,11 @@ function getDefaultItems($category) {
 // Helper function to get icon for each resource category
 function getResourceIcon($category) {
     $icons = [
-        'medical' => 'fa-heart-pulse',
-        'clothing' => 'fa-shirt',
-        'food' => 'fa-utensils',
-        'shelter' => 'fa-house',
-        'elderly' => 'fa-person-cane'
+        'baby' => 'fa-baby',
+        'basic_needs' => 'fa-box',
+        'elderly' => 'fa-person-cane',
+        'disabled' => 'fa-wheelchair',
+        'medical' => 'fa-heart-pulse'
     ];
     return $icons[$category] ?? 'fa-box';
 }
@@ -810,84 +811,87 @@ function getResourceIcon($category) {
             color: #856404;
         }
 
-        /* RESOURCES SECTION - AUTO UPDATING */
-        .resources-container {
-            margin-top: 20px;
-        }
+       /* RESOURCES SECTION - AUTO UPDATING */
+.resources-container {
+    margin-top: 20px;
+}
 
-        .resource-category {
-            margin-bottom: 30px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            border-left: 5px solid;
-        }
+.resource-category {
+    margin-bottom: 30px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 10px;
+    border-left: 5px solid;
+}
 
-        .resource-category.medical {
-            border-left-color: #f5576c;
-        }
+.resource-category.baby {
+    border-left-color: #ff6b9d;
+}
 
-        .resource-category.clothing {
-            border-left-color: #4facfe;
-        }
+.resource-category.basic_needs {
+    border-left-color: #4ecdc4;
+}
 
-        .resource-category.food {
-            border-left-color: #43e97b;
-        }
+.resource-category.elderly {
+    border-left-color: #ff9f43;
+}
 
-        .resource-category.shelter {
-            border-left-color: #fa709a;
-        }
+.resource-category.disabled {
+    border-left-color: #5f27cd;
+}
 
-        .resource-category.elderly {
-            border-left-color: #a8edea;
-        }
+.resource-category.medical {
+    border-left-color: #ff3838;
+}
 
-        .resource-category-header {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 15px;
-        }
+.resource-category-header {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
+}
 
-        .resource-category-icon {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            color: white;
-        }
+.resource-category-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    color: white;
+}
 
-        .resource-category-icon.medical {
-            background: #f5576c;
-        }
+.resource-category-icon.baby {
+    background: linear-gradient(135deg, #ff6b9d 0%, #ff8fab 100%);
+    box-shadow: 0 4px 10px rgba(255, 107, 157, 0.3);
+}
 
-        .resource-category-icon.clothing {
-            background: #4facfe;
-        }
+.resource-category-icon.basic_needs {
+    background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+    box-shadow: 0 4px 10px rgba(78, 205, 196, 0.3);
+}
 
-        .resource-category-icon.food {
-            background: #43e97b;
-        }
+.resource-category-icon.elderly {
+    background: linear-gradient(135deg, #ff9f43 0%, #ffb347 100%);
+    box-shadow: 0 4px 10px rgba(255, 159, 67, 0.3);
+}
 
-        .resource-category-icon.shelter {
-            background: #fa709a;
-        }
+.resource-category-icon.disabled {
+    background: linear-gradient(135deg, #5f27cd 0%, #8e44ad 100%);
+    box-shadow: 0 4px 10px rgba(95, 39, 205, 0.3);
+}
 
-        .resource-category-icon.elderly {
-            background: #a8edea;
-            color: #666;
-        }
+.resource-category-icon.medical {
+    background: linear-gradient(135deg, #ff3838 0%, #ff6b6b 100%);
+    box-shadow: 0 4px 10px rgba(255, 56, 56, 0.3);
+}
 
-        .resource-category-title {
-            font-size: 1.4rem;
-            font-weight: 600;
-            color: #333;
-        }
-
+.resource-category-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: #333;
+}
         .api-source {
             font-size: 0.8rem;
             color: #666;

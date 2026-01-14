@@ -25,6 +25,14 @@ try {
     die("❌ Error fetching disasters: " . $e->getMessage());
 }
 
+// District options for dropdown
+$districts = [
+    'Melaka Tengah',
+    'Alor Gajah', 
+    'Jasin',
+    'Bandaraya Melaka'
+];
+
 // ================= SHELTER DATA =================
 $shelters = [
     'Melaka Tengah' => [
@@ -136,9 +144,76 @@ $shelters = [
     ]
 ];
 
-// ================= FETCH RESOURCES FROM APIS =================
+// ================= AUTOMATIC API DISCOVERY =================
+function discoverApis($base_url = 'http://10.147.17.224:8000/') {
+    $api_endpoints = [];
+    
+    // Common API endpoint patterns to try
+    $possible_endpoints = [
+        'baby_api.php',
+        'elderly_api.php',
+        'disabled_api.php',
+        'basic_needs_api.php',
+        'medical_api.php',
+        'food_api.php',
+        'clothing_api.php',
+        'shelter_api.php',
+        'resource_api.php',
+        'items_api.php'
+    ];
+    
+    foreach ($possible_endpoints as $endpoint) {
+        $url = $base_url . $endpoint;
+        if (testApiEndpoint($url)) {
+            $type = determineApiType($endpoint);
+            $api_endpoints[$type] = $url;
+        }
+    }
+    
+    return $api_endpoints;
+}
+
+function testApiEndpoint($url) {
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 5,
+            'ignore_errors' => true
+        ]
+    ]);
+    
+    try {
+        $response = @file_get_contents($url, false, $context);
+        if ($response === FALSE) {
+            return false;
+        }
+        
+        $data = json_decode($response, true);
+        return json_last_error() === JSON_ERROR_NONE;
+        
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function determineApiType($endpoint) {
+    $endpoint = strtolower($endpoint);
+    
+    if (strpos($endpoint, 'baby') !== false) return 'baby';
+    if (strpos($endpoint, 'elderly') !== false) return 'elderly';
+    if (strpos($endpoint, 'disabled') !== false) return 'disabled';
+    if (strpos($endpoint, 'basic') !== false) return 'basic';
+    if (strpos($endpoint, 'medical') !== false) return 'medical';
+    if (strpos($endpoint, 'food') !== false) return 'food';
+    if (strpos($endpoint, 'clothing') !== false) return 'clothing';
+    if (strpos($endpoint, 'shelter') !== false) return 'shelter';
+    if (strpos($endpoint, 'resource') !== false) return 'resources';
+    if (strpos($endpoint, 'items') !== false) return 'items';
+    
+    return 'other';
+}
+
 function fetchResources($url) {
-    // Use file_get_contents with stream context for better error handling
     $context = stream_context_create([
         'http' => [
             'method' => 'GET',
@@ -167,26 +242,18 @@ function fetchResources($url) {
     }
 }
 
-// Fetch resources from all APIs
-$resources = [
-    'baby' => [],
-    'elderly' => [],
-    'disabled' => [],
-    'basic' => []
-];
+// Discover all available APIs
+$api_endpoints = discoverApis('http://10.147.17.224:8000/');
 
-$api_endpoints = [
-    'baby' => 'http://10.147.17.224:8000/baby_api.php',
-    'elderly' => 'http://10.147.17.224:8000/elderly_api.php',
-    'disabled' => 'http://10.147.17.224:8000/disabled_api.php',
-    'basic' => 'http://10.147.17.224:8000/basic_needs_api.php'
-];
-
-// Track API status
+// Track all discovered resource types
+$all_resource_types = [];
+$resources = [];
 $api_errors = [];
 
-// Try to fetch from APIs, fallback to sample data
+// Fetch from discovered APIs
 foreach ($api_endpoints as $type => $url) {
+    $all_resource_types[] = $type;
+    
     $api_data = fetchResources($url);
     
     if (isset($api_data['error'])) {
@@ -195,7 +262,24 @@ foreach ($api_endpoints as $type => $url) {
         // Use sample data if API fails
         $resources[$type] = getSampleResources($type);
     } else {
-        $resources[$type] = processApiData($api_data, $type);
+        $processed_data = processApiData($api_data, $type);
+        $resources[$type] = $processed_data['items'];
+    }
+}
+
+// If no APIs were discovered, use default ones with sample data
+if (empty($api_endpoints)) {
+    $api_endpoints = [
+        'baby' => 'http://10.147.17.224:8000/baby_api.php',
+        'elderly' => 'http://10.147.17.224:8000/elderly_api.php',
+        'disabled' => 'http://10.147.17.224:8000/disabled_api.php',
+        'basic' => 'http://10.147.17.224:8000/basic_needs_api.php',
+        'medical' => 'http://10.147.17.224:8000/medical_api.php'
+    ];
+    
+    foreach ($api_endpoints as $type => $url) {
+        $all_resource_types[] = $type;
+        $resources[$type] = getSampleResources($type);
     }
 }
 
@@ -227,39 +311,90 @@ function getSampleResources($type) {
             'Bandages & Gauze',
             'Antiseptic Solution',
             'Pain Relievers',
-            'Prescription Medications',
+            'Prescription Medications'
+        ],
+        'medical' => [
             'Thermometers',
             'Blood Pressure Monitors',
             'Medical Gloves',
             'Face Masks',
             'Emergency Blankets'
+        ],
+        'food' => [
+            'Canned Food',
+            'Bottled Water',
+            'Energy Bars',
+            'Rice Packets',
+            'Ready-to-Eat Meals'
+        ],
+        'clothing' => [
+            'Blankets',
+            'Winter Jackets',
+            'Socks',
+            'Raincoats',
+            'Sleeping Bags'
+        ],
+        'shelter' => [
+            'Tents',
+            'Sleeping Mats',
+            'Mosquito Nets',
+            'Portable Toilets',
+            'Solar Lights'
+        ],
+        'resources' => [
+            'General Supplies',
+            'Emergency Kits',
+            'Hygiene Products',
+            'Cleaning Supplies',
+            'Tools'
+        ],
+        'items' => [
+            'Miscellaneous Items',
+            'Donated Goods',
+            'Relief Packages',
+            'Community Aid',
+            'Volunteer Supplies'
+        ],
+        'other' => [
+            'General Resources',
+            'Emergency Assistance',
+            'Support Services',
+            'Aid Packages',
+            'Relief Materials'
         ]
     ];
     
-    return $sample_data[$type] ?? [];
+    return $sample_data[$type] ?? ['Resource Item 1', 'Resource Item 2', 'Resource Item 3'];
 }
 
 function processApiData($api_data, $type) {
-    $processed = [];
+    $items = [];
     
     if (isset($api_data['status']) && $api_data['status'] === 'success' && isset($api_data['data'])) {
-        $items = $api_data['data'];
+        $items_data = $api_data['data'];
         
-        foreach ($items as $item) {
-            $processed[] = $item['name'] ?? $item['item_name'] ?? 'Unnamed Item';
+        foreach ($items_data as $item) {
+            if (is_array($item)) {
+                $items[] = $item['name'] ?? $item['item_name'] ?? $item['resource_name'] ?? 'Resource Item';
+            } else {
+                $items[] = $item;
+            }
         }
+        
     } elseif (is_array($api_data) && count($api_data) > 0) {
         // Assume direct array of items
         foreach ($api_data as $item) {
             if (is_array($item)) {
-                $processed[] = $item['name'] ?? $item['item_name'] ?? 'Resource';
+                $items[] = $item['name'] ?? $item['item_name'] ?? $item['resource_name'] ?? 'Resource Item';
             } else {
-                $processed[] = $item;
+                $items[] = $item;
             }
         }
+    } else {
+        $items = ['No items available from API'];
     }
     
-    return $processed;
+    return ['items' => $items];
 }
 
 // ================= HANDLE FORM SUBMISSION =================
@@ -407,33 +542,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         // ================= GET SHELTER INFO =================
-        $shelter_info = "Not selected";
-        $shelter_details = "";
-        if (!empty($selected_shelter) && $selected_shelter !== "No shelter needed - I will collect from another location") {
-            $shelter_info = $selected_shelter;
-            // Find shelter details
-            foreach ($shelters as $district => $district_shelters) {
-                foreach ($district_shelters as $shelter) {
-                    if ($shelter['name'] === $selected_shelter) {
-                        $shelter_details = "
-                        <div class='shelter-details-box'>
-                            <h5><i class='fas fa-info-circle'></i> Shelter Details</h5>
-                            <div class='shelter-details'>
-                                <p><strong>Address:</strong> {$shelter['address']}</p>
-                                <p><strong>Phone:</strong> {$shelter['phone']}</p>
-                                <p><strong>Email:</strong> {$shelter['email']}</p>
-                                <p><strong>Capacity:</strong> {$shelter['capacity']}</p>
-                                <p><strong>Facilities:</strong> {$shelter['facilities']}</p>
-                                <p><strong>Status:</strong> <span class='status-badge'>{$shelter['status']}</span></p>
-                            </div>
-                        </div>";
-                        break 2;
-                    }
-                }
+$shelter_info = "Not selected";
+$shelter_details = "";
+if (!empty($selected_shelter)) {
+    $shelter_info = $selected_shelter;
+    // Find shelter details
+    $found_shelter = false;
+    foreach ($shelters as $district => $district_shelters) {
+        foreach ($district_shelters as $shelter) {
+            if ($shelter['name'] === $selected_shelter) {
+                $shelter_details = "
+                <div class='shelter-details-box'>
+                    <h5><i class='fas fa-info-circle'></i> Collection Point Details</h5>
+                    <div class='shelter-details'>
+                        <p><strong>📍 Address:</strong> {$shelter['address']}</p>
+                        <p><strong>📞 Phone:</strong> {$shelter['phone']}</p>
+                        <p><strong>📧 Email:</strong> {$shelter['email']}</p>
+                        <p><strong>👥 Capacity:</strong> {$shelter['capacity']}</p>
+                        <p><strong>🏪 Facilities:</strong> {$shelter['facilities']}</p>
+                        <p><strong>📊 Status:</strong> <span class='status-badge'>{$shelter['status']}</span></p>
+                    </div>
+                </div>";
+                $found_shelter = true;
+                break 2;
             }
-        } elseif ($selected_shelter === "No shelter needed - I will collect from another location") {
-            $shelter_info = "No shelter selected";
         }
+    }
+    
+    // If shelter not found in our array (shouldn't happen, but just in case)
+    if (!$found_shelter) {
+        $shelter_details = "
+        <div class='shelter-details-box'>
+            <h5><i class='fas fa-info-circle'></i> Collection Point</h5>
+            <div class='shelter-details'>
+                <p><strong>Selected Collection Point:</strong> " . htmlspecialchars($selected_shelter) . "</p>
+                <p><em>Please bring your reference number and IC to collect your supplies.</em></p>
+            </div>
+        </div>";
+    }
+}
+        
         
         // ================= CREATE WHATSAPP LINK =================
         $clean_phone = preg_replace('/[^0-9]/', '', $_POST['phone']);
@@ -442,23 +590,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         // Build WhatsApp message with shelter info
-        $whatsapp_shelter_info = "";
-        if (!empty($selected_shelter)) {
-            if ($selected_shelter === "No shelter needed - I will collect from another location") {
-                $whatsapp_shelter_info = "
+$whatsapp_shelter_info = "";
+if (!empty($selected_shelter)) {
+    if ($selected_shelter === "No shelter needed - I will collect from another location") {
+        $whatsapp_shelter_info = "
 *Shelter Selection:* No shelter needed
 *Note:* You will be contacted for alternative collection arrangements";
-            } else {
-                $whatsapp_shelter_info = "
+    } else {
+        $whatsapp_shelter_info = "
 *Selected Shelter:* $selected_shelter
+*Location:* $disaster_name area
 
 *Shelter Collection Instructions:*
 1. Bring your Reference Number and IC
-2. Go to your selected shelter during distribution hours
+2. Go to the shelter in the disaster area
 3. Shelter operating hours: 8:00 AM - 8:00 PM
 4. Contact shelter if you cannot make it";
-            }
-        }
+    }
+}
         
         $whatsapp_message = "📋 *Melaka Disaster Assistance - Registration Confirmation*
 
@@ -498,36 +647,6 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
             $db_status .= " and <strong>needs table</strong>";
         } else {
             $db_status .= " (needs table: error - " . htmlspecialchars($needs_error) . ")";
-        }
-        
-        // Format needs information for display
-        $special_needs_info = "";
-        if ($has_special_person && !empty($special_request)) {
-            $special_items = explode("\n", $special_request);
-            $special_items = array_map('trim', $special_items);
-            $special_items = array_filter($special_items);
-            $special_needs_count = min(count($special_items), 3);
-            $normal_qty = $family_members;
-            $total_qty = $normal_qty + $special_needs_count;
-            
-            $special_needs_info = "
-            <div class='details-card'>
-                <h4><i class='fas fa-calculator'></i> Needs Calculation</h4>
-                <div class='details-grid'>
-                    <div class='detail-item'>
-                        <span class='detail-label'>Normal Needs:</span>
-                        <span class='detail-value'>$normal_qty items (1 per family member)</span>
-                    </div>
-                    <div class='detail-item'>
-                        <span class='detail-label'>Special Needs:</span>
-                        <span class='detail-value'>$special_needs_count items (max 3)</span>
-                    </div>
-                    <div class='detail-item'>
-                        <span class='detail-label'>Total Needs:</span>
-                        <span class='detail-value highlight'>$total_qty items</span>
-                    </div>
-                </div>
-            </div>";
         }
         
         $message = "
@@ -581,12 +700,12 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
                             <span class='detail-label'>Date:</span>
                             <span class='detail-value'>" . date('d/m/Y H:i') . "</span>
                         </div>
-                        " . (!empty($selected_shelter) && $selected_shelter !== "No shelter needed - I will collect from another location" ? "
-                        <div class='detail-item'>
-                            <span class='detail-label'>Selected Shelter:</span>
-                            <span class='detail-value highlight'>" . htmlspecialchars($selected_shelter) . "</span>
-                        </div>
-                        " : "") . "
+                        " . (!empty($selected_shelter) ? "
+<div class='detail-item'>
+    <span class='detail-label'>Collection Point:</span>
+    <span class='detail-value highlight'>" . htmlspecialchars($selected_shelter) . "</span>
+</div>
+" : "") . "
                         " . ($selected_shelter === "No shelter needed - I will collect from another location" ? "
                         <div class='detail-item'>
                             <span class='detail-label'>Shelter:</span>
@@ -595,8 +714,6 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
                         " : "") . "
                     </div>
                 </div>
-                
-                " . $special_needs_info . "
                 
                 " . (!empty($shelter_details) ? $shelter_details : "") . "
                 
@@ -680,7 +797,7 @@ Thank you for registering with Melaka Disaster Assistance. Stay safe!";
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
-/* ALL YOUR EXISTING CSS REMAINS EXACTLY THE SAME - NO CHANGES */
+/* ALL YOUR ORIGINAL CSS STAYS EXACTLY THE SAME - I'M NOT CHANGING IT! */
 * {
     margin: 0;
     padding: 0;
@@ -1378,12 +1495,12 @@ select.form-control {
     }
 }
 
-/* NEW: Special needs section visibility */
+/* Special needs section visibility */
 .special-needs-hidden {
     display: none;
 }
 
-/* NEW: Resource selection styles */
+/* Resource selection styles */
 .resource-options {
     background: #f8f9fa;
     padding: 15px;
@@ -1456,7 +1573,7 @@ select.form-control {
     color: #0056b3;
 }
 
-/* NEW: Shelter selection styles */
+/* Shelter selection styles */
 .shelter-section {
     background: #f8f9fa;
     padding: 15px;
@@ -1550,7 +1667,7 @@ select.form-control {
     color: #856404;
 }
 
-/* NEW: Shelter details in success message */
+/* Shelter details in success message */
 .shelter-details-box {
     background: #e8f4f8;
     border: 1px solid #17a2b8;
@@ -1574,10 +1691,25 @@ select.form-control {
     border-radius: 8px;
     border-left: 4px solid #17a2b8;
 }
+
+/* API status styles */
+.api-status-good {
+    background: #d4edda !important;
+    border-color: #c3e6cb !important;
+    color: #155724 !important;
+}
+
+.api-status-warning {
+    background: #fff3cd !important;
+    border-color: #ffeaa7 !important;
+    color: #856404 !important;
+}
 </style>
 <script>
 let selectedResources = [];
 let maxSelections = 3;
+let allResourceTypes = <?php echo json_encode($all_resource_types); ?>;
+let apiResources = <?php echo json_encode($resources); ?>;
 
 function toggleSpecialNeeds() {
     const hasBaby = document.getElementById('has_baby').checked;
@@ -1609,28 +1741,30 @@ function loadResourcesForSelection(hasBaby, hasElderly, hasDisabled) {
     const container = document.getElementById('dynamic-resources');
     container.innerHTML = '';
     
-    // Add Medical/Basic resources (always shown)
-    addResourceGroup('basic', 'Basic Medical Resources', container);
+    // Show medical resources for everyone (only once!)
+    if (allResourceTypes.includes('medical')) {
+        addResourceGroup('medical', 'Medical Resources', container);
+    } else if (allResourceTypes.includes('basic')) {
+        addResourceGroup('basic', 'Basic Medical Resources', container);
+    }
     
-    // Add Baby resources if selected
-    if (hasBaby) {
+    // Show specific resources based on selection
+    if (hasBaby && allResourceTypes.includes('baby')) {
         addResourceGroup('baby', 'Baby Resources', container);
     }
     
-    // Add Elderly resources if selected
-    if (hasElderly) {
+    // FIX: Elderly should NOT show medical resources again - they're already shown above
+    if (hasElderly && allResourceTypes.includes('elderly')) {
         addResourceGroup('elderly', 'Elderly Resources', container);
     }
     
-    // Add Disabled resources if selected
-    if (hasDisabled) {
+    if (hasDisabled && allResourceTypes.includes('disabled')) {
         addResourceGroup('disabled', 'Disabled Resources', container);
     }
 }
 
 function addResourceGroup(type, title, container) {
-    const resources = <?php echo json_encode($resources); ?>;
-    const items = resources[type] || [];
+    const items = apiResources[type] || [];
     
     if (items.length > 0) {
         const group = document.createElement('div');
@@ -1660,6 +1794,7 @@ function getIconForType(type) {
         case 'elderly': return 'user-friends';
         case 'disabled': return 'wheelchair';
         case 'basic': return 'first-aid';
+        case 'medical': return 'first-aid';
         default: return 'box';
     }
 }
@@ -1716,52 +1851,50 @@ function updateHiddenInput() {
     }
 }
 
-// NEW: Shelter selection functions
+// Shelter selection functions - UPDATED to use disaster district
 function updateShelterOptions() {
-    const districtInput = document.getElementById('district');
-    const district = districtInput.value.trim();
+    console.log('updateShelterOptions called'); // Debug log
+    
+    const disasterSelect = document.getElementById('disaster_id');
+    const selectedDisaster = disasterSelect.value;
     const shelterSection = document.getElementById('shelter-section');
     const shelterOptions = document.getElementById('shelter-options');
     
-    if (!district) {
+    console.log('Selected disaster value:', selectedDisaster); // Debug log
+    
+    if (!selectedDisaster) {
         shelterSection.classList.add('special-needs-hidden');
         return;
     }
     
-    // Find matching district (case-insensitive)
-    const shelters = <?php echo json_encode($shelters); ?>;
-    let matchedDistrict = null;
+    // Get the selected disaster's district from the option text
+    const selectedOption = disasterSelect.options[disasterSelect.selectedIndex];
+    const optionText = selectedOption.textContent;
     
-    for (const districtName in shelters) {
-        if (district.toLowerCase().includes(districtName.toLowerCase()) || 
-            districtName.toLowerCase().includes(district.toLowerCase())) {
-            matchedDistrict = districtName;
-            break;
-        }
+    console.log('Option text:', optionText); // Debug log
+    
+    // Extract district from parentheses, e.g., "Flood (Melaka Tengah)"
+    const match = optionText.match(/\(([^)]+)\)/);
+    if (!match) {
+        console.log('No district found in option text'); // Debug log
+        shelterSection.classList.add('special-needs-hidden');
+        return;
     }
     
-    if (matchedDistrict && shelters[matchedDistrict].length > 0) {
+    const disasterDistrict = match[1].trim();
+    console.log('Extracted district:', disasterDistrict); // Debug log
+    
+    const shelters = <?php echo json_encode($shelters); ?>;
+    
+    if (shelters[disasterDistrict] && shelters[disasterDistrict].length > 0) {
+        console.log('Found shelters for district:', disasterDistrict); // Debug log
         shelterSection.classList.remove('special-needs-hidden');
         
         // Clear existing options
         shelterOptions.innerHTML = '';
         
-        // Add "No shelter needed" option
-        const noShelterOption = document.createElement('div');
-        noShelterOption.className = 'shelter-option';
-        noShelterOption.innerHTML = `
-            <input type="radio" name="selected_shelter" id="shelter-none" value="No shelter needed - I will collect from another location" onchange="toggleShelterSelection(this)">
-            <label for="shelter-none">
-                <div class="shelter-name">No shelter needed - I will collect from another location</div>
-                <div class="shelter-details">
-                    <p><strong>Note:</strong> If you don't need to collect goods from a shelter, select this option.</p>
-                </div>
-            </label>
-        `;
-        shelterOptions.appendChild(noShelterOption);
-        
-        // Add available shelters
-        shelters[matchedDistrict].forEach((shelter, index) => {
+        // Add available shelters for the disaster's district
+        shelters[disasterDistrict].forEach((shelter, index) => {
             const option = document.createElement('div');
             option.className = 'shelter-option';
             option.innerHTML = `
@@ -1779,7 +1912,14 @@ function updateShelterOptions() {
             `;
             shelterOptions.appendChild(option);
         });
+        
+        // Update the shelter section title to show disaster district
+        const title = shelterSection.querySelector('h5');
+        if (title) {
+            title.innerHTML = `<i class="fas fa-map-marker-alt"></i> Available Shelters in ${disasterDistrict} (Disaster Area)`;
+        }
     } else {
+        console.log('No shelters found for district:', disasterDistrict); // Debug log
         shelterSection.classList.add('special-needs-hidden');
     }
 }
@@ -1816,14 +1956,14 @@ function validateForm() {
         return false;
     }
     
-    // Validate shelter selection (optional)
-    const district = document.getElementById('district').value.trim();
+    // Validate shelter selection (REQUIRED now)
+    const disaster = document.getElementById('disaster_id').value;
     const shelterSection = document.getElementById('shelter-section');
     
-    if (district && !shelterSection.classList.contains('special-needs-hidden')) {
+    if (disaster && !shelterSection.classList.contains('special-needs-hidden')) {
         const selectedShelter = document.querySelector('input[name="selected_shelter"]:checked');
         if (!selectedShelter) {
-            alert('Please select a shelter option or choose "No shelter needed".');
+            alert('Please select a collection point where you will collect your emergency supplies.');
             return false;
         }
     }
@@ -1854,14 +1994,23 @@ function copyReference() {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Page loaded, initializing...'); // Debug log
+    
     toggleSpecialNeeds();
     updateSelectionCounter();
     
-    // Add event listener to district input for real-time shelter updates
-    const districtInput = document.getElementById('district');
-    if (districtInput) {
-        districtInput.addEventListener('input', updateShelterOptions);
-        districtInput.addEventListener('change', updateShelterOptions);
+    // Add event listener to disaster dropdown for shelter updates
+    const disasterSelect = document.getElementById('disaster_id');
+    if (disasterSelect) {
+        console.log('Found disaster select, adding event listener'); // Debug log
+        disasterSelect.addEventListener('change', updateShelterOptions);
+        // Trigger once on load if disaster is already selected (e.g., after form submission)
+        if (disasterSelect.value) {
+            console.log('Disaster already selected, triggering update'); // Debug log
+            updateShelterOptions();
+        }
+    } else {
+        console.log('Disaster select element not found!'); // Debug log
     }
 });
 </script>
@@ -1905,6 +2054,19 @@ document.addEventListener('DOMContentLoaded', function() {
             <?php if (empty($message) || str_contains($message, 'Registration Failed')): ?>
             <h2><i class="fas fa-user-plus"></i> Registration Details</h2>
             
+            <!-- API Status Indicator -->
+            <?php if (!empty($api_errors)): ?>
+            <div class="note api-status-warning">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>API Status:</strong> Some resource APIs failed to load. Using sample data for missing resources.
+            </div>
+            <?php elseif (!empty($all_resource_types)): ?>
+            <div class="note api-status-good">
+                <i class="fas fa-check-circle"></i>
+                <strong>API Status:</strong> Successfully loaded resources from <?= count($all_resource_types) ?> APIs
+            </div>
+            <?php endif; ?>
+            
             <form method="POST" onsubmit="return validateForm()">
                 
                 <!-- Section 1: Disaster Information -->
@@ -1914,7 +2076,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 <div class="form-group">
                     <label class="form-label">Select Disaster</label>
-                    <select name="disaster_id" class="form-control" required>
+                    <select name="disaster_id" id="disaster_id" class="form-control" required>
                         <option value="">-- Please select the affected disaster --</option>
                         <?php foreach ($disasters as $d): ?>
                         <option value="<?= $d['disaster_id'] ?>">
@@ -1967,30 +2129,37 @@ document.addEventListener('DOMContentLoaded', function() {
                     <input type="text" name="city" class="form-control" placeholder="City" value="Melaka">
                 </div>
                 
+                <!-- UPDATED: District as dropdown -->
                 <div class="form-group">
-                    <input type="text" name="district" id="district" class="form-control" placeholder="District (e.g., Melaka Tengah, Alor Gajah, Jasin, Bandaraya Melaka)" required>
+                    <label class="form-label">District</label>
+                    <select name="district" id="district" class="form-control" required>
+                        <option value="">-- Select District --</option>
+                        <?php foreach ($districts as $district): ?>
+                        <option value="<?= htmlspecialchars($district) ?>"><?= htmlspecialchars($district) ?></option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
 
-                <!-- NEW: Section 4: Shelter Selection -->
-                <div class="section-title">
-                    <i class="fas fa-house-user"></i> 4. Select Collection Shelter (Optional)
-                </div>
-                
-                <div class="note">
-                    <i class="fas fa-lightbulb"></i> 
-                    <strong>Important:</strong> Select a nearby shelter to collect your emergency goods. Shelters will appear based on your district.
-                </div>
-                
-                <div id="shelter-section" class="shelter-section special-needs-hidden">
-                    <h5><i class="fas fa-map-marker-alt"></i> Available Shelters in Your District</h5>
-                    <div id="shelter-options" class="shelter-options">
-                        <!-- Shelters will be dynamically loaded here -->
-                    </div>
-                    <div class="note" style="margin-top: 10px;">
-                        <i class="fas fa-info-circle"></i> 
-                        <strong>Note:</strong> If you don't need to collect from a shelter, select "No shelter needed". Goods will be available at your selected shelter during distribution hours (8:00 AM - 8:00 PM).
-                    </div>
-                </div>
+                <!-- Section 4: Supply Collection -->
+<div class="section-title">
+    <i class="fas fa-boxes"></i> 4. Select Supply Collection Point <span style="color: red;">*</span>
+</div>
+
+<div class="note">
+    <i class="fas fa-lightbulb"></i> 
+    <strong>Important:</strong> All registered victims will receive basic emergency supplies. You must select a collection point in the disaster area.
+</div>
+
+<div id="shelter-section" class="shelter-section special-needs-hidden">
+    <h5><i class="fas fa-map-marker-alt"></i> Available Collection Points in Disaster Area</h5>
+    <div id="shelter-options" class="shelter-options">
+        <!-- Shelters will be dynamically loaded here based on disaster district -->
+    </div>
+    <div class="note" style="margin-top: 10px;">
+        <i class="fas fa-info-circle"></i> 
+        <strong>Note:</strong> Please bring your reference number and IC to your selected collection point during operating hours (8:00 AM - 8:00 PM).
+    </div>
+</div>
 
                 <!-- Section 5: Household Information -->
                 <div class="section-title">

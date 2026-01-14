@@ -1,5 +1,56 @@
 <?php
-include "../db.php";
+session_start();
+
+// ========================================
+// SIMPLE AUTHENTICATION FOR YANA SYAKINAHS
+// ========================================
+
+// Force set the current user to "yana syakinahs"
+$current_user = [
+    'id' => 1,
+    'name' => 'yana syakinahs',
+    'role' => 'Administrator',
+    'avatar' => 'YS',
+    'email' => 'yana@disasterrelief.org',
+    'phone' => '',
+    'department' => 'System Administration',
+    'api_verified' => true,
+    'auth_source' => 'Direct Access'
+];
+
+// Set session variables so you don't get redirected
+$_SESSION['user_id'] = 1;
+$_SESSION['user_name'] = 'yana syakinahs';
+$_SESSION['user_role'] = 'Administrator';
+$_SESSION['user_email'] = 'yana@disasterrelief.org';
+$_SESSION['admin_api_verified'] = true;
+
+// Include database connection - CORRECT PATH for db.php outside admin folder
+$dbPath = dirname(__DIR__) . '/db.php'; // This goes up one level from admin folder
+if (!file_exists($dbPath)) {
+    die("❌ ERROR: db.php not found at: $dbPath");
+}
+
+require_once $dbPath;
+
+// Include AuditLogger class
+require_once dirname(__DIR__) . '/admin/audit_functions.php';
+
+// Check if connection was established
+if (!isset($conn)) {
+    die("❌ ERROR: Database connection failed. \$conn is not set.");
+}
+
+try {
+    // Test the connection
+    $conn->query("SELECT 1");
+} catch (Exception $e) {
+    die("❌ ERROR: Database connection test failed: " . $e->getMessage());
+}
+
+// Initialize AuditLogger
+$logger = new AuditLogger($conn);
+
 $message = "";
 
 // API Configuration for YOUR system
@@ -7,6 +58,7 @@ $YOUR_API_URL = "http://10.147.17.154:8000/distribution_module/api_victim_approv
 
 // Start timing for performance monitoring
 $start_time = microtime(true);
+
 
 // Function to get current approval status from YOUR API - BATCH VERSION
 function getStatusesFromYourAPI($victim_ids, $disaster_id) {
@@ -139,6 +191,8 @@ if (isset($_GET['sync_from_api'])) {
             $updated = syncStatusesFromYourAPI($conn, $api_statuses, $disaster_id);
             if ($updated > 0) {
                 $message = "✅ Status synced from API";
+                // Log audit action using AuditLogger
+                $logger->log('api_sync_single', 'Synced victim from API: ' . $victim_id, 'victim', $victim_id, ['disaster_id' => $disaster_id]);
             } else {
                 $message = "❌ Failed to sync status from API";
             }
@@ -157,8 +211,17 @@ if (isset($_POST['bulk_sync_from_api'])) {
         $failed = count($victim_ids) - $synced;
         
         $message = "✅ Bulk sync completed: $synced synced, $failed failed";
+
+        // Log audit action using AuditLogger
+        $logger->log('api_bulk_sync', 'Bulk synced ' . count($victim_ids) . ' victims from API', 'victim', null, [
+            'count' => count($victim_ids),
+            'synced' => $synced,
+            'failed' => $failed,
+            'disaster_id' => $disaster_id
+        ]);
     }
 }
+
 
 // -------------------------
 // Handle Disaster Addition / Update / Delete
@@ -194,17 +257,28 @@ if (isset($_POST['add_disaster'])) {
         ':alert' => "New disaster reported: " . $_POST['disaster_type'] . " in " . $_POST['district']
     ]);
 
+    $new_disaster_id = $conn->lastInsertId();
     $message = "✅ Disaster added successfully!";
+
+    // Log audit action using AuditLogger
+    $logger->log('disaster_add', 'Added new disaster: ' . $_POST['disaster_type'], 'disaster', $new_disaster_id, $_POST);
 }
 
 // Update Disaster Status
 if (isset($_POST['update_disaster'])) {
+    $disaster_id = $_POST['disaster_id'];
+    $status = $_POST['status'];
+    
     $stmt = $conn->prepare("UPDATE disaster SET status = :status WHERE disaster_id = :id");
     $stmt->execute([
-        ':status' => $_POST['status'],
-        ':id' => $_POST['disaster_id']
+        ':status' => $status,
+        ':id' => $disaster_id
     ]);
+    
     $message = "✅ Disaster status updated!";
+    
+    // Log audit action using AuditLogger
+    $logger->log('disaster_update', 'Updated disaster status to: ' . $status, 'disaster', $disaster_id, ['status' => $status]);
 }
 
 // Delete Disaster
@@ -222,6 +296,9 @@ if (isset($_POST['delete_disaster'])) {
         $stmt = $conn->prepare("DELETE FROM disaster WHERE disaster_id = ?");
         $stmt->execute([$disaster_id]);
         $message = "✅ Disaster deleted successfully!";
+        
+        // Log audit action using AuditLogger
+        $logger->log('disaster_delete', 'Deleted disaster ID: ' . $disaster_id, 'disaster', $disaster_id, ['disaster_id' => $disaster_id]);
     }
 }
 
@@ -265,6 +342,15 @@ if (isset($_POST['update_victim'])) {
         ]);
         
         $message = "✅ Victim status updated locally!";
+
+        // Log audit action using AuditLogger
+        $logger->log('victim_update', 'Updated victim status for ID: ' . $victim_id, 'victim', $victim_id, [
+            'victim_id' => $victim_id,
+            'disaster_id' => $disaster_id,
+            'status' => $status,
+            'distribution_id' => $distribution_id,
+            'priority' => $priority
+        ]);
         
     } catch (Exception $e) {
         $message = "❌ Error updating victim: " . $e->getMessage();
@@ -276,6 +362,7 @@ if (isset($_POST['update_victim'])) {
 if (isset($_POST['send_alert'])) {
     $alert_message = htmlspecialchars($_POST['alert_message']);
     $disaster_id = $_POST['disaster_id'];
+    $alert_type = $_POST['alert_type'] ?? 'Emergency Alert';
     
     $stmt = $conn->prepare("UPDATE disaster SET alert_message = :alert WHERE disaster_id = :id");
     $stmt->execute([
@@ -283,6 +370,13 @@ if (isset($_POST['send_alert'])) {
         ':id' => $disaster_id
     ]);
     $message = "🚨 Alert message updated for the disaster!";
+    
+    // Log audit action using AuditLogger
+    $logger->log('alert_sent', 'Sent emergency alert: ' . substr($alert_message, 0, 50), 'disaster', $disaster_id, [
+        'alert' => $alert_message,
+        'alert_type' => $alert_type,
+        'disaster_id' => $disaster_id
+    ]);
 }
 
 // Function to get victim details for modal
@@ -1535,6 +1629,89 @@ textarea.form-control {
     z-index: 9999;
     display: none; /* Hidden by default, can enable for debugging */
 }
+
+/* ========== AUDIT LOG STYLES ========== */
+.audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.audit-table th {
+    background: #f8f9fa;
+    padding: 12px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.audit-table td {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+}
+
+.audit-table tr:hover {
+    background: #f8f9fa;
+}
+
+.audit-details {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    margin-top: 20px;
+    border: 1px solid #dee2e6;
+}
+
+.diff-row {
+    padding: 8px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.diff-label {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 5px;
+}
+
+.diff-old {
+    color: #f44336;
+    text-decoration: line-through;
+    padding: 2px 5px;
+    background: #ffebee;
+    border-radius: 3px;
+    display: inline-block;
+    margin-right: 10px;
+}
+
+.diff-new {
+    color: #4caf50;
+    padding: 2px 5px;
+    background: #e8f5e9;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.arrow {
+    color: #999;
+    margin: 0 5px;
+}
+
+.audit-badge {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.audit-badge.create { background: #d4edda; color: #155724; }
+.audit-badge.update { background: #fff3cd; color: #856404; }
+.audit-badge.delete { background: #f8d7da; color: #721c24; }
+.audit-badge.api { background: #cce5ff; color: #004085; }
+.audit-badge.system { background: #d1ecf1; color: #0c5460; }
+/* ========== END AUDIT LOG STYLES ========== */
+
 </style>
 </head>
 <body>
@@ -1565,20 +1742,15 @@ textarea.form-control {
                     <input type="text" placeholder="Search...">
                 </div>
                 
-                <div class="notifications" id="notificationsBtn">
-                    <i class="fas fa-bell"></i>
-                    <span class="notification-badge"><?= $pending_needs['count'] ?? 0 ?></span>
-                </div>
-                
-                <div class="user-profile" id="userProfileBtn">
-                    <div class="user-avatar">
-                        <i class="fas fa-user-shield"></i>
-                    </div>
-                    <div class="user-info">
-                        <div class="user-name">Administrator</div>
-                        <div class="user-role">Disaster Management</div>
-                    </div>
-                </div>
+               
+    <div class="user-avatar">
+        <?= strtoupper(substr($current_user['name'] ?? 'YS', 0, 2)) ?>
+    </div>
+    <div class="user-info">
+        <div class="user-name"><?= htmlspecialchars($current_user['name'] ?? 'yana syakinahs') ?></div>
+        <div class="user-role"><?= htmlspecialchars($current_user['role'] ?? 'Administrator') ?></div>
+    </div>
+</div>
             </div>
         </div>
     </header>
@@ -1590,11 +1762,19 @@ textarea.form-control {
                 <li class="nav-label">MAIN NAVIGATION</li>
                 
                 <li class="nav-item">
-                    <a href="admin_dashboard.php" class="nav-link active">
-                        <i class="fas fa-tachometer-alt"></i>
-                        <span class="nav-text">Dashboard</span>
-                    </a>
-                </li>
+    <a href="http://10.147.17.30:8000/admin_dashboard.php" class="nav-link active">
+        <i class="fas fa-tachometer-alt"></i>
+        <span class="nav-text">Dashboard</span>
+    </a>
+</li>
+
+<!-- INSERT BACK BUTTON HERE (after line 901) -->
+<li class="nav-item">
+    <a href="http://10.147.17.30:8000/admin_dashboard.php" class="nav-link">
+        <i class="fas fa-arrow-left"></i>
+        <span class="nav-text">Back to Main Dashboard</span>
+    </a>
+</li>
                 
                 <li class="nav-divider"></li>
                 
@@ -1651,21 +1831,6 @@ textarea.form-control {
         </div>
         <?php endif; ?>
 
-        <!-- API Info Card -->
-        <div class="api-info-card">
-            <h4><i class="fas fa-sync-alt"></i> API Integration Status</h4>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <p>Connected to: <strong>http://10.147.17.154:8000/distribution_module/api_victim_approve.php</strong></p>
-                    <small>Status updates are automatically fetched from the approval system</small>
-                </div>
-                <?php if($selected_disaster_id): ?>
-                <button onclick="syncAllFromAPI()" class="btn btn-light">
-                    <i class="fas fa-sync-alt"></i> Sync All Now
-                </button>
-                <?php endif; ?>
-            </div>
-        </div>
 
         <!-- Quick Actions -->
         <div class="quick-actions">
@@ -1686,74 +1851,90 @@ textarea.form-control {
         </div>
 
         <!-- Emergency Alert Section -->
-        <div class="alert-section" id="sendAlert">
-            <h3><i class="fas fa-bullhorn"></i> Quick Emergency Alert</h3>
-            <form method="POST">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <select name="disaster_id" class="form-control" required>
-                            <option value="">Select Disaster</option>
-                            <?php foreach($disasters as $d): ?>
-                                <option value="<?= $d['disaster_id'] ?>"><?= htmlspecialchars($d['disaster_name']) ?> - <?= $d['district'] ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <input type="text" name="alert_type" class="form-control" placeholder="Alert Type (e.g., Warning, Update)" value="Emergency Alert">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <textarea name="alert_message" class="form-control" rows="3" placeholder="Enter emergency message..." required></textarea>
-                </div>
-                <button type="submit" name="send_alert" class="btn btn-primary">
-                    <i class="fas fa-paper-plane"></i> Send Alert
-                </button>
-            </form>
-        </div>
-
-        <!-- ADD NEW DISASTER -->
-        <div class="dashboard-section" id="addDisaster">
-            <div class="section-header">
-                <h3><i class="fas fa-plus-circle"></i> Add New Disaster</h3>
-                <span class="badge badge-primary">NEW</span>
+<div class="alert-section" id="sendAlert">
+    <h3><i class="fas fa-bullhorn"></i> Quick Emergency Alert</h3>
+    <form method="POST">
+        <div class="form-grid">
+            <div class="form-group">
+                <select name="disaster_id" class="form-control" required>
+                    <option value="">Select Disaster</option>
+                    <?php 
+                    // Only show Active and Under Control disasters
+                    $active_disasters = $conn->query("
+                        SELECT * FROM disaster 
+                        WHERE status IN ('Active', 'Under Control') 
+                        ORDER BY disaster_name
+                    ")->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    foreach($active_disasters as $d): ?>
+                        <option value="<?= $d['disaster_id'] ?>">
+                            <?= htmlspecialchars($d['disaster_name']) ?> - <?= htmlspecialchars($d['district']) ?> 
+                            (<?= $d['status'] ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
             </div>
-            <form method="POST">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <input type="text" name="disaster_type" class="form-control" placeholder="Disaster Type (e.g., Flood, Fire, Earthquake)" required>
-                    </div>
-                    <div class="form-group">
-                        <input type="text" name="district" class="form-control" placeholder="Affected District" required>
-                    </div>
-                </div>
-                
-                <div class="form-grid">
-                    <div class="form-group">
-                        <select name="severity" class="form-control" required>
-                            <option value="">-- Select Severity --</option>
-                            <option value="Low">Low</option>
-                            <option value="Medium">Medium</option>
-                            <option value="High">High</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <select name="status" class="form-control" required>
-                            <option value="Active">Active</option>
-                            <option value="Under Control">Under Control</option>
-                            <option value="Ended">Ended</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <textarea name="description" class="form-control" rows="4" placeholder="Detailed description of the disaster..." required></textarea>
-                </div>
-                
-                <button type="submit" name="add_disaster" class="btn btn-primary">
-                    <i class="fas fa-save"></i> Add Disaster
-                </button>
-            </form>
+            <div class="form-group">
+                <input type="text" name="alert_type" class="form-control" placeholder="Alert Type (e.g., Warning, Update)" value="Emergency Alert">
+            </div>
         </div>
+        <div class="form-group">
+            <textarea name="alert_message" class="form-control" rows="3" placeholder="Enter emergency message..." required></textarea>
+        </div>
+        <button type="submit" name="send_alert" class="btn btn-primary">
+            <i class="fas fa-paper-plane"></i> Send Alert
+        </button>
+    </form>
+</div>
+
+       <!-- ADD NEW DISASTER -->
+<div class="dashboard-section" id="addDisaster">
+    <div class="section-header">
+        <h3><i class="fas fa-plus-circle"></i> Add New Disaster</h3>
+        <span class="badge badge-primary">NEW</span>
+    </div>
+    <form method="POST">
+        <div class="form-grid">
+            <div class="form-group">
+                <input type="text" name="disaster_type" class="form-control" placeholder="Disaster Type (e.g., Flood, Fire, Earthquake)" required>
+            </div>
+            <div class="form-group">
+                <select name="district" class="form-control" required>
+                    <option value="">-- Select District --</option>
+                    <option value="Melaka Tengah">Melaka Tengah</option>
+                    <option value="Jasin">Jasin</option>
+                    <option value="Alor Gajah">Alor Gajah</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="form-grid">
+            <div class="form-group">
+                <select name="severity" class="form-control" required>
+                    <option value="">-- Select Severity --</option>
+                    <option value="Low">Low</option>
+                    <option value="Medium">Medium</option>
+                    <option value="High">High</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <select name="status" class="form-control" required>
+                    <option value="Active">Active</option>
+                    <option value="Under Control">Under Control</option>
+                    <option value="Ended">Ended</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <textarea name="description" class="form-control" rows="4" placeholder="Detailed description of the disaster..." required></textarea>
+        </div>
+        
+        <button type="submit" name="add_disaster" class="btn btn-primary">
+            <i class="fas fa-save"></i> Add Disaster
+        </button>
+    </form>
+</div> 
 
         <!-- MANAGE EXISTING DISASTERS -->
         <div class="dashboard-section" id="disaster-management">
@@ -1850,6 +2031,12 @@ textarea.form-control {
                     </h3>
                     <div>
                         <span class="badge badge-info"><?= count($victims) ?> VICTIMS</span>
+                         <a href="admin_dashboard.php" class="btn btn-sm btn-primary" style="margin-left: 10px;">
+            <i class="fas fa-arrow-left"></i> Back to Dashboard
+        </a>
+        <a href="admin_dashboard.php" class="btn btn-sm" style="background: #f5f5f5; margin-left: 10px;">
+            <i class="fas fa-times"></i> Clear Filter
+        </a>
                         <a href="admin_dashboard.php" class="btn btn-sm" style="background: #f5f5f5; margin-left: 10px;">
                             <i class="fas fa-times"></i> Clear Filter
                         </a>
@@ -2214,6 +2401,59 @@ textarea.form-control {
                 </div>
             <?php endif; ?>
         </div>
+
+    <!-- AUDIT LOG SECTION - WORKING IFRAME -->
+<div class="dashboard-section" id="audit-log">
+    <div class="section-header">
+        <h3><i class="fas fa-clipboard-list"></i> System Audit Trail</h3>
+        <div>
+            <button onclick="refreshAudit()" class="btn btn-sm" style="background: #e3f2fd; margin-left: 10px;">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+        </div>
+    </div>
+    
+    <!-- IFRAME THAT ACTUALLY WORKS -->
+    <iframe id="auditFrame" src="get_audit_log.php" 
+            style="width:100%; height:500px; border:none; border-radius:10px; margin-top:20px;">
+    </iframe>
+</div>
+
+<script>
+function loadAuditFilter(filter) {
+    const iframe = document.getElementById('auditFrame');
+    iframe.src = 'get_audit_log.php?filter=' + filter;
+    
+    // Update active button
+    document.querySelectorAll('#audit-log .filter-tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+}
+
+function refreshAudit() {
+    const iframe = document.getElementById('auditFrame');
+    iframe.src = 'get_audit_log.php?t=' + Date.now();
+}
+</script>
+
+<script>
+function loadAuditFilter(filter) {
+    const iframe = document.getElementById('auditFrame');
+    iframe.src = 'admin/get_audit_log.php?filter=' + filter;
+    
+    // Update active button
+    document.querySelectorAll('#audit-log .filter-tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+}
+
+function refreshAudit() {
+    const iframe = document.getElementById('auditFrame');
+    iframe.src = iframe.src + '&t=' + Date.now();
+}
+</script>
 
     </main>
 
@@ -2782,6 +3022,33 @@ textarea.form-control {
     if (window.history.replaceState) {
         window.history.replaceState(null, null, window.location.href);
     }
+
+  // ========== SIMPLIFIED WORKING AUDIT LOG FUNCTIONS ==========
+function loadAuditFilter(filter) {
+    const iframe = document.getElementById('auditFrame');
+    if (!iframe) return;
+    
+    // Use relative path
+    iframe.src = './get_audit_log.php?filter=' + filter + '&t=' + Date.now();
+    
+    // Update active button
+    document.querySelectorAll('#audit-log .filter-tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // Mark clicked button as active
+    event.target.classList.add('active');
+}
+
+function refreshAudit() {
+    const iframe = document.getElementById('auditFrame');
+    if (iframe) {
+        // Reload iframe
+        iframe.src = iframe.src.split('?')[0] + '?t=' + Date.now();
+    }
+}
+// ========== END AUDIT LOG FUNCTIONS ==========
+    
     </script>
 </body>
 </html>
