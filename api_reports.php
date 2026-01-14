@@ -12,9 +12,11 @@ $db = $database->getConnection();
 $request_method = $_SERVER["REQUEST_METHOD"];
 
 if ($request_method == 'GET') {
-    // Fetch all reports
+    // Fetch all reports using Stored Procedure
     try {
-        $query = "SELECT report_id, report_type, generated_by, date_generated, description FROM Report ORDER BY date_generated DESC";
+        // Call the PostgreSQL function
+        $query = "SELECT * FROM get_generated_reports_history()";
+        
         $stmt = $db->prepare($query);
         $stmt->execute();
         $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -25,12 +27,14 @@ if ($request_method == 'GET') {
     }
 }
 elseif ($request_method == 'POST') {
-    // Log a new report
+    // Log a new report using Stored Procedure
     $data = json_decode(file_get_contents("php://input"));
 
     if (!empty($data->report_type)) {
         try {
-            $query = "INSERT INTO Report (report_type, generated_by, description) VALUES (:type, :by, :desc)";
+            // Call the PostgreSQL function
+            $query = "SELECT log_generated_report(:type, :by, :desc)";
+            
             $stmt = $db->prepare($query);
             
             $type = htmlspecialchars(strip_tags($data->report_type));
@@ -43,7 +47,7 @@ elseif ($request_method == 'POST') {
 
             if ($stmt->execute()) {
                 http_response_code(201);
-                echo json_encode(["message" => "Report logged successfully."]);
+                echo json_encode(["message" => "Report logged successfully via Stored Procedure."]);
             } else {
                 http_response_code(503);
                 echo json_encode(["message" => "Unable to log report."]);
